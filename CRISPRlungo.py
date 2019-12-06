@@ -1,14 +1,14 @@
-import os
-import sys
-import subprocess
+import argparse
 import logging
+import os
 import re
+import subprocess
+import sys
 
 def main():
     settings = parse_settings(sys.argv)
     assert_dependencies()
     av_read_length = get_av_read_len(settings['fastq'])
-
 
     primer_chr = ""
     primer_loc = -1
@@ -28,9 +28,12 @@ def main():
     custom_aligned_count = 0
     crispresso_commands = [] #list of crispresso commands to run -- first, we add the commands from the custom targets, then the genome aligned reads
     crispresso_infos = [] #meta info about the crispresso runs
+            #tuple of: name, chr, start, end, readCount, amplicon
 
+
+    # First, align to artificial targets
     if len(target_names) > 0:
-        (input_for_genome_mapping,custom_aligned_count, custom_mapped_bam_file, custom_index_fasta
+        (input_for_genome_mapping,custom_aligned_count,custom_mapped_bam_file, custom_index_fasta
             ) = align_to_artificial_targets(
                     root = settings['root'],
                     fastq = settings['fastq'],
@@ -52,6 +55,7 @@ def main():
                     query_bp_around_cut=50
                     )
 
+    # Next, align to genome
     (genome_mapped_bam_file, genome_aligned_count
         ) = align_to_genome(
                 root = settings['root'],
@@ -59,6 +63,7 @@ def main():
                 bowtie2_genome = settings['bowtie2_genome']
                 )
 
+    # Chop unaligned reads
     (mapped_chopped_sam_file, aligned_locs, mapped_chrs, max_frags
         ) = analyze_global_aln(
                 root = settings['root'],
@@ -68,14 +73,17 @@ def main():
                 fragment_step_size=settings['fragment_step_size']
                 )
 
-    analyze_chopped_reads(
-            root = settings['root'],
-            mapped_chopped_sam_file=mapped_chopped_sam_file,
-            mapped_chrs = mapped_chrs,
-            max_frags = max_frags)
+    # Analyze them
+    (translocation_count,large_deletion_count,unidentified_count
+        ) = analyze_chopped_reads(
+                root = settings['root'],
+                mapped_chopped_sam_file=mapped_chopped_sam_file,
+                mapped_chrs = mapped_chrs,
+                max_frags = max_frags)
 
+    # Prepare CRISPResso runs
     (genome_crispresso_infos, genome_crispresso_commands
-            ) = prep_crispresso2_global(
+        ) = prep_crispresso2_global(
                 root = settings['root'],
                 genome_len_file = re.sub('.fa$','.dict',settings['genome']),
                 crispresso_cutoff = settings['crispresso_cutoff'],
@@ -87,23 +95,36 @@ def main():
     crispresso_commands.extend(genome_crispresso_commands)
     crispresso_infos.extend(genome_crispresso_infos)
 
-    crispresso_info_file = settings['root'] + '.CRISPResso.info'
-    with open(crispresso_info_file,'w') as crispresso_info_file:
-        crispresso_info_file.write('name\tchr\tstart\tend\treadCount\tamplicon\n')
-        for info in crispresso_infos:
-            crispresso_info_file.write(info)
+    run_and_aggregate_crispresso(
+                root = settings['root'],
+                crispresso_infos = crispresso_infos,
+                crispresso_commands = crispresso_commands
+                )
+    with open(settings['root']+".alignmentSummary.txt",'w') as summary:
+        summary.write("Aligned Templates\tAligned Genome\tChopped Translocations\tChopped Large Deletions\tChopped Unidentified\n")
+        summary.write("\t".join([str(x) for x in[custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,unidentified_count]])+"\n")
 
-    crispresso_command_file = settings['root'] + '.CRISPResso.commands'
-    with open(crispresso_command_file,'w') as crispresso_command_file:
-        for idx,command in enumerate(crispresso_commands):
-            crispresso_command_file.write(command)
-            logging.debug('Running CRISPResso command '+str(idx))
-            crispresso_output = subprocess.check_output(
-                    command,shell=True).decode('utf-8').strip()
+
+
+    cleanup(settings['root'])
+
+    logging.info('Successfully completed!')
+
+    # FINISHED
 
 
 
 def parse_settings(args):
+    """
+    Parses settings from the command line
+        First parses from the settings file, then parses from command line
+
+    param:
+        args: command line arguments
+
+    returns:
+        settings: dict of parsed settings
+    """
     if len(args) < 2:
         raise Exception('Error: Settings file is missing\nUsage: ' +
                     args[0] + ' {settings file}')
@@ -118,6 +139,8 @@ def parse_settings(args):
                 ]
             )
 
+    logging.info('Parsing settings file')
+
     settings = {}
     with open(settings_file, 'r') as fin:
         for line in fin.readlines():
@@ -125,7 +148,6 @@ def parse_settings(args):
             key = line_els[0].strip()
             val = line_els[1].strip()
             settings[key] = val
-
 
     # two parameters control the size and stride of fragment creation
     # size of fragment
@@ -222,6 +244,7 @@ def make_artificial_targets(cuts,genome,target_length,primer_chr ="",primer_loc=
             target_info[target_name]['cut2_chr']: cut information for cut 2
             target_info[target_name]['cut2_site']
     """
+    logging.info('Making artificial targets')
     target_names = []
     target_info = {}
 
@@ -451,6 +474,7 @@ def make_artificial_targets(cuts,genome,target_length,primer_chr ="",primer_loc=
                     target_info[target_name]['class'] = 'Translocation'
 
 
+    logging.info('Created ' + str(len(target_names)) + ' targets')
     return(target_names,target_info)
 
 def align_to_artificial_targets(root,fastq,target_names,target_info):
@@ -476,6 +500,7 @@ def align_to_artificial_targets(root,fastq,target_names,target_info):
         custom_index_fasta: fasta of artificial targets
 
     """
+    logging.info('Aligning to artificial targets')
 
     custom_mapped_bam_file = root + ".customMapped.bam" # file only generated if cut sites provided
     custom_index_fasta = root + ".customIndex.fa"
@@ -515,12 +540,13 @@ def align_to_genome(root,fastq,bowtie2_genome):
         genome_aligned_bam: bam of reads after alignment to genome
         genome_aligned_count: number of reads aligning to genome
     """
+    logging.info('Aligning reads to genome')
 
     genome_mapped_bam_file = root + ".genomeMapped.bam"
     bowtie_log = root + '.bowtie2Log'
     aln_command = 'bowtie2 -x %s -U %s 2> %s | samtools view -Shu - | samtools sort -o %s - && samtools index %s'%(bowtie2_genome,fastq,bowtie_log,genome_mapped_bam_file,genome_mapped_bam_file)
 
-    aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT,encoding='utf-8') 
+    aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf8')
     logging.debug('Alignment to genome: ' + aln_result)
 
     genome_aligned_count = int(subprocess.check_output('samtools view -F 4 -c %s'%genome_mapped_bam_file,shell=True).strip())
@@ -542,8 +568,9 @@ def run_command(command):
 
     p = subprocess.Popen(command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,shell=True)#,
+            stderr=subprocess.STDOUT,shell=True,
 #            encoding='utf-8',universal_newlines=True)
+            universal_newlines=True)
     return iter(p.stdout.readline, b'')
 
 def analyze_global_aln(root,genome_mapped_bam_file,bowtie2_genome,fragment_size,fragment_step_size):
@@ -567,6 +594,7 @@ def analyze_global_aln(root,genome_mapped_bam_file,bowtie2_genome,fragment_size,
         mapped_chrs: hash of counts of reads aligned to each chr in the genome-alignment step
         max_frags: max number of fragments created per read
     """
+    logging.info('Analyzing global alignments')
 
     mapped_chrs = {}
     unmapped_ids = {}
@@ -629,13 +657,13 @@ def analyze_global_aln(root,genome_mapped_bam_file,bowtie2_genome,fragment_size,
     number_unmapped_reads_chopped = unmapped_id
     logging.info('Created chopped reads for ' + str(number_unmapped_reads_chopped) + ' reads')
 
-    frags_per_unaligned_read_file = root + ".fragsPerUnalignedRead"
+    frags_per_unaligned_read_file = root + ".fragsPerUnalignedRead.txt"
     with open(frags_per_unaligned_read_file,"w") as frags:
         frags.write('numFragments\tnumReads')
         for key in sorted(frags_per_read.keys()):
             frags.write(str(key) + '\t' + str(frags_per_read[key]) + '\n')
 
-    global_aligned_chrs_file = root + ".globalAlignedChrs"
+    global_aligned_chrs_file = root + ".globalAlignedChrs.txt"
     with open(global_aligned_chrs_file,"w") as chrs:
         chrs.write('chr\tnumReads\n')
         for key in sorted(aligned_chr_counts.keys()):
@@ -645,7 +673,7 @@ def analyze_global_aln(root,genome_mapped_bam_file,bowtie2_genome,fragment_size,
     chopped_bowtie_log = root + ".fragMapped.bowtie2Log"
     chopped_aln_command = 'bowtie2 -x %s -U %s -S %s --end-to-end 2> %s' %(bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file,chopped_bowtie_log)
 
-    aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT,encoding='utf-8')
+    aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf-8')
     logging.debug('Alignment of chopped fragments to genome: ' + aln_result)
 
 
@@ -665,9 +693,12 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
 
 
     returns:
-    TODO
+        translocation_count: number of reads that were identified as translocations
+        large_deletion_count: number of reads that were identified as large deletion
+        unidentified_count: number of reads that couldn't be identified as translocations
     """
-    frag_meta_file = root + ".fragMeta"
+    logging.info('Analyzing chopped reads')
+    frag_meta_file = root + ".fragMeta.txt"
     with open(frag_meta_file,"w") as frag_file:
         head = "ID"
         for i in range(max_frags):
@@ -685,6 +716,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
             curr_id_vals = {} # keep track of where each frag maps to (this is a hash but it's like an array, so we can check for uninitialized values)
             translocations = {} # hash of all translocation locations
             translocation_count = 0
+            large_deletion_count = 0
             unidentified_count = 0
             chroms_per_frag_read_count = {} # keep track for all read how many chrs the fragments mapped to
             frags_mapped_count = 0
@@ -729,7 +761,11 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                         if key not in translocations:
                             translocations[key] = 0
                         translocations[key] += 1
-                        translocation_count += 1
+
+                        if start_chr == curr_id_vals['last_chr']:
+                            large_deletion_count += 1
+                        else:
+                            translocation_count += 1
 
                     curr_chr_count = len(curr_id_chrs.keys())
                     if curr_chr_count not in chroms_per_frag_read_count:
@@ -771,7 +807,10 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                     if key not in translocations:
                         translocations[key] = 0
                     translocations[key] += 1
-                    translocation_count += 1
+                    if start_chr == curr_id_vals['last_chr']:
+                        large_deletion_count += 1
+                    else:
+                        translocation_count += 1
 
                 curr_chr_count = len(curr_id_chrs.keys())
                 if curr_chr_count not in chroms_per_frag_read_count:
@@ -779,23 +818,24 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                 chroms_per_frag_read_count[curr_chr_count] += 1
             #done with last one
 
-    logging.info("Found %d translocations and %d unidentified reads"%(translocation_count,unidentified_count))
+    logging.info("Found %d translocations, %d large deletions, and %d unidentified reads"%(translocation_count,large_deletion_count,unidentified_count))
 
-    frags_aligned_chrs_file = root + ".fragsAlignedChrs"
+    frags_aligned_chrs_file = root + ".fragsAlignedChrs.txt"
     with open(frags_aligned_chrs_file,"w") as fout:
         fout.write("chr\tnumReads\n")
         for key in sorted(mapped_chrs.keys()):
             fout.write(str(key) + '\t' + str(mapped_chrs[key]) + '\n')
 
-    frag_chroms_per_read_file = root + ".fragsChromsPerRead"
+    frag_chroms_per_read_file = root + ".fragsChromsPerRead.txt"
     with open(frag_chroms_per_read_file,"w") as fout:
         fout.write("numChroms\tnumReads\n")
         for key in sorted(chroms_per_frag_read_count.keys()):
             fout.write(str(key) + '\t' + str(chroms_per_frag_read_count[key]) + '\n')
 
-    #make translocation table
+    # make translocation table
+    # dict of count of reads aligning from chrA to chrB
     translocation_table = {}
-    translocation_report_file = root + ".translocationReport"
+    translocation_report_file = root + ".translocationReport.txt"
     with open(translocation_report_file,"w") as fout:
         fout.write("from\tto\tcount\n")
         for key in sorted(translocations.keys()):
@@ -807,7 +847,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                 translocation_table[from_chr][to_chr] = 0
             translocation_table[from_chr][to_chr] += translocations[key]
 
-    translocation_report_table_file = root + ".translocationReport.table"
+    translocation_report_table_file = root + ".translocationReport.table.txt"
     with open(translocation_report_table_file,"w") as fout:
         chrs = sorted(translocations.keys())
         translocation_head = "data\t"+"\t".join(chrs)
@@ -820,6 +860,8 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                     val = translocation_table[key][key2]
                 line += "\t"+str(val)
             fout.write(line+"\n")
+
+    return (translocation_count,large_deletion_count,unidentified_count)
 
 
 
@@ -839,9 +881,10 @@ def prep_crispresso2_global(root,genome_len_file,crispresso_cutoff,aligned_locs,
 
     returns:
         crispresso_infos: metadata about each crispresso run
+            tuple of: name, chr, start, end, readCount, amplicon
         crispresso_commands: list of crispresso commands to run
     """
-    logging.info('Preparing for CRISPResso2')
+    logging.info('Preparing global alignments for CRISPResso2')
 
     chrom_lens = {}
     chroms = []
@@ -893,9 +936,10 @@ def prep_crispresso2_global(root,genome_len_file,crispresso_cutoff,aligned_locs,
                         read_id = line_els[0]
                         reads_out.write("%s\n%s\n+\n%s\n"%(read_id,seq,qual))
                         read_count += 1
-                crispresso_infos.append("%s\t%s\t%d\t%d\t$d\t$s\n"%(name,chrom,start_locs[i],end_locs[i],read_count,amp_seq))
-                crispresso_command = "CRISPResso -n %s -a %s -r1 %s &> %s.log"%(name,amp_seq,reads_file,reads_file)
+                crispresso_infos.append((name,chrom,start_locs[i],end_locs[i],read_count,amp_seq))
+                crispresso_command = "CRISPResso -o %s -n %s -a %s -r1 %s &> %s.log"%(root + '.CRISPResso_runs',name,amp_seq,reads_file,reads_file)
                 crispresso_commands.append(crispresso_command)
+    logging.info('Created ' + str(len(crispresso_commands)) + ' CRISPResso commands')
     return (crispresso_infos,crispresso_commands)
 
 
@@ -927,6 +971,7 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,a
 
     returns:
         crispresso_infos: array of metadata information for CRISPresso
+            tuple of: name, chr, start, end, readCount, amplicon
         crispresso_commands: array of commands to run CRISPresso
 
     """
@@ -971,10 +1016,10 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,a
 
             loc1 = target_info[custom_chr_name]['cut1_chr'] + "_" + str(target_info[custom_chr_name]['cut1_site'])
             loc2 = target_info[custom_chr_name]['cut2_chr'] + "_" + str(target_info[custom_chr_name]['cut2_site'])
-            crispresso_infos.append("%s\t%s\t%s\t%s\t%d\t%s\n"%(custom_chr_name,custom_chr_name,loc1,loc2,read_count,amp_seq))
-            crispresso_commands.append("CRISPResso -n %s -a %s -r1 %s &> %s.log"%(custom_chr_name,amp_seq,reads_file,reads_file))
+            crispresso_infos.append((custom_chr_name,custom_chr_name,loc1,loc2,read_count,amp_seq))
+            crispresso_commands.append("CRISPResso -o %s -n %s -a %s -r1 %s &> %s.log"%(root+'.CRISPResso_runs',custom_chr_name,amp_seq,reads_file,reads_file))
 
-    class_log_file = root + ".class_counts"
+    class_log_file = root + ".class_counts.txt"
     with open(class_log_file,'w') as class_out:
         head_line = ""
         first_line = ""
@@ -983,9 +1028,110 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,a
         class_out.write("\t".join(keys)+"\n")
         class_out.write("\t".join(vals)+"\n")
 
+    logging.info('Created ' + str(len(crispresso_commands)) + ' CRISPResso commands')
     return (crispresso_infos,crispresso_commands)
 
+def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
+    """
+    Runs CRISPResso2 commands and aggregates output
+
+    params:
+        root: root for written files
+        crispresso_infos: array of metadata information for CRISPresso
+            tuple of: name, chr, start, end, readCount, amplicon
+        crispresso_commands: array of commands to run CRISPresso
+
+    returns:
+        crispresso_infos: array of metadata information for CRISPresso
+        crispresso_commands: array of commands to run CRISPresso
+
+    """
+    logging.info('Preparing artificial targets for CRISPResso2')
 
 
+    # getting rid of pickle in crispresso... so I'm leaving this import here in the meantime
+    running_python3 = False
+    if sys.version_info > (3, 0):
+        running_python3 = True
+
+    if running_python3:
+            import pickle as cp #python 3
+    else:
+            import cPickle as cp #python 2.7
+    # end nasty pickle part
+
+
+
+    crispresso_results = []
+    crispresso_command_file = root + '.CRISPResso.commands.txt'
+    crispresso_info_file = root + '.CRISPResso.info.txt'
+    with open(crispresso_info_file,'w') as crispresso_info_file, open(crispresso_command_file,'w') as crispresso_command_file:
+        crispresso_info_file.write('name\tchr\tstart\tend\treadCount\tamplicon\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\treads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\treads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\n')
+        for idx,command in enumerate(crispresso_commands):
+            crispresso_command_file.write(command)
+            logging.debug('Running CRISPResso command '+str(idx))
+            crispresso_output = subprocess.check_output(
+                    command,shell=True).decode('utf-8').strip()
+            name = crispresso_infos[idx][0]
+            n_total = "NA"
+            n_aligned = "NA"
+            n_unmod = "NA"
+            n_mod = "NA"
+            n_discarded = "NA"
+
+            n_insertion = "NA"
+            n_deletion = "NA"
+            n_substitution = "NA"
+            n_only_insertion = "NA"
+            n_only_deletion = "NA"
+            n_only_substitution = "NA"
+            n_insertion_and_deletion = "NA"
+            n_insertion_and_substitution = "NA"
+            n_deletion_and_substitution = "NA"
+            n_insertion_and_deletion_and_substitution = "NA"
+
+            unmod_pct = "NA"
+            mod_pct = "NA"
+
+            print("name is " + name)
+            run_file = os.path.join(root + '.CRISPResso_runs','CRISPResso_on_'+name,'CRISPResso2_info.pickle')
+            print("run_file is " + run_file)
+            if os.path.isfile(run_file):
+                run_data = cp.load(open(run_file,'rb'))
+                ref_name = run_data['ref_names'][0] #only expect one amplicon sequence
+                n_total = run_data['aln_stats']['N_TOT_READS']
+                n_aligned = run_data['counts_total'][ref_name]
+                n_unmod = run_data['counts_unmodified'][ref_name]
+                n_mod = run_data['counts_modified'][ref_name]
+                n_discarded = run_data['counts_discarded'][ref_name]
+
+                n_insertion = run_data['counts_insertion'][ref_name]
+                n_deletion = run_data['counts_deletion'][ref_name]
+                n_substitution = run_data['counts_substitution'][ref_name]
+                n_only_insertion = run_data['counts_only_insertion'][ref_name]
+                n_only_deletion = run_data['counts_only_deletion'][ref_name]
+                n_only_substitution = run_data['counts_only_substitution'][ref_name]
+                n_insertion_and_deletion = run_data['counts_insertion_and_deletion'][ref_name]
+                n_insertion_and_substitution = run_data['counts_insertion_and_substitution'][ref_name]
+                n_deletion_and_substitution = run_data['counts_deletion_and_substitution'][ref_name]
+                n_insertion_and_deletion_and_substitution = run_data['counts_insertion_and_deletion_and_substitution'][ref_name]
+
+                unmod_pct = "NA"
+                mod_pct = "NA"
+                if n_aligned > 0:
+                    unmod_pct = 100*n_unmod/float(n_aligned)
+                    mod_pct = 100*n_mod/float(n_aligned)
+            new_vals = [n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution]
+            crispresso_info_file.write("\t".join([str(x) for x in crispresso_infos[idx]])+"\t"+"\t".join([str(x) for x in new_vals])+"\n")
+
+def cleanup(root):
+    """
+    Deletes intermediate files
+
+    params:
+        root: root for written files
+    """
+    delete_result = subprocess.check_output('rm -rf ' + root + '.customIndex.fa.*', stderr=subprocess.STDOUT,shell=True)
+    logging.debug('Deleted bowite indexes ' + delete_result)
 
 main()
