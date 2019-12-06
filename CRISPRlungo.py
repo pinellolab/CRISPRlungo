@@ -1,5 +1,8 @@
 import argparse
 import logging
+import matplotlib
+matplotlib.use('AGG')
+import matplotlib.pyplot as plt
 import os
 import re
 import subprocess
@@ -100,9 +103,17 @@ def main():
                 crispresso_infos = crispresso_infos,
                 crispresso_commands = crispresso_commands
                 )
-    with open(settings['root']+".alignmentSummary.txt",'w') as summary:
-        summary.write("Aligned Templates\tAligned Genome\tChopped Translocations\tChopped Large Deletions\tChopped Unidentified\n")
-        summary.write("\t".join([str(x) for x in[custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,unidentified_count]])+"\n")
+
+    labels = ["Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Unidentified"]
+    values = [custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,unidentified_count]
+    alignment_summary_root = settings['root']+".alignmentSummary"
+    with open(alignment_summary_root+".txt",'w') as summary:
+        summary.write("\t".join(labels)+"\n")
+        summary.write("\t".join([str(x) for x in values])+"\n")
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
+    plt.savefig(alignment_summary_root+".pdf",pad_inches=1,bbox_inches='tight')
 
 
 
@@ -209,15 +220,11 @@ def get_av_read_len(fastq,number_reads_to_check=50):
         av_read_len: average read length
     """
     sum_len = 0
-    with open(fastq,'r') as fin:
-        for i in range(number_reads_to_check):
-            fastq_id = fin.readline()
-            seq = fin.readline()
-            read_len = len(seq)
-            sum_len += read_len
-            fastq_plus = fin.readline()
-            fastq_qual = fin.readline()
-    av_read_len = int(sum_len/float(number_reads_to_check))
+
+    cmd=('z' if fastq.endswith('.gz') else '' ) +('cat < \"%s\"' % fastq)+\
+               r''' | awk 'BN {n=0;s=0;} NR%4 == 2 {s+=length($0);n++;} END { printf("%d\n",s/n)}' '''
+    av_read_len = float(subprocess.check_output(cmd,shell=True).decode('utf-8').strip())
+
     return(av_read_len)
 
 def make_artificial_targets(cuts,genome,target_length,primer_chr ="",primer_loc=-1):
@@ -657,17 +664,37 @@ def analyze_global_aln(root,genome_mapped_bam_file,bowtie2_genome,fragment_size,
     number_unmapped_reads_chopped = unmapped_id
     logging.info('Created chopped reads for ' + str(number_unmapped_reads_chopped) + ' reads')
 
-    frags_per_unaligned_read_file = root + ".fragsPerUnalignedRead.txt"
-    with open(frags_per_unaligned_read_file,"w") as frags:
-        frags.write('numFragments\tnumReads')
-        for key in sorted(frags_per_read.keys()):
+    frags_per_unaligned_read_root = root + ".fragsPerUnalignedRead"
+    keys = sorted(frags_per_read.keys())
+    vals = [str(frags_per_read[key]) for key in keys]
+    with open(frags_per_unaligned_read_root + ".txt","w") as frags:
+        frags.write('numFragments\tnumReads\n')
+        for key in keys:
             frags.write(str(key) + '\t' + str(frags_per_read[key]) + '\n')
 
-    global_aligned_chrs_file = root + ".globalAlignedChrs.txt"
-    with open(global_aligned_chrs_file,"w") as chrs:
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_xlabel('Number of fragments')
+    ax.set_ylabel('Number of Reads')
+    ax.set_title('Number of fragments per unaligned read')
+
+    plt.savefig(frags_per_unaligned_read_root+".pdf",pad_inches=1,bbox_inches='tight')
+
+    global_aligned_chrs_root = root + ".globalAlignedChrs"
+    keys = sorted(aligned_chr_counts.keys())
+    vals = [str(aligned_chr_counts[key]) for key in keys]
+    with open(global_aligned_chrs_root+".txt","w") as chrs:
         chrs.write('chr\tnumReads\n')
         for key in sorted(aligned_chr_counts.keys()):
             chrs.write(key + '\t' + str(aligned_chr_counts[key]) + '\n')
+
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_ylabel('Number of Reads')
+    ax.set_title('Location of reads aligned to the genome')
+    plt.savefig(global_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
 
     mapped_chopped_sam_file = root + ".fragMapped.sam"
     chopped_bowtie_log = root + ".fragMapped.bowtie2Log"
@@ -820,17 +847,37 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
 
     logging.info("Found %d translocations, %d large deletions, and %d unidentified reads"%(translocation_count,large_deletion_count,unidentified_count))
 
-    frags_aligned_chrs_file = root + ".fragsAlignedChrs.txt"
-    with open(frags_aligned_chrs_file,"w") as fout:
+    frags_aligned_chrs_root = root + ".fragsAlignedChrs"
+    keys = sorted(mapped_chrs.keys())
+    vals = [str(mapped_chrs[key]) for key in keys]
+    with open(frags_aligned_chrs_root+".txt","w") as fout:
         fout.write("chr\tnumReads\n")
-        for key in sorted(mapped_chrs.keys()):
+        for key in keys:
             fout.write(str(key) + '\t' + str(mapped_chrs[key]) + '\n')
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_ylabel('Number of Reads')
+    ax.set_title('Location of fragments from unaligned reads')
 
-    frag_chroms_per_read_file = root + ".fragsChromsPerRead.txt"
-    with open(frag_chroms_per_read_file,"w") as fout:
+    plt.savefig(frags_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
+
+    frag_chroms_per_read_root = root + ".fragsChromsPerRead"
+    keys = sorted(chroms_per_frag_read_count.keys())
+    vals = [str(chroms_per_frag_read_count[key]) for key in keys]
+    with open(frag_chroms_per_read_root+".txt","w") as fout:
         fout.write("numChroms\tnumReads\n")
-        for key in sorted(chroms_per_frag_read_count.keys()):
+        for key in keys:
             fout.write(str(key) + '\t' + str(chroms_per_frag_read_count[key]) + '\n')
+
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_xlabel('Number of Chromosomes')
+    ax.set_ylabel('Number of Reads')
+    ax.set_title('Number of different chromosomes aligned by a fragmented single read')
+
+    plt.savefig(frag_chroms_per_read_root+".pdf",pad_inches=1,bbox_inches='tight')
 
     # make translocation table
     # dict of count of reads aligning from chrA to chrB
@@ -1019,14 +1066,18 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,a
             crispresso_infos.append((custom_chr_name,custom_chr_name,loc1,loc2,read_count,amp_seq))
             crispresso_commands.append("CRISPResso -o %s -n %s -a %s -r1 %s &> %s.log"%(root+'.CRISPResso_runs',custom_chr_name,amp_seq,reads_file,reads_file))
 
-    class_log_file = root + ".class_counts.txt"
-    with open(class_log_file,'w') as class_out:
-        head_line = ""
-        first_line = ""
-        keys = sorted(class_counts.keys())
-        vals = [str(class_counts[key]) for key in keys]
+    class_counts_root = root + ".class_counts"
+    keys = sorted(class_counts.keys())
+    vals = [str(class_counts[key]) for key in keys]
+    with open(class_counts_root+".txt",'w') as class_out:
         class_out.write("\t".join(keys)+"\n")
         class_out.write("\t".join(vals)+"\n")
+
+
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.pie(vals,labels=[keys[idx]+"\n("+str(vals[idx])+")" for idx in range(len(keys))],autopct="%1.2f%%")
+    plt.savefig(class_counts_root+".pdf",pad_inches=1,bbox_inches='tight')
 
     logging.info('Created ' + str(len(crispresso_commands)) + ' CRISPResso commands')
     return (crispresso_infos,crispresso_commands)
