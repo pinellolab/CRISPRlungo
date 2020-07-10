@@ -7,7 +7,7 @@ Input is provided via a settings file with entries:
 ```
 genome (genome fasta file, e.g. /REFERENCE_GENOMES/Homo_sapiens/UCSC/hg38/Sequence/WholeGenomeFasta/genome.fa)
 
-bowtie2_genome (bowtei2 genome root, e.g. /REFERENCE_GENOMES/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome)
+bowtie2_genome (bowtie2 genome root, e.g. /REFERENCE_GENOMES/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome)
 
 fastq (input fastq, e.g. test.fastq)
 
