@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import logging
 import matplotlib
 matplotlib.use('AGG')
@@ -1018,20 +1019,24 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
             count_r1s_merged_id_founds = 0
             unaligned_unmerged_r1_fastq = flash_root + '.unaligned_1.fastq'
             with open(unaligned_unmerged_r1_fastq,'w') as uf1:
-                with open(fastq_r1,'r') as f1:
-                    id_line = f1.readline()
-                    while(id_line):
-                        seq_line = f1.readline()
-                        plus_line = f1.readline()
-                        qual_line = f1.readline()
+                if fastq_r1.endswith('.gz'):
+                    f1 = gzip.open(fastq_r1,'rb')
+                else:
+                    f1 = open(fastq_r1,'r')
+                id_line = f1.readline()
+                while(id_line):
+                    seq_line = f1.readline()
+                    plus_line = f1.readline()
+                    qual_line = f1.readline()
 
-                        this_id = id_line.split(" ")[0]
-                        if this_id in merged_aligned_ids:
-                            count_r1s_merged_id_founds += 1
-                        else:
-                            uf1.write('%s\n%s\n%s\n%s\n'%(id_line,seq_line,plus_line,qual_line))
-                            count_r1s_not_merged_not_aligned += 1
-                        id_line = f1.readline()
+                    this_id = id_line.split(" ")[0]
+                    if this_id in merged_aligned_ids:
+                        count_r1s_merged_id_founds += 1
+                    else:
+                        uf1.write('%s\n%s\n%s\n%s\n'%(id_line,seq_line,plus_line,qual_line))
+                        count_r1s_not_merged_not_aligned += 1
+                    id_line = f1.readline()
+                f1.close()
 
             logging.info('Found ids for %d merged reads'%count_r1s_merged_id_founds)
             logging.info('Continuing analysis with %d unalignable or unmergable reads'%count_r1s_not_merged_not_aligned)
@@ -1074,15 +1079,15 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
                 id_line = f2.readline()
 
     else: #single end reads
-        custom_unmapped_fastq_r1_file = root + '.customUnmapped_r1.fastq'
+        custom_unmapped_fastq_r1_file = root + '.customUnmapped_r1.fastq.gz'
         custom_unmapped_fastq_r2_file = None
         custom_bowtie_log = root + '.customBowtie2Log'
-        if not os.path.isfile(custom_mapped_bam_file):
-            logging.info('Aligning reads to custom targets using '+bowtie2_command)
-            custom_aln_command = '%s --threads %d --end-to-end -x %s -U %s --un-gz %s 2> %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,fastq_r1,custom_unmapped_fastq_r1_file,custom_bowtie_log,samtools_command,samtools_command,custom_mapped_bam_file,samtools_command,custom_mapped_bam_file)
-            logging.debug(custom_aln_command)
-            aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
-            logging.debug(aln_result)
+
+        logging.info('Aligning reads to custom targets using '+bowtie2_command)
+        custom_aln_command = '%s --threads %d --end-to-end -x %s -U %s --un-gz %s 2> %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,fastq_r1,custom_unmapped_fastq_r1_file,custom_bowtie_log,samtools_command,samtools_command,custom_mapped_bam_file,samtools_command,custom_mapped_bam_file)
+        logging.debug(custom_aln_command)
+        aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
+        logging.debug(aln_result)
 
     custom_aligned_count = int(subprocess.check_output('%s view -F 4 -c %s'%(samtools_command,custom_mapped_bam_file),shell=True).strip())
 
@@ -1262,7 +1267,15 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
             force_merged_fastq = flash_root + '.force_merged.fastq'
             logging.info('Force-merging R1 and R2 reads before fragmenting')
             force_merge_read_count = 0
-            with open(flash_unmerged_r1,'r') as f1, open(flash_unmerged_r2,'r') as f2, open(force_merged_fastq,'w') as out:
+            if flash_unmerged_r1.endswith('.gz'):
+                f1 = gzip.open(flash_unmerged_r1,'rb')
+            else:
+                f1 = open(flash_unmerged_r1,'r')
+            if flash_unmerged_r2.endswith('.gz'):
+                f2 = gzip.open(flash_unmerged_r2,'rb')
+            else:
+                f2 = open(flash_unmerged_r2,'r')
+            with open(force_merged_fastq,'w') as out:
                 id1 = f1.readline()
                 while id1:
                     force_merge_read_count += 1
@@ -1280,6 +1293,8 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
                     out.write(id1+seq1+seq2+plus1+qual1+qual2)
 
                     id1 = f1.readline()
+            f1.close()
+            f2.close()
             logging.info('Force-merged %d reads'%force_merge_read_count)
 
         fragment_input = root + '.fragment_input.fastq'
@@ -1291,7 +1306,11 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
         unmapped_reads_fastq = fragment_input
 
     unmapped_frag_file = root + ".unmapped_frags.fastq"
-    with open(unmapped_frag_file,"w") as unmapped_fastq, open(unmapped_reads_fastq,'r') as unmapped_reads:
+    if unmapped_reads_fastq.endswith('.gz'):
+        unmapped_reads = gzip.open(unmapped_reads_fastq,'rb')
+    else:
+        unmapped_reads = open(unmapped_reads_fastq,'r')
+    with open(unmapped_frag_file,"w") as unmapped_fastq:
         line_id = unmapped_reads.readline()
         while(line_id):
             line_id = line_id.strip()
@@ -1326,6 +1345,7 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
             unmapped_id += 1
 
             line_id = unmapped_reads.readline()
+    unmapped_reads.close()
 
     number_unmapped_reads_chopped = unmapped_id
     logging.info('Created chopped reads for ' + str(number_unmapped_reads_chopped) + ' reads')
@@ -1817,6 +1837,9 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
     crispresso_commands = []
     crispresso_infos = []
 
+    if not os.path.isdir(root+'.CRISPResso_data'):
+        os.mkdir(root+'.CRISPResso_data')
+
     target_summary_file = root + '.customMapped.summary.txt'
     with open (target_summary_file,'w') as out:
         out.write('%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%('target_name','target_class','total_aligned','aligned_to_artificial_targets','aligned_to_genome','cut1_chr','cut1_site','cut2_chr','cut2_site'))
@@ -1844,7 +1867,7 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
                 amp_seq = subprocess.check_output(
                     '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,custom_index_fasta,target_name,start_ind,end_ind),shell=True).decode('utf-8').strip()
 
-                reads_file = root + ".crispresso."+target_name+".fastq"
+                reads_file = root + ".CRISPResso_data/"+target_name+".fastq"
                 printed_read_count = 0
                 with open(reads_file,'w') as reads_out:
                     for line in run_command('%s view -F 4 %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind)):
