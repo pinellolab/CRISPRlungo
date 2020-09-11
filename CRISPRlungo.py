@@ -1259,6 +1259,9 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
 
         #this code force-merges R1 and R2 before fragmenting. Potentially, this could discover reads where R1 comes from one chromosome and R2 comes from another chromosome. However, I think this pipeline is about discovering translocations where the event can actually be observed in either R1 or R2.. so let's leave this out for now
         if (False):
+            nt_complement=dict({'A':'T','C':'G','G':'C','T':'A','N':'N','_':'_','-':'-'})
+            def reverse_complement(seq):
+                return "".join([nt_complement[c] for c in seq.upper()[-1::-1]])
             force_merged_fastq = flash_root + '.force_merged.fastq'
             logging.info('Force-merging R1 and R2 reads before fragmenting')
             force_merge_read_count = 0
@@ -1271,6 +1274,13 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
                     plus1 = f1.readline()
                     qual1 = f1.readline()
                     qual1 = qual1.strip()
+
+                    id2 = f2.readline()
+                    seq2 = reverse_complement(f2.readline().strip())
+                    plus2 = f2.readline()
+                    qual2 = f2.readline().strip()[-1::-1]
+
+                    out.write(id1+seq1+seq2+"\n"+plus1+qual1+qual2+"\n")
 
                     id2 = f2.readline()
                     seq2 = f2.readline()
