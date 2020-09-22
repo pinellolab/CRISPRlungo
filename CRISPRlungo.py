@@ -1359,7 +1359,7 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
 
     mapped_chopped_sam_file = root + ".fragMapped.sam"
     chopped_bowtie_log = root + ".fragMapped.bowtie2Log"
-    chopped_aln_command = '%s --threads %d --end-to-end -x %s -U %s -S %s 2> %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file,chopped_bowtie_log)
+    chopped_aln_command = '%s --reorder --threads %d --end-to-end -x %s -U %s -S %s 2> %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file,chopped_bowtie_log)
 
     logging.debug(chopped_aln_command)
     aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf-8')
