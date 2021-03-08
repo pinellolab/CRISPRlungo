@@ -20,6 +20,7 @@ def main():
             casoffinder_command=settings['casoffinder_command']
             )
     av_read_length = get_av_read_len(settings['fastq_r1'])
+    num_reads_input = get_num_reads_fastq(settings['fastq_r1'])
 
     cut_sites = settings['cuts']
     if settings['PAM'] is not None and settings['on-target_guides'] is not None:
@@ -71,7 +72,7 @@ def main():
 
     reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
     reads_to_align_r2 = settings['fastq_r2']
-    if settings['align_to_genome_first']:
+    if not settings['align_to_targets_first']:
         (genome_mapped_bam_file, genome_aligned_count, genome_unmapped_r1,genome_unmapped_r2
             ) = align_to_genome(
                     root = settings['root'],
@@ -104,7 +105,7 @@ def main():
         reads_to_align_r1 = custom_unmapped_fastq_r1_file
         reads_to_align_r2 = custom_unmapped_fastq_r2_file
 
-    if not settings['align_to_genome_first']:
+    if settings['align_to_targets_first']:
         (genome_mapped_bam_file, genome_aligned_count, genome_unmapped_r1,genome_unmapped_r2
             ) = align_to_genome(
                     root = settings['root'],
@@ -185,6 +186,7 @@ def main():
                     genome_read_count_at_cuts = genome_read_count_at_cuts,
                     crispresso_min_aln_score = settings['crispresso_min_aln_score'],
                     samtools_command=settings['samtools_command'],
+                    crispresso_command=settings['crispresso_command'],
                     )
         crispresso_commands.extend(targets_crispresso_commands)
         crispresso_infos.extend(targets_crispresso_infos)
@@ -283,7 +285,7 @@ def parse_settings(args):
 
     #for finding offtargets with casoffinder
     settings['PAM'] = settings['PAM'] if 'PAM' in settings else None
-    settings['on-target_guides'] = settings['on-target_guide'].split(" ") if 'on-target_guide' in settings else None
+    settings['on-target_guides'] = settings['on-target_guides'].split(" ") if 'on-target_guides' in settings else None
     settings['casoffinder_num_mismatches'] = int(settings['casoffinder_num_mismatches']) if 'casoffinder_num_mismatches' in settings else 5
     settings['cleavage_offset'] = int(settings['cleavage_offset']) if 'cleavage_offset' in settings else -3
 
@@ -303,11 +305,11 @@ def parse_settings(args):
     else:
         settings['use_fastq_r2_only_in_validation'] = True
 
-    #whether alignment should be performed to global first -- if true, un-chimeric (linear) reads will be aligned in this step before alignment to custom targets
-    if 'align_to_genome_first' in settings and settings['align_to_genome_first'] == 'True':
-        settings['align_to_genome_first'] = True
+    #whether alignment should be performed to targets first -- if true, alignment to custom targets will be performed before alignment to the genome
+    if 'align_to_targets_first' in settings and settings['align_to_targets_first'] == 'True':
+        settings['align_to_targets_first'] = True
     else:
-        settings['align_to_genome_first'] = False
+        settings['align_to_targets_first'] = False
 
     #boolean for whether to run crispresso on highly-aligned genomic locations (if false, crispresso will only be run at cut sites and artificial targets)
     if 'run_crispresso_genome_sites' in settings and settings['run_crispresso_genome_sites'] == 'True':
@@ -439,6 +441,26 @@ def get_av_read_len(fastq,number_reads_to_check=50):
 
     return(int(av_read_len))
 
+def get_num_reads_fastq(fastq):
+    """
+    Counts the number of reads in the specified fastq file
+
+    param:
+        fastq: fastq file
+
+    returns:
+        num_reads: number of reads in the fastq file
+    """
+
+    if fastq.endswith('.gz'):
+        cmd = 'gunzip -c %s | wc -l'%fastq
+    else:
+        cmd = 'wc -l %s'%fastq
+
+    res = int(subprocess.check_output(cmd,shell=True).decode('utf-8').split(" ")[0])
+
+    return(res/4)
+
 def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatches,casoffinder_command):
     """
     Gets off-target locations using casoffinder
@@ -467,6 +489,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
 
     casoffinder_input_file = root + '.casoffinder_input.txt'
     casoffinder_output_file = root + '.casoffinder_output.txt'
+    casoffinder_log_file = root + '.casoffinder.log'
     guide_len = max([len(x) for x in guides])
     pam_len = len(pam)
     with open (casoffinder_input_file,'w') as cout:
@@ -475,7 +498,11 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
         for guide in guides:
             cout.write(guide + "N"*pam_len + " " + str(num_mismatches) + "\n")
 
-    casoffinder_cmd = '%s %s C %s'%(casoffinder_command,casoffinder_input_file,casoffinder_output_file)
+    casoffinder_cmd = '(%s %s C %s) &>> %s'%(casoffinder_command,casoffinder_input_file,casoffinder_output_file,casoffinder_log_file)
+
+    with open (casoffinder_log_file,'w') as cout:
+        cout.write('Linking genome from %s to %s\n'%(genome,linked_genome))
+        cout.write('Command used:\n===\n%s\n===\nOutput:\n===\n'%casoffinder_cmd)
 
     logging.debug(casoffinder_cmd)
     if not os.path.exists(casoffinder_output_file):
@@ -529,13 +556,14 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
         target_names: array of target names (corresponding to targets)
         target_info: hash of information for each target_name
             target_info[target_name]['sequence']: fasta sequence of artificial target
-            target_info[target_name]['class']: class of targets (corresponding to targest
+            target_info[target_name]['class']: class of targets (corresponding to targets)
             target_info[target_name]['cut1_chr']: cut information for cut 1
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
             target_info[target_name]['cut2_site']
             target_info[target_name]['query_start']: bp after which query starts (in case of padding)
             target_info[target_name]['query_end']
+            target_info[target_name]['target_cut_idx']: bp of cut in target
     """
     logging.info('Making artificial targets')
     target_names = []
@@ -557,7 +585,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                 'cut2_chr':'Primer',
                 'cut2_site':'Primer',
                 'query_start':0,
-                'query_end':len(primer_seq)*2
+                'query_end':len(primer_seq)*2,
+                'target_cut_idx':len(primer_seq)
                 }
 
 
@@ -606,7 +635,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_start':0,
-                    'query_end':len(primer_seq)+target_length
+                    'query_end':len(primer_seq)+target_length,
+                    'target_cut_idx':len(primer_seq)
                     }
 
             LARBc = left_bit_A + complement(right_bit_B)
@@ -620,7 +650,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_start':0,
-                    'query_end':len(primer_seq)+target_length
+                    'query_end':len(primer_seq)+target_length,
+                    'target_cut_idx':len(primer_seq)
                     }
 
             LALB = left_bit_A + reverse(left_bit_B)
@@ -634,7 +665,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_start':0,
-                    'query_end':len(primer_seq)+target_length
+                    'query_end':len(primer_seq)+target_length,
+                    'target_cut_idx':len(primer_seq)
                     }
 
             LALBc = left_bit_A + reverse_complement(left_bit_B)
@@ -648,7 +680,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_start':0,
-                    'query_end':len(primer_seq)+target_length
+                    'query_end':len(primer_seq)+target_length,
+                    'target_cut_idx':len(primer_seq)
                     }
 
 
@@ -691,7 +724,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
                         'query_start':target_padding,
-                        'query_end':target_padding + target_length*2
+                        'query_end':target_padding + target_length*2,
+                        'target_cut_idx':target_padding + target_length
                         }
 
             if primer_chr == "" or primer_is_in_left_bit_A:
@@ -706,7 +740,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
                         'query_start':target_padding,
-                        'query_end':target_padding + target_length*2
+                        'query_end':target_padding + target_length*2,
+                        'target_cut_idx':target_padding + target_length
                         }
 
 
@@ -721,7 +756,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
                         'query_start':target_padding,
-                        'query_end':target_padding + target_length*2
+                        'query_end':target_padding + target_length*2,
+                        'target_cut_idx':target_padding + target_length
                         }
 
             if primer_chr == "" or primer_is_in_right_bit_A:
@@ -736,7 +772,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
                         'query_start':target_padding,
-                        'query_end':target_padding + target_length*2
+                        'query_end':target_padding + target_length*2,
+                        'target_cut_idx':target_padding + target_length
                         }
 
                 RARAc = right_bit_A + reverse_complement(right_bit_A)
@@ -750,7 +787,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
                         'query_start':target_padding,
-                        'query_end':target_padding + target_length*2
+                        'query_end':target_padding + target_length*2,
+                        'target_cut_idx':target_padding + target_length
                         }
 
 
@@ -789,7 +827,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -806,7 +845,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -824,7 +864,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -841,7 +882,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -859,7 +901,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -876,7 +919,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -894,7 +938,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -911,7 +956,8 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
                             'query_start':target_padding,
-                            'query_end':target_padding + target_length*2
+                            'query_end':target_padding + target_length*2,
+                            'target_cut_idx':target_padding + target_length
                             }
                     if chr_A == chr_B:
                         target_info[target_name]['class'] = 'Large deletion'
@@ -939,7 +985,7 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
         target_names: array of target names
         target_info: hash of information for each target_name
             target_info[target_name]['sequence']: fasta sequence of artificial target
-            target_info[target_name]['class']: class of targets (corresponding to targest
+            target_info[target_name]['class']: class of targets (corresponding to targets)
             target_info[target_name]['cut1_chr']: cut information for cut 1
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
@@ -994,7 +1040,7 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
             flash_merged_sam = flash_root + '.combined.sam'
             flash_merged_unaligned_fastq = flash_root + '.combined.unaligned.fastq'
             logging.info('Aligning merged reads to custom targets using '+bowtie2_command)
-            custom_aln_command = '%s --end-to-end --threads %d -x %s -U %s -S %s 2> %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,flash_merged_fastq,flash_merged_sam,custom_bowtie_log)
+            custom_aln_command = '%s --no-unal --end-to-end --threads %d -x %s -U %s -S %s 2> %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,flash_merged_fastq,flash_merged_sam,custom_bowtie_log)
             logging.debug(custom_aln_command)
             aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
             logging.debug(aln_result)
@@ -1038,7 +1084,7 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
 
             logging.info('Aligning reads to custom targets using '+bowtie2_command)
             unmerged_unaligned_sam = flash_root + '.uncombined.sam'
-            custom_aln_command = '%s --end-to-end --threads %d -x %s -U %s --un-gz %s -S %s 2>> %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,unaligned_unmerged_r1_fastq,custom_unmapped_fastq_r1_file,unmerged_unaligned_sam,custom_bowtie_log)
+            custom_aln_command = '%s --no-unal --end-to-end --threads %d -x %s -U %s --un %s -S %s 2>> %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,unaligned_unmerged_r1_fastq,custom_unmapped_fastq_r1_file,unmerged_unaligned_sam,custom_bowtie_log)
             logging.debug(custom_aln_command)
             aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
             logging.debug(aln_result)
@@ -1050,7 +1096,7 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
 
         #create unaligned r2 file
         unaligned_r1_ids = {}
-        with open(custom_unmapped_fastq_r1_file,'w') as uf1:
+        with open(custom_unmapped_fastq_r1_file,'r') as uf1:
             id_line = uf1.readline()
             while(id_line):
                 seq_line = uf1.readline()
@@ -1079,7 +1125,7 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
         custom_bowtie_log = root + '.customBowtie2Log'
         if not os.path.isfile(custom_mapped_bam_file):
             logging.info('Aligning reads to custom targets using '+bowtie2_command)
-            custom_aln_command = '%s --threads %d --end-to-end -x %s -U %s --un-gz %s 2> %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,fastq_r1,custom_unmapped_fastq_r1_file,custom_bowtie_log,samtools_command,samtools_command,custom_mapped_bam_file,samtools_command,custom_mapped_bam_file)
+            custom_aln_command = '%s --threads %d --end-to-end -x %s -U %s --un %s 2> %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,fastq_r1,custom_unmapped_fastq_r1_file,custom_bowtie_log,samtools_command,samtools_command,custom_mapped_bam_file,samtools_command,custom_mapped_bam_file)
             logging.debug(custom_aln_command)
             aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
             logging.debug(aln_result)
@@ -1151,7 +1197,8 @@ def run_command(command):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,shell=True,
 #            encoding='utf-8',universal_newlines=True)
-            universal_newlines=True)
+            universal_newlines=True,
+            bufsize=-1) #bufsize system default
     return iter(p.stdout.readline, b'')
 
 def analyze_global_aln(root,genome_mapped_bam_file,samtools_command='samtools'):
@@ -1630,7 +1677,7 @@ def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,a
         cuts: array of cut locations -- these will be pulled out for crispresso analysis
         target_info: hash of information for each target_name
             target_info[target_name]['sequence']: fasta sequence of artificial target
-            target_info[target_name]['class']: class of targets (corresponding to targets
+            target_info[target_name]['class']: class of targets (corresponding to targets)
             target_info[target_name]['cut1_chr']: cut information for cut 1
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
@@ -1796,7 +1843,7 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
         target_names: list of artificial target names
         target_info: hash of information for each target_name
             target_info[target_name]['sequence']: fasta sequence of artificial target
-            target_info[target_name]['class']: class of targets (corresponding to targets
+            target_info[target_name]['class']: class of targets (corresponding to targets)
             target_info[target_name]['cut1_chr']: cut information for cut 1
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
