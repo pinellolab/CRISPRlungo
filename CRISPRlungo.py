@@ -12,6 +12,13 @@ import sys
 
 def main():
     settings = parse_settings(sys.argv)
+
+    #data structures for plots for report
+    summary_plot_names=[]  # list of plot names - keys for following dicts
+    summary_plot_titles={} # dict of plot_name->plot_title
+    summary_plot_labels={} # dict of plot_name->plot_label
+    summary_plot_datas={}  # dict of plot_name->(datafile_description, data_filename)
+
     assert_dependencies(
             samtools_command=settings['samtools_command'],
             bowtie2_command=settings['bowtie2_command'],
@@ -19,8 +26,10 @@ def main():
             crispresso_command=settings['crispresso_command'],
             casoffinder_command=settings['casoffinder_command']
             )
+
     av_read_length = get_av_read_len(settings['fastq_r1'])
     num_reads_input = get_num_reads_fastq(settings['fastq_r1'])
+    logging.info('%d reads in input'%num_reads_input)
 
     cut_sites = settings['cuts']
     if settings['PAM'] is not None and settings['on-target_guides'] is not None:
@@ -64,38 +73,48 @@ def main():
             add_non_primer_cut_targets=settings['add_non_primer_cut_targets'],
             samtools_command=settings['samtools_command'])
 
+    custom_index_fasta = make_target_index(
+                    root = settings['root'],
+                    target_names = target_names,
+                    target_info = target_info,
+                    bowtie2_command=settings['bowtie2_command'],
+                    bowtie2_threads = settings['bowtie2_threads'],
+                    )
 
     custom_aligned_count = 0
-    crispresso_commands = [] #list of crispresso commands to run -- first, we add the commands from the custom targets, then the genome aligned reads
+    crispresso_commands = [] #list of crispresso commands to run -- from custom targets and the genomic alignments
     crispresso_infos = [] #meta info about the crispresso runs
             #tuple of: name, chr, start, end, readCount, amplicon
 
     reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
     reads_to_align_r2 = settings['fastq_r2']
     if not settings['align_to_targets_first']:
-        (genome_mapped_bam_file, genome_aligned_count, genome_unmapped_r1,genome_unmapped_r2
-            ) = align_to_genome(
-                    root = settings['root'],
+        (genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file
+            ) = align_reads(
+                    root = settings['root']+'.genomeAlignment',
                     fastq_r1 = reads_to_align_r1,
                     fastq_r2 = reads_to_align_r2,
                     use_fastq_r2_only_in_validation=settings['use_fastq_r2_only_in_validation'],
-                    bowtie2_genome = settings['bowtie2_genome'],
+                    bowtie2_reference = settings['bowtie2_genome'],
+                    reference_name = 'genome',
                     bowtie2_command = settings['bowtie2_command'],
                     bowtie2_threads = settings['bowtie2_threads'],
-                    samtools_command = settings['samtools_command']
+                    samtools_command = settings['samtools_command'],
+                    flash_min_overlap = settings['flash_min_overlap'],
+                    flash_command = settings['flash_command']
                     )
         reads_to_align_r1 = genome_unmapped_r1
         reads_to_align_r2 = genome_unmapped_r2
 
     if len(target_names) > 0:
-        (custom_unmapped_fastq_r1_file,custom_unmapped_fastq_r2_file,custom_aligned_count,custom_mapped_bam_file,custom_index_fasta
-            ) = align_to_artificial_targets(
-                    root = settings['root'],
+        (custom_unmapped_fastq_r1_file,custom_unmapped_fastq_r2_file,custom_aligned_count,custom_mapped_bam_file
+            ) = align_reads(
+                    root = settings['root']+'.customTargetAlignment',
                     fastq_r1 = reads_to_align_r1,
                     fastq_r2 = reads_to_align_r2,
                     use_fastq_r2_only_in_validation=settings['use_fastq_r2_only_in_validation'],
-                    target_names = target_names,
-                    target_info = target_info,
+                    bowtie2_reference=custom_index_fasta,
+                    reference_name='custom targets',
                     flash_min_overlap = settings['flash_min_overlap'],
                     bowtie2_command=settings['bowtie2_command'],
                     bowtie2_threads=settings['bowtie2_threads'],
@@ -106,16 +125,18 @@ def main():
         reads_to_align_r2 = custom_unmapped_fastq_r2_file
 
     if settings['align_to_targets_first']:
-        (genome_mapped_bam_file, genome_aligned_count, genome_unmapped_r1,genome_unmapped_r2
+        (genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file
             ) = align_to_genome(
-                    root = settings['root'],
+                    root = settings['root']+'.genomeAlignment',
                     fastq_r1 = reads_to_align_r1,
                     fastq_r2 = reads_to_align_r2,
                     use_fastq_r2_only_in_validation=settings['use_fastq_r2_only_in_validation'],
-                    bowtie2_genome = settings['bowtie2_genome'],
+                    bowtie2_reference = settings['bowtie2_genome'],
+                    reference_name = 'genome',
                     bowtie2_command = settings['bowtie2_command'],
                     bowtie2_threads = settings['bowtie2_threads'],
-                    samtools_command = settings['samtools_command']
+                    samtools_command = settings['samtools_command'],
+                    flash_command=settings['flash_command']
                     )
         reads_to_align_r1 = genome_unmapped_r1
         reads_to_align_r2 = genome_unmapped_r2
@@ -199,17 +220,34 @@ def main():
                 crispresso_commands = crispresso_commands
                 )
 
-    labels = ["Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Unidentified"]
-    values = [custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,unidentified_count]
+    labels = ["Input Reads","Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Unidentified"]
+    values = [num_reads_input,custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,unidentified_count]
     alignment_summary_root = settings['root']+".alignmentSummary"
     with open(alignment_summary_root+".txt",'w') as summary:
         summary.write("\t".join(labels)+"\n")
         summary.write("\t".join([str(x) for x in values])+"\n")
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
-    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
-    plt.savefig(alignment_summary_root+".pdf",pad_inches=1,bbox_inches='tight')
+    ax.pie(values[1:],labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(1,len(labels))],autopct="%1.2f%%")
+    plot_name = alignment_summary_root
+    plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
+    summary_plot_names.append(plot_name)
+    summary_plot_titles[plot_name] = 'Alignment Summary'
+    summary_plot_labels[plot_name] = 'Pie chart showing distribution of reads. Total reads in input: ' + str(num_reads_input)
+    summary_plot_datas[plot_name] = [('Alignment summary',alignment_summary_root + ".txt")]
 
+
+    make_report(report_file=settings['root']+".html",
+            report_name = 'Report',
+            crisprlungo_folder = '',
+            crispresso_run_names = '',
+            crispresso_sub_html_files = '',
+            summary_plot_names = summary_plot_names,
+            summary_plot_titles = summary_plot_titles,
+            summary_plot_labels = summary_plot_labels,
+            summary_plot_datas = summary_plot_datas
+            )
 
 
     cleanup(settings['root'])
@@ -235,10 +273,12 @@ def parse_settings(args):
         raise Exception('Error: Settings file is missing\nUsage: ' +
                     args[0] + ' {settings file}')
     settings_file = args[1]
+    settings = {}
 
     logging_level = logging.INFO
     if len(args) > 2 and 'debug' in args[2].lower():
         logging_level=logging.DEBUG
+        settings['debug'] = True
 
     log_formatter = logging.Formatter("%(asctime)s:%(levelname)s: %(message)s")
     logging.basicConfig(
@@ -253,7 +293,6 @@ def parse_settings(args):
 
     logging.info('Parsing settings file')
 
-    settings = {}
     with open(settings_file, 'r') as fin:
         for line in fin:
             line_els = line.split("#")[0].strip().split("\t")
@@ -968,20 +1007,12 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
     logging.info('Created ' + str(len(target_names)) + ' targets')
     return(target_names,target_info)
 
-def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_validation,target_names,target_info,flash_min_overlap=20,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',flash_command='flash'):
-    """
-    Aligns reads to artificial targets
-    If only R1 is provided, R1 is aligned to artificial targets
-    If R1 and R2 are provided:
-        - R1 and R2 are merged
-        - the merged reads are aligned to artificial targets
-        - reads that a) did not merge or b) did not align to artificial targets when merged are aligned to artificial targets
 
+def make_target_index(root,target_names,target_info,bowtie2_command,bowtie2_threads=1):
+    """
+    Creates a bowtie index for artificial targets
     params:
         root: root for written files
-        fastq_r1: fastq_r1 to align
-        fastq_r2: fastq_r2 to align
-        use_fastq_r2_only_in_validation: if True, don't use R2 in this step -- only for validation
         target_names: array of target names
         target_info: hash of information for each target_name
             target_info[target_name]['sequence']: fasta sequence of artificial target
@@ -992,24 +1023,12 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
             target_info[target_name]['cut2_site']
             target_info[target_name]['query_start']: bp after which query starts (in case of padding)
             target_info[target_name]['query_end']
-        flash_min_overlap: min overlap (in bp) for R1 and R2 for merging
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
-        samtools_command: location of samtools to run
-        flash_command: location of flash to run
-
     returns:
-        custom_unmapped_fastq_r1_file: fastq_r1 file of reads not aligning to artificial targets
-        custom_unmapped_fastq_r2_file: fastq_r2 file of reads not aligning to artificial targets
-        custom_aligned_count: number of reads aligned to artificial targets
-        custom_mapped_bam_file: aligned reads aligning to artificial targets
         custom_index_fasta: fasta of artificial targets
-
     """
-    logging.info('Aligning to artificial targets')
-
-    custom_mapped_bam_file = root + ".customMapped.bam" # file only generated if cut sites provided
-    custom_index_fasta = root + ".customIndex.fa"
+    custom_index_fasta = root + '.customIndex.fa'
     logging.info('Printing ' + str(len(target_names)) + ' targets to custom index (' + custom_index_fasta + ')')
     with open(custom_index_fasta,'w') as fout:
         for i in range(len(target_names)):
@@ -1019,19 +1038,55 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
         logging.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
         index_result = subprocess.check_output(bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta, shell=True,stderr=subprocess.STDOUT)
 
-    if fastq_r2 is not None and not use_fastq_r2_only_in_validation: #paired-end reads
-        custom_unmapped_fastq_r1_file = root + '.customUnmapped_r1.fastq'
-        custom_unmapped_fastq_r2_file = root + '.customUnmapped_r2.fastq'
-        custom_bowtie_log = root + '.customBowtie2Log'
+    return custom_index_fasta
 
-        if not os.path.isfile(custom_mapped_bam_file):
+def align_reads(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_validation,bowtie2_reference,reference_name,flash_min_overlap=20,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',flash_command='flash'):
+    """
+    Aligns reads to the provided reference (either artificial targets or genome)
+    If only R1 is provided, R1 is aligned to reference
+    If R1 and R2 are provided:
+        - R1 and R2 are merged
+        - the merged reads are aligned to reference
+        - reads that a) did not merge or b) did not align to reference when merged are aligned to reference
+
+    params:
+        root: root for written files
+        fastq_r1: fastq_r1 to align
+        fastq_r2: fastq_r2 to align
+        use_fastq_r2_only_in_validation: if True, don't use R2 in this step -- only for validation
+        bowtie2_reference: bowtie2 reference to align to (either artificial targets or reference)
+        reference_name: Name displayed to user for updates (e.g. 'Genome' or 'Artificial Targets')
+        flash_min_overlap: min overlap (in bp) for R1 and R2 for merging
+        bowtie2_command: location of bowtie2 to run
+        bowtie2_threads: number of threads to run bowtie2 with
+        samtools_command: location of samtools to run
+        flash_command: location of flash to run
+
+    returns:
+        unmapped_fastq_r1_file: fastq_r1 file of reads not aligning
+        unmapped_fastq_r2_file: fastq_r2 file of reads not aligning
+        aligned_count: number of reads aligned
+        mapped_bam_file: aligned reads
+
+    """
+    logging.info('Aligning to %s'%reference_name)
+
+    mapped_bam_file = root + ".bam"
+
+    if fastq_r2 is not None and not use_fastq_r2_only_in_validation: #paired-end reads
+        unmapped_fastq_r1_file = root + '.unmapped_r1.fastq'
+        unmapped_fastq_r2_file = root + '.unmapped_r2.fastq'
+
+        if not os.path.isfile(mapped_bam_file):
             #first flash
-            logging.info('Merging R1 and R2 using %s'+flash_comamnd)
+            logging.info('Merging R1 and R2 using %s'%flash_command)
             flash_root = root+'.flash'
-            flash_cmd = '%s --allow-outies --min_overlap %d -o %s.flash %s %s'&(flash_command,flash_min_overlap,flash_root, fastq_r1, fastq_r2)
+            flash_cmd = '%s --allow-outies --min-overlap %d -o %s %s %s'%(flash_command,flash_min_overlap,flash_root, fastq_r1, fastq_r2)
             logging.debug(flash_cmd)
             flash_result = subprocess.check_output(flash_cmd,shell=True,stderr=subprocess.STDOUT)
             logging.debug(flash_result)
+            with open (flash_root + '.log','w') as lout:
+                lout.write('Command used:\n===\n%s\n===\nOutput:\n===\n%s'%(flash_cmd,flash_result))
 
             flash_merged_fastq = flash_root + '.extendedFrags.fastq'
             flash_unmerged_r1 = flash_root + '.notCombined_1.fastq'
@@ -1039,22 +1094,27 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
 
             flash_merged_sam = flash_root + '.combined.sam'
             flash_merged_unaligned_fastq = flash_root + '.combined.unaligned.fastq'
-            logging.info('Aligning merged reads to custom targets using '+bowtie2_command)
-            custom_aln_command = '%s --no-unal --end-to-end --threads %d -x %s -U %s -S %s 2> %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,flash_merged_fastq,flash_merged_sam,custom_bowtie_log)
-            logging.debug(custom_aln_command)
-            aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
-            logging.debug(aln_result)
+            logging.info('Aligning merged reads to %s using %s'%(reference_name,bowtie2_command))
+            aln_command = '%s --no-unal --end-to-end --threads %d -x %s -U %s -S %s' % (bowtie2_command,bowtie2_threads,bowtie2_reference,flash_merged_fastq,flash_merged_sam)
+            logging.debug(aln_command)
 
+            aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
+            logging.debug(aln_result)
+            bowtie_log = root + '.bowtie2Log'
+            with open (bowtie_log,'w') as lout:
+                lout.write('Alignment to %s\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
 
             logging.info('Finding un-alignable and un-mergeable reads')
-            # then take the unmergable R1s and the mergable failed-to-align R1s and align them to the genome
+            # then take the unmergable R1s and the mergable failed-to-align R1s and align them to the reference
             # (in other words, any read that did not align in a merged fashion)
             # create a dict with the aligned read ids
             count_merged_aligned = 0
-            merged_aligned_ids = []
+            merged_aligned_ids = {}
             with open(flash_merged_sam,'r') as fms:
                 for line in fms:
-                    read_id = line.split("\t").split(" ")[0]
+                    if line.startswith('@'):
+                        continue
+                    read_id = line.split('\t')[0].split(" ")[0]
                     merged_aligned_ids[read_id] = 1
                     count_merged_aligned += 1
 
@@ -1071,32 +1131,34 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
                         plus_line = f1.readline()
                         qual_line = f1.readline()
 
-                        this_id = id_line.split(" ")[0]
+                        this_id = id_line.split(" ")[0][1:]
                         if this_id in merged_aligned_ids:
                             count_r1s_merged_id_founds += 1
                         else:
-                            uf1.write('%s\n%s\n%s\n%s\n'%(id_line,seq_line,plus_line,qual_line))
+                            uf1.write('%s%s%s%s'%(id_line,seq_line,plus_line,qual_line))
                             count_r1s_not_merged_not_aligned += 1
                         id_line = f1.readline()
 
             logging.info('Found ids for %d merged reads'%count_r1s_merged_id_founds)
             logging.info('Continuing analysis with %d unalignable or unmergable reads'%count_r1s_not_merged_not_aligned)
 
-            logging.info('Aligning reads to custom targets using '+bowtie2_command)
+            logging.info('Aligning reads to %s using %s'%(reference_name,bowtie2_command))
             unmerged_unaligned_sam = flash_root + '.uncombined.sam'
-            custom_aln_command = '%s --no-unal --end-to-end --threads %d -x %s -U %s --un %s -S %s 2>> %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,unaligned_unmerged_r1_fastq,custom_unmapped_fastq_r1_file,unmerged_unaligned_sam,custom_bowtie_log)
-            logging.debug(custom_aln_command)
-            aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
+            aln_command = '%s --no-unal --no-hd --end-to-end --threads %d -x %s -U %s --un %s -S %s' % (bowtie2_command,bowtie2_threads,bowtie2_reference,unaligned_unmerged_r1_fastq,unmapped_fastq_r1_file,unmerged_unaligned_sam)
+            logging.debug(aln_command)
+            aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
             logging.debug(aln_result)
+            with open (bowtie_log,'a') as lout:
+                lout.write('\nAligning unaligned reads from previous step to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
 
-            custom_sam_command = 'cat %s %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (flash_merged_sam,unmerged_unaligned_sam,samtools_command,samtools_command,custom_mapped_bam_file,samtools_command,custom_mapped_bam_file)
-            logging.debug(custom_sam_command)
-            sam_result = subprocess.check_output(custom_sam_command,shell=True,stderr=subprocess.STDOUT)
+            sam_command = 'cat %s %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (flash_merged_sam,unmerged_unaligned_sam,samtools_command,samtools_command,mapped_bam_file,samtools_command,mapped_bam_file)
+            logging.debug(sam_command)
+            sam_result = subprocess.check_output(sam_command,shell=True,stderr=subprocess.STDOUT)
             logging.debug(sam_result)
 
         #create unaligned r2 file
         unaligned_r1_ids = {}
-        with open(custom_unmapped_fastq_r1_file,'r') as uf1:
+        with open(unmapped_fastq_r1_file,'r') as uf1:
             id_line = uf1.readline()
             while(id_line):
                 seq_line = uf1.readline()
@@ -1107,7 +1169,7 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
                 unaligned_r1_ids[this_id] = 1
                 id_line = uf1.readline()
 
-        with open(custom_unmapped_fastq_r2_file,'w') as uf2, open(fastq_r2,'r') as f2:
+        with open(unmapped_fastq_r2_file,'w') as uf2, open(fastq_r2,'r') as f2:
             id_line = f2.readline()
             while(id_line):
                 seq_line = f2.readline()
@@ -1116,24 +1178,26 @@ def align_to_artificial_targets(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_vali
 
                 this_id = id_line.split(" ")[0]
                 if this_id in unaligned_r1_ids:
-                    uf2.write('%s\n%s\n%s\n%s\n'%(id_line,seq_line,plus_line,qual_line))
+                    uf2.write('%s%s%s%s'%(id_line,seq_line,plus_line,qual_line))
                 id_line = f2.readline()
 
     else: #single end reads
-        custom_unmapped_fastq_r1_file = root + '.customUnmapped_r1.fastq'
-        custom_unmapped_fastq_r2_file = None
-        custom_bowtie_log = root + '.customBowtie2Log'
-        if not os.path.isfile(custom_mapped_bam_file):
-            logging.info('Aligning reads to custom targets using '+bowtie2_command)
-            custom_aln_command = '%s --threads %d --end-to-end -x %s -U %s --un %s 2> %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (bowtie2_command,bowtie2_threads,custom_index_fasta,fastq_r1,custom_unmapped_fastq_r1_file,custom_bowtie_log,samtools_command,samtools_command,custom_mapped_bam_file,samtools_command,custom_mapped_bam_file)
-            logging.debug(custom_aln_command)
-            aln_result = subprocess.check_output(custom_aln_command,shell=True,stderr=subprocess.STDOUT)
+        unmapped_fastq_r1_file = root + '.unmapped_r1.fastq'
+        unmapped_fastq_r2_file = None
+        if not os.path.isfile(mapped_bam_file):
+            logging.info('Aligning reads to %s using %s'%(reference_name,bowtie2_command))
+            aln_command = '%s --no-unal --threads %d --end-to-end -x %s -U %s --un %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (bowtie2_command,bowtie2_threads,bowtie2_reference,fastq_r1,unmapped_fastq_r1_file,samtools_command,samtools_command,mapped_bam_file,samtools_command,mapped_bam_file)
+            logging.debug(aln_command)
+            aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
             logging.debug(aln_result)
+            bowtie_log = root + '.bowtie2Log'
+            with open (bowtie_log,'w') as lout:
+                lout.write('Alignment to %s\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
 
-    custom_aligned_count = int(subprocess.check_output('%s view -F 4 -c %s'%(samtools_command,custom_mapped_bam_file),shell=True).strip())
+    aligned_count = int(subprocess.check_output('%s view -F 4 -c %s'%(samtools_command,mapped_bam_file),shell=True).strip())
 
-    logging.info('Aligned ' + str(custom_aligned_count) + ' reads to custom targets')
-    return(custom_unmapped_fastq_r1_file,custom_unmapped_fastq_r2_file,custom_aligned_count,custom_mapped_bam_file,custom_index_fasta)
+    logging.info('Aligned %d reads to %s'%(aligned_count,reference_name))
+    return(unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file)
 
 
 
@@ -1160,21 +1224,24 @@ def align_to_genome(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_validation,bowti
     logging.info('Aligning reads to genome')
 
     genome_mapped_bam_file = root + ".genomeMapped.bam"
-    bowtie_log = root + '.bowtie2Log'
     if fastq_r2 is not None and not use_fastq_r2_only_in_validation: #paired-end reads
         genome_unmapped_bowtie = root + ".genomeUnmapped.fastq" #bowtie adds .1 and .2 before final . in path for paired ends
-        aln_command = '%s --threads %d --end-to-end -x %s -1 %s -2 %s --un-conc %s 2> %s | %s view -Shu - | %s sort -o %s - && %s index %s'%(bowtie2_command,bowtie2_threads,bowtie2_genome,fastq_r1,fastq_r2,genome_unmapped_bowtie,bowtie_log,samtools_command,samtools_command,genome_mapped_bam_file,samtools_command,genome_mapped_bam_file)
+        aln_command = '%s --threads %d --end-to-end -x %s -1 %s -2 %s --un-conc %s | %s view -Shu - | %s sort -o %s - && %s index %s'%(bowtie2_command,bowtie2_threads,bowtie2_genome,fastq_r1,fastq_r2,genome_unmapped_bowtie,samtools_command,samtools_command,genome_mapped_bam_file,samtools_command,genome_mapped_bam_file)
         genome_unmapped_r1 = root + ".genomeUnmapped.1.fastq"
         genome_unmapped_r2 = root + ".genomeUnmapped.2.fastq"
 
     else: # single end reads
         genome_unmapped_r1 = root + ".genomeUnmapped.fastq"
         genome_unmapped_r2 = None
-        aln_command = '%s --threads %d --end-to-end -x %s --un %s -U %s 2> %s | %s view -Shu - | %s sort -o %s - && %s index %s'%(bowtie2_command,bowtie2_threads,bowtie2_genome,genome_unmapped_r1,fastq_r1,bowtie_log,samtools_command,samtools_command,genome_mapped_bam_file,samtools_command,genome_mapped_bam_file)
+        aln_command = '%s --threads %d --end-to-end -x %s --un %s -U %s | %s view -f 66 -Shu - | %s sort -o %s - && %s index %s'%(bowtie2_command,bowtie2_threads,bowtie2_genome,genome_unmapped_r1,fastq_r1,samtools_command,samtools_command,genome_mapped_bam_file,samtools_command,genome_mapped_bam_file)
     logging.debug(aln_command)
+
 
     aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf8')
     logging.debug('Alignment to genome: ' + aln_result)
+    bowtie_log = root + '.genomeMapped.bowtie2Log'
+    with open (bowtie_log,'w') as lout:
+        lout.write('Command used:\n===\n%s\n===\nOutput:\n===\n%s'%(aln_command,aln_result))
 
     genome_aligned_count = int(subprocess.check_output('%s view -F 4 -c %s'%(samtools_command,genome_mapped_bam_file),shell=True).strip())
 
@@ -1241,7 +1308,7 @@ def analyze_global_aln(root,genome_mapped_bam_file,samtools_command='samtools'):
             aligned_chr_counts[line_chr] = 0
         aligned_chr_counts[line_chr] += 1
 
-    global_aligned_chrs_root = root + ".globalAlignedChrs"
+    global_aligned_chrs_root = root + ".genomeAlignment.chrs"
     keys = sorted(aligned_chr_counts.keys())
     vals = [str(aligned_chr_counts[key]) for key in keys]
     with open(global_aligned_chrs_root+".txt","w") as chrs:
@@ -1292,12 +1359,14 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
 
     unmapped_reads_fastq=unmapped_reads_fastq_r1 #file with reads to fragment
     if unmapped_reads_fastq_r2 != None and not use_fastq_r2_only_in_validation:
-        logging.info('Merging R1 and R2 for fragmenting using %s'+flash_comamnd)
+        logging.info('Merging R1 and R2 for fragmenting using %s'%flash_command)
         flash_root = root+'.fragment.flash'
-        flash_cmd = '%s --allow-outies --min_overlap %d -o %s.flash %s %s'&(flash_command,flash_min_overlap,flash_root, fastq_r1, fastq_r2)
+        flash_cmd = '%s --allow-outies --min-overlap %d -o %s %s %s'%(flash_command,flash_min_overlap,flash_root, unmapped_reads_fastq_r1, unmapped_reads_fastq_r2)
         logging.debug(flash_cmd)
         flash_result = subprocess.check_output(flash_cmd,shell=True,stderr=subprocess.STDOUT)
         logging.debug(flash_result)
+        with open (flash_root + '.log','w') as lout:
+            lout.write('Command used:\n===\n%s\n===\nOutput:\n===\n%s'%(flash_cmd,flash_result))
 
         flash_merged_fastq = flash_root + '.extendedFrags.fastq'
         flash_unmerged_r1 = flash_root + '.notCombined_1.fastq'
@@ -1347,7 +1416,7 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
         logging.debug(cat_result)
         unmapped_reads_fastq = fragment_input
 
-    unmapped_frag_file = root + ".unmapped_frags.fastq"
+    unmapped_frag_file = root + ".fragUnmapped.fastq"
     with open(unmapped_frag_file,"w") as unmapped_fastq, open(unmapped_reads_fastq,'r') as unmapped_reads:
         line_id = unmapped_reads.readline()
         while(line_id):
@@ -1406,11 +1475,13 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
 
     mapped_chopped_sam_file = root + ".fragMapped.sam"
     chopped_bowtie_log = root + ".fragMapped.bowtie2Log"
-    chopped_aln_command = '%s --reorder --threads %d --end-to-end -x %s -U %s -S %s 2> %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file,chopped_bowtie_log)
+    chopped_aln_command = '%s --reorder --threads %d --end-to-end -x %s -U %s -S %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file)
 
     logging.debug(chopped_aln_command)
     aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf-8')
     logging.debug('Alignment of chopped fragments to genome: ' + aln_result)
+    with open (chopped_bowtie_log,'w') as lout:
+        lout.write('Alignment of chopped fragments to genome\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(chopped_aln_command,aln_result))
 
 
     return(mapped_chopped_sam_file,max_frags)
@@ -1419,7 +1490,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
     """
     Analyzes reads aligned globally
     Keeps track of locations where reads map
-    For reads that do not map, creats chopped fragments which are be mapped
+    For reads that do not map, create chopped fragments which are be mapped
 
     params:
         root: root for written files
@@ -1856,14 +1927,14 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
         crispresso_command: location of crispresso to run
 
     returns:
-        crispresso_infos: array of metadata information for CRISPresso
+        crispresso_infos: array of metadata information for CRISPResso
             tuple of: name, chr, start, end, readCount, amplicon
-        crispresso_commands: array of commands to run CRISPresso
+        crispresso_commands: array of commands to run CRISPResso
     """
     logging.info('Preparing artificial targets for CRISPResso2')
 
     #first, add the counts from the genome alignment
-    #these chould all probably be 'Linear', but I'm leaving this generalized here in case things change
+    #these should all probably be 'Linear', but I'm leaving this generalized here in case things change
     class_counts = {}
     for target_name in genome_read_count_at_cuts:
         custom_class = target_info[target_name]['class']
@@ -1874,7 +1945,7 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
     crispresso_commands = []
     crispresso_infos = []
 
-    target_summary_file = root + '.customMapped.summary.txt'
+    target_summary_file = root + '.customTargetAlignment.summary.txt'
     with open (target_summary_file,'w') as out:
         out.write('%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%('target_name','target_class','total_aligned','aligned_to_artificial_targets','aligned_to_genome','cut1_chr','cut1_site','cut2_chr','cut2_site'))
         for i,target_name in enumerate(target_names):
@@ -1940,13 +2011,13 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
 
     params:
         root: root for written files
-        crispresso_infos: array of metadata information for CRISPresso
+        crispresso_infos: array of metadata information for CRISPResso
             tuple of: name, chr, start, end, readCount, amplicon
-        crispresso_commands: array of commands to run CRISPresso
+        crispresso_commands: array of commands to run CRISPResso
 
     returns:
-        crispresso_infos: array of metadata information for CRISPresso
-        crispresso_commands: array of commands to run CRISPresso
+        crispresso_infos: array of metadata information for CRISPResso
+        crispresso_commands: array of commands to run CRISPResso
 
     """
     logging.info('Analyzing alignments using CRISPResso2')
@@ -2033,6 +2104,100 @@ def cleanup(root):
         root: root for written files
     """
     delete_result = subprocess.check_output('rm -rf ' + root + '.customIndex.fa.*', stderr=subprocess.STDOUT,shell=True)
-    logging.debug('Deleted bowite indexes ' + delete_result)
+    logging.debug('Deleted bowtie indexes ' + delete_result)
+
+def make_report(report_file,report_name,crisprlungo_folder,
+            crispresso_run_names,crispresso_sub_html_files,
+            summary_plot_names=[],
+            summary_plot_titles={},
+            summary_plot_labels={},
+            summary_plot_datas={}
+        ):
+        """
+        Makes an HTML report for a CRISPRlungo run
+
+        Parameters:
+        report_file: path to the output report
+        report_name: description of report type to be shown at top of report
+        crisprlungo_folder (string): absolute path to the crisprlungo output
+
+        crispresso_run_names (arr of strings): names of crispresso runs
+        crispresso_sub_html_files (dict): dict of run_name->file_loc
+        
+        summary_plot_names (list): list of plot names - keys for following dicts
+        summary_plot_titles (dict): dict of plot_name->plot_title
+        summary_plot_labels (dict): dict of plot_name->plot_label
+        summary_plot_datas (dict): dict of plot_name->(datafile_description, data_filename)
+
+        """
+        
+        html_str = """
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>"""+report_name+"""</title>
+
+    <!-- Bootstrap core CSS -->
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+  </head>
+
+  <body>
+<style>
+html,
+body {
+  height: 100%;
+}
+
+body {
+  display: -ms-flexbox;
+  display: -webkit-box;
+  display: flex;
+  -ms-flex-align: center;
+  -ms-flex-pack: center;
+  -webkit-box-align: center;
+  align-items: center;
+  -webkit-box-pack: center;
+  justify-content: center;
+  padding-top: 40px;
+  padding-bottom: 40px;
+  background-color: #f5f5f5;
+}
+
+</style>
+<div class='container'>
+<div class='row justify-content-md-center'>
+<div class='col-8'>
+    <div class='text-center pb-4'>
+    <h1 class='display-4'>"""+"CRISPRlungo" + """</h1><h2>"""+report_name+"""</h2>
+    </div>
+"""
+        data_path = ""
+        for plot_name in summary_plot_names:
+            plot_str = "<div class='card text-center mb-2'>\n\t<div class='card-header'>\n"
+            plot_str += "<h5>"+summary_plot_titles[plot_name]+"</h5>\n"
+            plot_str += "</div>\n"
+            plot_str += "<div class='card-body'>\n"
+            plot_str += "<a href='"+data_path+plot_name+".pdf'><img src='"+data_path + plot_name + ".png' width='80%' ></a>\n"
+            plot_str += "<label>"+summary_plot_labels[plot_name]+"</label>\n"
+            for (plot_data_label,plot_data_path) in summary_plot_datas[plot_name]:
+                plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n";
+            plot_str += "</div></div>\n";
+            html_str += plot_str
+
+        html_str += """
+</div>
+</div>
+</div>
+     </body>
+</html>
+"""
+        with open(report_file,'w') as fo:
+            fo.write(html_str)
+        logging.info('Wrote ' + report_file)
+
+
+
 
 main()
