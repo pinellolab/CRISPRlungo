@@ -1,8 +1,12 @@
 import argparse
+from collections import defaultdict
+import gzip
+import io
 import logging
 import matplotlib
 matplotlib.use('AGG')
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 import re
 import subprocess
@@ -10,14 +14,12 @@ import sys
 
 #todo: validate with R2
 
+
 def main():
     settings = parse_settings(sys.argv)
 
     #data structures for plots for report
-    summary_plot_names=[]  # list of plot names - keys for following dicts
-    summary_plot_titles={} # dict of plot_name->plot_title
-    summary_plot_labels={} # dict of plot_name->plot_label
-    summary_plot_datas={}  # dict of plot_name->(datafile_description, data_filename)
+    summary_plot_objects=[]  # list of PlotObjects for plotting
 
     assert_dependencies(
             samtools_command=settings['samtools_command'],
@@ -81,13 +83,35 @@ def main():
                     bowtie2_threads = settings['bowtie2_threads'],
                     )
 
+    reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
+    reads_to_align_r2 = settings['fastq_r2']
+
+    #if umis are provided, add them to the fastqs
+    if settings['fastq_umi']:
+        umi_r1, umi_r2 = add_umi_from_umi_file(
+            root = settings['root']+'.addUMI',
+            fastq_r1 = reads_to_align_r1,
+            fastq_r2 = reads_to_align_r2,
+            fastq_umi = settings['fastq_umi']
+        )
+        reads_to_align_r1 = umi_r1
+        reads_to_align_r2 = umi_r2
+
+    if settings['dedup_input']:
+        dedup_r1, dedup_r2 = dedup_file(
+            root = settings['root']+'.dedup',
+            fastq_r1 = reads_to_align_r1,
+            fastq_r2 = reads_to_align_r2,
+            umi_regex = settings['umi_regex']
+        )
+        reads_to_align_r1 = dedup_r1
+        reads_to_align_r2 = dedup_r2
+
     custom_aligned_count = 0
     crispresso_commands = [] #list of crispresso commands to run -- from custom targets and the genomic alignments
     crispresso_infos = [] #meta info about the crispresso runs
             #tuple of: name, chr, start, end, readCount, amplicon
 
-    reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
-    reads_to_align_r2 = settings['fastq_r2']
     if not settings['align_to_targets_first']:
         (genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file
             ) = align_reads(
@@ -142,15 +166,16 @@ def main():
         reads_to_align_r2 = genome_unmapped_r2
 
 
-    (aligned_locs, mapped_chrs
+    (aligned_locs, mapped_chrs, global_aln_plot_obj
         ) = analyze_global_aln(
-                root = settings['root'],
+                root = settings['root']+".genomeAlignment",
                 genome_mapped_bam_file = genome_mapped_bam_file,
                 samtools_command=settings['samtools_command']
                 )
 
+
     #chop reads
-    (mapped_chopped_sam_file, max_frags
+    (mapped_chopped_sam_file, max_frags, frags_plot_obj
         ) = create_chopped_reads(
                 root = settings['root'],
                 unmapped_reads_fastq_r1 = reads_to_align_r1,
@@ -214,7 +239,7 @@ def main():
 
 
 
-    run_and_aggregate_crispresso(
+    crispresso_results = run_and_aggregate_crispresso(
                 root = settings['root'],
                 crispresso_infos = crispresso_infos,
                 crispresso_commands = crispresso_commands
@@ -232,21 +257,24 @@ def main():
     plot_name = alignment_summary_root
     plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
-    summary_plot_names.append(plot_name)
-    summary_plot_titles[plot_name] = 'Alignment Summary'
-    summary_plot_labels[plot_name] = 'Pie chart showing distribution of reads. Total reads in input: ' + str(num_reads_input)
-    summary_plot_datas[plot_name] = [('Alignment summary',alignment_summary_root + ".txt")]
 
+
+    summary_plot_objects.append(
+            PlotObject(plot_name = plot_name,
+                    plot_title = 'Alignment Summary',
+                    plot_label = 'Pie chart showing distribution of reads. Total reads in input: ' + str(num_reads_input),
+                    plot_datas = [('Alignment summary',alignment_summary_root + ".txt")]
+                    ))
+
+    summary_plot_objects.append(global_aln_plot_obj)
+    summary_plot_objects.append(frags_plot_obj)
 
     make_report(report_file=settings['root']+".html",
             report_name = 'Report',
             crisprlungo_folder = '',
-            crispresso_run_names = '',
-            crispresso_sub_html_files = '',
-            summary_plot_names = summary_plot_names,
-            summary_plot_titles = summary_plot_titles,
-            summary_plot_labels = summary_plot_labels,
-            summary_plot_datas = summary_plot_datas
+            crispresso_run_names = crispresso_results['run_names'],
+            crispresso_sub_html_files = crispresso_results['run_sub_htmls'],
+            summary_plot_objects = summary_plot_objects,
             )
 
 
@@ -363,6 +391,9 @@ def parse_settings(args):
     settings['crispresso_command'] = settings['crispresso_command'] if 'crispresso_command' in settings else 'CRISPResso'
     settings['casoffinder_command'] = settings['casoffinder_command'] if 'casoffinder_command' in settings else 'cas-offinder'
 
+    settings['umi_regex'] = settings['umi_regex'] if 'umi_regex' in settings else 'NNWNNWNNN'
+    settings['dedup_input'] = (settings['dedup_input'] == 'True') if 'dedup_input' in settings else False
+
 
     settings['crispresso_min_aln_score'] = int(settings['crispresso_min_aln_score']) if 'crispresso_min_aln_score' in settings else 20
 
@@ -395,6 +426,12 @@ def parse_settings(args):
             raise Exception('Error: fastq_r2 file %s does not exist',settings['fastq_r2'])
     else:
         settings['fastq_r2'] = None
+
+    if 'fastq_umi' in settings and settings['fastq_umi'].rstrip() != "":
+        if not os.path.isfile(settings['fastq_umi']):
+            raise Exception('Error: fastq_umi file %s does not exist',settings['fastq_umi'])
+    else:
+        settings['fastq_umi'] = None
 
     with open (settings['root']+".settingsUsed.txt",'w') as fout:
         for setting in settings:
@@ -1040,6 +1077,304 @@ def make_target_index(root,target_names,target_info,bowtie2_command,bowtie2_thre
 
     return custom_index_fasta
 
+def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False):
+    """
+    Deduplicates fastq files based on UMI (UMI is assumed to be the last part of the read ID after the ':'
+
+    params:
+        root: root for written files
+        fastq_r1: R1 reads to dedup
+        fastq_r2: R2 reads to dedup
+        umi_regex: string specifying regex that UMI must match
+        min_umi_seen_to_keep_read: min number of times a umi must be seen to keep the umi and read (e.g. if set to 2, a read-UMI pair that is only seen once will be discarded)
+        write_UMI_counts: if True, writes a file with the UMI counts
+    returns:
+        fastq_r1_dedup: fastq_r1 file of deduplicated reads
+        fastq_r2_dedup: fastq_r2 file of deduplicated reads
+        tot_read_count: number of total reads read
+        count_with_regex: number of reads with umi matching regex
+        post_dedup_count: number of reads post deduplication
+        post_dedup_read_count: number of reads that contributed to the deduplicated reads (post_dedup_read_count reads were seen that were deduplicated to post_dedup_count reads. If post_dedup_count == post_dedup_read_count then every UMI-read pair was seen once.)
+    """
+
+    dedup_stats_file = root + ".log"
+    fastq_r1_dedup = "NA"
+    fastq_r2_dedup = "NA"
+    tot_read_count = -1
+    count_with_regex = -1
+    post_dedup_count = -1
+    post_dedup_read_count = -1
+    #if already finished, attempt to read in stats
+    if os.path.isfile(dedup_stats_file):
+        with open(dedup_stats_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().strip().split("\t")
+            if len(line_els) > 3:
+                (fastq_r1_dedup,fastq_r2_dedup,tot_read_count_str,count_with_regex_str,post_dedup_count_str,post_dedup_read_count_str) = line_els
+                tot_read_count = int(tot_read_count_str)
+                count_with_regex = int(count_with_regex_str)
+                post_dedup_count = int(post_dedup_count_str)
+                post_dedup_read_count = int(post_dedup_read_count_str)
+                logging.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
+
+    #otherwise perform deduplication (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
+    if tot_read_count == -1:
+        logging.info('Deduplicating input fastqs')
+        
+        #first, create the regex that matches UMIs
+        umi_regex_string = umi_regex
+
+        umi_regex_string = umi_regex_string.replace('I','([ATCG])')
+        umi_regex_string = umi_regex_string.replace('N','([ATCG])')
+        umi_regex_string = umi_regex_string.replace('R','([AG])')
+        umi_regex_string = umi_regex_string.replace('Y','([CT])')
+        umi_regex_string = umi_regex_string.replace('S','([GC])')
+        umi_regex_string = umi_regex_string.replace('W','([AT])')
+        umi_regex_string = umi_regex_string.replace('K','([GT])')
+        umi_regex_string = umi_regex_string.replace('M','([AC])')
+        umi_regex_string = umi_regex_string.replace('B','([CGT])')
+        umi_regex_string = umi_regex_string.replace('D','([AGT])')
+        umi_regex_string = umi_regex_string.replace('H','([ACT])')
+        umi_regex_string = umi_regex_string.replace('V','([ACG])')
+
+        umi_regex = re.compile(umi_regex_string)
+
+        tot_read_count = 0
+        count_with_regex = 0
+
+        umi_keys_with_most_counts = {} #umi->key (key has most counts)
+        umi_key_counts = {} #umi->count (count of fastqs key has seen) 
+
+        umi_seq_counts = {} #umi_seq->count of that pair
+        umi_seq_best_qual_fastqs = {} #umi_seq->fastq to be printed
+        umi_seq_best_qual_sum = {} #best qual sum for the best fastq
+
+        if fastq_r1.endswith('.gz'):
+            f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
+        else:
+            f1_in = open(fastq_r1,'r')
+
+        if fastq_r2.endswith('.gz'):
+            f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
+        else:
+            f2_in = open(fastq_r2,'r')
+
+        #now iterate through f1/f2/umi files
+        while (1):
+            f1_id_line   = f1_in.readline().strip()
+            f1_seq_line  = f1_in.readline().strip()
+            f1_plus_line = f1_in.readline()
+            f1_qual_line = f1_in.readline().strip()
+
+            if not f1_qual_line : break
+            if not f1_plus_line.startswith("+"):
+                raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+            tot_read_count += 1
+
+            f2_id_line   = f2_in.readline().strip()
+            f2_seq_line  = f2_in.readline().strip()
+            f2_plus_line = f2_in.readline()
+            f2_qual_line = f2_in.readline().strip()
+
+            this_UMI = f1_id_line.split(":")[-1].upper()
+
+            if umi_regex.match(this_UMI):
+                count_with_regex += 1
+
+                #group 1 is the whole string
+                #this_key = this_UMI + " # " + f1_seq_line + f2_seq_line
+                this_key = this_UMI
+
+
+                qual_sum = np.sum(np.fromstring(f1_qual_line + f2_qual_line,dtype=np.uint8))
+                if this_key not in umi_seq_counts:
+                    umi_seq_counts[this_key] = 1
+                    umi_seq_best_qual_sum[this_key] = qual_sum
+                    umi_seq_best_qual_fastqs[this_key] = (
+                            f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line,
+                            f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line
+                            )
+                else:
+                    umi_seq_counts[this_key] += 1
+                    #if this sequence has the highest quality, store it
+                    if umi_seq_best_qual_sum[this_key] < qual_sum:
+                        umi_seq_best_qual_sum[this_key] = qual_sum
+                        umi_seq_best_qual_fastqs[this_key] = (
+                                f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line,
+                                f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line
+                                )
+
+                if this_UMI not in umi_key_counts:
+                    umi_key_counts[this_UMI] = 1
+                    umi_keys_with_most_counts[this_UMI] = this_key
+                else:
+                    umi_key_counts[this_UMI] += 1
+                    #if this sequence is the most seen for this UMI, store it
+                    if umi_seq_counts[this_key] > umi_key_counts[this_UMI]:
+                        umi_keys_with_most_counts[this_UMI] = this_key
+        #finished iterating through fastq file
+        f1_in.close()
+        f2_in.close()
+
+
+        if tot_read_count == 0:
+            raise Exception("UMI dedup failed. Got no reads from " + fastq_r1 + " and " + fastq_r2 )
+
+        umi_list = sorted(umi_key_counts, key=lambda k: umi_key_counts[k])
+        umi_count = len(umi_list)
+    #    print("umi_list: " + str(umi_list))
+
+        logging.info('Read %d reads'%tot_read_count)
+        logging.info("Processed " + str(umi_count) + " UMIs")
+        if umi_count == 1 and umi_list[0] == '':
+            raise Exception("Error: only the empty barcode '' was found.")
+
+        fastq_r1_dedup = root + '.r1.gz'
+        f1_out = gzip.open(fastq_r1_dedup, 'wb')
+        fastq_r2_dedup = root + '.r2.gz'
+        f2_out = gzip.open(fastq_r2_dedup, 'wb')
+
+        collision_count = 0
+        collision_count_reads = 0
+        too_few_reads_count = 0
+        too_few_reads_count_reads = 0
+        post_dedup_count = 0
+        post_dedup_read_count = 0
+        collided_umi_reads = []
+        for umi_seq in umi_seq_counts:
+            if umi_seq_counts[umi_seq] < min_umi_seen_to_keep_read:
+                too_few_reads_count += 1
+                too_few_reads_count_reads += umi_seq_counts[umi_seq]
+            else:
+                (seq1,seq2) = umi_seq_best_qual_fastqs[umi_seq]
+                f1_out.write(seq1+"\n")
+                f2_out.write(seq2+"\n")
+                post_dedup_count += 1
+                post_dedup_read_count += umi_seq_counts[umi_seq]
+
+        f1_out.close()
+        f2_out.close()
+
+        if write_UMI_counts:
+            fout = open(root+".umiCounts.txt","w")
+            fout.write('UMI\tCount\n')
+            for umi in sorted(umi_key_counts):
+                fout.write(umi + "\t" + str(umi_key_counts[umi]) + "\n")
+            loggin.info('Wrote UMI counts to ' + root+".umiCounts.txt")
+
+
+        logging.info('Wrote %d deduplicated reads'%post_dedup_count)
+        with open(dedup_stats_file,'w') as fout:
+            fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count","count_with_regex","post_dedup_count","post_dedup_read_count"])+"\n")
+            fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count,count_with_regex,post_dedup_count,post_dedup_read_count]])+"\n")
+
+    #done processing just plotting now
+    return(fastq_r1_dedup,fastq_r2_dedup)
+
+def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
+    """
+    Adds the UMI to the read ID from a UMI file (a third file with the UMI sequences per read)
+
+    params:
+        root: root for written files
+        fastq_r1: R1 reads to dedup
+        fastq_r2: R2 reads to dedup
+        fastq_umi: UMI fastq to dedup on
+    returns:
+        fastq_r1_umi: fastq_r1 with umi added
+        fastq_r2_umi: fastq_r2 with umi added
+        tot_read_count: number of total reads read
+    """
+
+
+    umi_stats_file = root + ".log"
+    fastq_r1_dedup = "NA"
+    fastq_r2_dedup = "NA"
+    tot_read_count = -1
+    #if already finished, attempt to read in stats
+    if os.path.isfile(umi_stats_file):
+        with open(umi_stats_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().strip().split("\t")
+            if len(line_els) > 3:
+                logging.info('Using previously-generated fastqs with UMIs')
+                (fastq_r1_dedup,fastq_r2_dedup,tot_read_count_str) = line_els
+                tot_read_count = int(tot_read_count_str)
+
+    #otherwise perform umi adding (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
+    if tot_read_count == -1:
+        logging.info('Adding UMIs to input fastqs')
+        
+        tot_read_count = 0
+
+        if fastq_r1.endswith('.gz'):
+            f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
+        else:
+            f1_in = open(fastq_r1,'r')
+
+        if fastq_r2.endswith('.gz'):
+            f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
+        else:
+            f2_in = open(fastq_r2,'r')
+
+        if fastq_umi.endswith('.gz'):
+            umi_in = io.BufferedReader(gzip.open(fastq_umi,'rb'))
+        else:
+            umi_in = open(fastq_umi,'r')
+
+        fastq_r1_dedup = root + '.r1.gz'
+        f1_out = gzip.open(fastq_r1_dedup, 'wb')
+        fastq_r2_dedup = root + '.r2.gz'
+        f2_out = gzip.open(fastq_r2_dedup, 'wb')
+
+        #now iterate through f1/f2/umi files
+        while (1):
+            f1_id_line   = f1_in.readline().strip()
+            f1_seq_line  = f1_in.readline()
+            f1_plus_line = f1_in.readline()
+            f1_qual_line = f1_in.readline()
+
+            if not f1_qual_line : break
+            if not f1_plus_line.startswith("+"):
+                raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+            tot_read_count += 1
+
+            f2_id_line   = f2_in.readline().strip()
+            f2_seq_line  = f2_in.readline()
+            f2_plus_line = f2_in.readline()
+            f2_qual_line = f2_in.readline()
+
+            umi_id_line   = umi_in.readline()
+            umi_seq_line  = umi_in.readline().strip()
+            umi_plus_line = umi_in.readline()
+            umi_qual_line = umi_in.readline()
+
+            this_UMI = umi_seq_line
+
+            f1_out.write(f1_id_line + ":" + this_UMI + "\n" + f1_seq_line + f1_plus_line + f1_qual_line)
+            f2_out.write(f2_id_line + ":" + this_UMI + "\n" + f2_seq_line + f2_plus_line + f2_qual_line)
+            
+
+
+        #finished iterating through fastq file
+        f1_in.close()
+        f2_in.close()
+        umi_in.close()
+        f1_out.close()
+        f2_out.close()
+
+
+        if tot_read_count == 0:
+            raise Exception("UMI command failed. Got no reads from " + fastq_r1 + " and " + fastq_r2 )
+
+        logging.info('Added UMIs fo %d reads'%tot_read_count)
+        with open(dedup_stats_file,'w') as fout:
+            fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count"])+"\n")
+            fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count]])+"\n")
+
+    #done processing just plotting now
+    return(fastq_r1_dedup,fastq_r2_dedup)
+
 def align_reads(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_validation,bowtie2_reference,reference_name,flash_min_overlap=20,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',flash_command='flash'):
     """
     Aligns reads to the provided reference (either artificial targets or genome)
@@ -1280,9 +1615,11 @@ def analyze_global_aln(root,genome_mapped_bam_file,samtools_command='samtools'):
     returns:
         aligned_locs: hash of locations aligned to on each chromosome aligned_locs[chr][position] = count
         mapped_chrs: hash of counts of reads aligned to each chr in the genome-alignment step
+        global_aln_plot_obj: plot object showing locations of alignments
     """
     logging.info('Analyzing global alignments')
 
+    mapped_tlens = defaultdict(int) # observed fragment lengths
     mapped_chrs = {}
     aligned_locs = {} # aligned reads will not be chopped, but keep track of where they aligned for CRISPResso output
     aligned_chr_counts = {}
@@ -1308,7 +1645,12 @@ def analyze_global_aln(root,genome_mapped_bam_file,samtools_command='samtools'):
             aligned_chr_counts[line_chr] = 0
         aligned_chr_counts[line_chr] += 1
 
-    global_aligned_chrs_root = root + ".genomeAlignment.chrs"
+        line_is_first = int(line_els[1]) & 0x40
+        if line_is_first:
+            insert_size = int(line_els[8])
+            mapped_tlens[insert_size] += 1
+
+    global_aligned_chrs_root = root + ".chrs"
     keys = sorted(aligned_chr_counts.keys())
     vals = [str(aligned_chr_counts[key]) for key in keys]
     with open(global_aligned_chrs_root+".txt","w") as chrs:
@@ -1322,8 +1664,39 @@ def analyze_global_aln(root,genome_mapped_bam_file,samtools_command='samtools'):
     ax.set_ylabel('Number of Reads')
     ax.set_title('Location of reads aligned to the genome')
     plt.savefig(global_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(global_aligned_chrs_root+".png",pad_inches=1,bbox_inches='tight')
 
-    return(aligned_locs,mapped_chrs)
+    global_aligned_plot_obj = PlotObject(
+            plot_name = global_aligned_chrs_root,
+            plot_title = 'Global Alignment Summary',
+            plot_label = 'Bar plot showing alignment location of reads aligned genome-wide',
+            plot_datas = [('Global Alignment Summary',global_aligned_chrs_root + ".txt")]
+            )
+
+    global_aligned_tlens_root = root + ".insertSizes"
+    keys = sorted(mapped_tlens.keys())
+    vals = [mapped_tlens[key] for key in keys]
+    with open(global_aligned_tlens_root+".txt","w") as fout:
+        fout.write('insertSize\tnumReads\n')
+        for key in keys:
+            fout.write(key + '\t' + str(mapped_tlens[key]) + '\n')
+
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.bar(keys,vals)
+    ax.set_ylabel('Number of Reads')
+    ax.set_title('Insert size')
+    plt.savefig(global_aligned_tlens_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(global_aligned_tlens_root+".png",pad_inches=1,bbox_inches='tight')
+
+    global_aligned_tlen_plot_obj = PlotObject(
+            plot_name = global_aligned_chrs_root,
+            plot_title = 'Global Alignment Insert Size Summary',
+            plot_label = 'Bar plot showing insert size of reads aligned genome-wide',
+            plot_datas = [('Global Alignment Insert Size Summary',global_aligned_tlens_root + ".txt")]
+            )
+
+    return(aligned_locs,mapped_chrs,global_aligned_plot_obj)
 
 def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,use_fastq_r2_only_in_validation,bowtie2_genome,fragment_size,fragment_step_size,flash_min_overlap=20,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',flash_command='flash'):
     """
@@ -1349,6 +1722,7 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
     returns:
         mapped_chopped_sam_file: mapped chopped fragments
         max_frags: max number of fragments created per read
+        frags_plot_obj: plot object summarizing fragments
     """
     logging.info('Creating read fragments')
 
@@ -1438,11 +1812,14 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
                 offset += fragment_step_size
 
             #write last frag
-            offset = len(line_seq)-fragment_size
-            new_id = "%s.CLID%s.CLO%s.CLF%s"%(this_id,unmapped_id,offset,frag_num)
-            new_seq =  line_seq[offset:offset + fragment_size]
-            new_qual = line_qual[offset:offset + fragment_size]
-            unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
+            if len(line_seq) > fragment_size:
+                offset = len(line_seq)-fragment_size
+                new_id = "%s.CLID%s.CLO%s.CLF%s"%(this_id,unmapped_id,offset,frag_num)
+                new_seq =  line_seq[offset:offset + fragment_size]
+                new_qual = line_qual[offset:offset + fragment_size]
+                unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
+                frag_num += 1
+
             if frag_num > max_frags:
                 max_frags = frag_num
             if frag_num not in frags_per_read:
@@ -1472,6 +1849,15 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
     ax.set_title('Number of fragments per unaligned read')
 
     plt.savefig(frags_per_unaligned_read_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(frags_per_unaligned_read_root+".png",pad_inches=1,bbox_inches='tight')
+
+    frags_plot_obj = PlotObject(
+            plot_name = frags_per_unaligned_read_root,
+            plot_title = 'Fragments per unaligned read',
+            plot_label = 'Bar plot showing number of fragments produced per unaligned read',
+            plot_datas = [('Fragments per unaligned read',frags_per_unaligned_read_root + ".txt")]
+            )
+
 
     mapped_chopped_sam_file = root + ".fragMapped.sam"
     chopped_bowtie_log = root + ".fragMapped.bowtie2Log"
@@ -1484,7 +1870,7 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
         lout.write('Alignment of chopped fragments to genome\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(chopped_aln_command,aln_result))
 
 
-    return(mapped_chopped_sam_file,max_frags)
+    return(mapped_chopped_sam_file,max_frags,frags_plot_obj)
 
 def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
     """
@@ -1609,7 +1995,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                 line_reverse = int(line_els[1]) & 0x10
                 line_start = int(line_els[3])-1
 
-                match = re.match('(.*)\.CLID(\d+)\.CLO(\d+)\.CLF(\d+)$',line_els[0])
+                match = re.match('(.*)\.CLID(\d+)\.CLO(-?\d+)\.CLF(-?\d+)$',line_els[0])
                 if not match:
                     raise Exception('Cannot parse id %s from line %s in %s. Perhaps line was trimmed?\n'%(line_els[0],line,mapped_chopped_sam_file))
                 (orig_id,lungo_id,lungo_offset,lungo_frag) = match.groups()
@@ -1686,6 +2072,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
     ax.set_title('Location of fragments from unaligned reads')
 
     plt.savefig(frags_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(frags_aligned_chrs_root+".png",pad_inches=1,bbox_inches='tight')
 
     frag_chroms_per_read_root = root + ".fragsChromsPerRead"
     keys = sorted(chroms_per_frag_read_count.keys())
@@ -1703,6 +2090,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
     ax.set_title('Number of different chromosomes aligned by a fragmented single read')
 
     plt.savefig(frag_chroms_per_read_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(frag_chroms_per_read_root+".png",pad_inches=1,bbox_inches='tight')
 
     # make translocation table
     # dict of count of reads aligning from chrA to chrB
@@ -2036,7 +2424,9 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
 
 
 
-    crispresso_results = []
+    crispresso_results = {}
+    crispresso_results['run_names'] = []
+    crispresso_results['run_sub_htmls'] = {}
     crispresso_command_file = root + '.CRISPResso.commands.txt'
     crispresso_info_file = root + '.CRISPResso.info.txt'
     with open(crispresso_info_file,'w') as crispresso_info_file, open(crispresso_command_file,'w') as crispresso_command_file:
@@ -2070,6 +2460,12 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
             run_file = os.path.join(root + '.CRISPResso_runs','CRISPResso_on_'+name,'CRISPResso2_info.pickle')
             if os.path.isfile(run_file):
                 run_data = cp.load(open(run_file,'rb'))
+                report_filename = run_data['report_filename']
+                report_file_loc = os.path.join(root+'.CRISPResso_runs',report_filename)
+                if os.path.isfile(report_file_loc):
+                    crispresso_results['run_names'].append(name)
+                    crispresso_results['run_sub_htmls'][name] = report_file_loc
+
                 ref_name = run_data['ref_names'][0] #only expect one amplicon sequence
                 n_total = run_data['aln_stats']['N_TOT_READS']
                 n_aligned = run_data['counts_total'][ref_name]
@@ -2095,6 +2491,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
                     mod_pct = 100*n_mod/float(n_aligned)
             new_vals = [n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution]
             crispresso_info_file.write("\t".join([str(x) for x in crispresso_infos[idx]])+"\t"+"\t".join([str(x) for x in new_vals])+"\n")
+        return crispresso_results
 
 def cleanup(root):
     """
@@ -2106,12 +2503,25 @@ def cleanup(root):
     delete_result = subprocess.check_output('rm -rf ' + root + '.customIndex.fa.*', stderr=subprocess.STDOUT,shell=True)
     logging.debug('Deleted bowtie indexes ' + delete_result)
 
+class PlotObject:
+    """
+    Holds information for plots for future output, namely:
+        the plot name: root of plot (name.pdf and name.png should exist)
+        the plot title: title to be shown to user
+        the plot label: label to be shown under the plot
+        the plot data: array of (tuple of display name and file name)
+        the plot order: int specifying the order to display on the report (lower numbers are plotted first, followed by higher numbers)
+    """
+    def __init__(self,plot_name,plot_title,plot_label,plot_datas,plot_order=50):
+        self.name = plot_name
+        self.title = plot_title
+        self.label = plot_label
+        self.datas = plot_datas
+        self.order = plot_order
+
 def make_report(report_file,report_name,crisprlungo_folder,
             crispresso_run_names,crispresso_sub_html_files,
-            summary_plot_names=[],
-            summary_plot_titles={},
-            summary_plot_labels={},
-            summary_plot_datas={}
+            summary_plot_objects=[]
         ):
         """
         Makes an HTML report for a CRISPRlungo run
@@ -2124,12 +2534,10 @@ def make_report(report_file,report_name,crisprlungo_folder,
         crispresso_run_names (arr of strings): names of crispresso runs
         crispresso_sub_html_files (dict): dict of run_name->file_loc
         
-        summary_plot_names (list): list of plot names - keys for following dicts
-        summary_plot_titles (dict): dict of plot_name->plot_title
-        summary_plot_labels (dict): dict of plot_name->plot_label
-        summary_plot_datas (dict): dict of plot_name->(datafile_description, data_filename)
-
+        summary_plot_objects (list): list of PlotObjects to plot
         """
+
+        ordered_plot_objects = sorted(summary_plot_objects,key=lambda x: x.order)
         
         html_str = """
 <!doctype html>
@@ -2140,7 +2548,7 @@ def make_report(report_file,report_name,crisprlungo_folder,
     <title>"""+report_name+"""</title>
 
     <!-- Bootstrap core CSS -->
-<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootswatch/4.5.2/flatly/bootstrap.min.css" integrity="sha384-qF/QmIAj5ZaYFAeQcrQ6bfVMAh4zZlrGwTPY7T/M+iTTLJqJBJjwwnsE5Y0mV7QK" crossorigin="anonymous">
   </head>
 
   <body>
@@ -2151,15 +2559,6 @@ body {
 }
 
 body {
-  display: -ms-flexbox;
-  display: -webkit-box;
-  display: flex;
-  -ms-flex-align: center;
-  -ms-flex-pack: center;
-  -webkit-box-align: center;
-  align-items: center;
-  -webkit-box-pack: center;
-  justify-content: center;
   padding-top: 40px;
   padding-bottom: 40px;
   background-color: #f5f5f5;
@@ -2170,18 +2569,32 @@ body {
 <div class='row justify-content-md-center'>
 <div class='col-8'>
     <div class='text-center pb-4'>
-    <h1 class='display-4'>"""+"CRISPRlungo" + """</h1><h2>"""+report_name+"""</h2>
+    <h1 class='display-3'>CRISPRlungo</h1><hr><h2>"""+report_name+"""</h2>
     </div>
 """
         data_path = ""
-        for plot_name in summary_plot_names:
+        if len(crispresso_run_names) > 0:
+            run_string = """<div class='card text-center mb-2'>
+              <div class='card-header'>
+                <h5>CRISPResso Output</h5>
+              </div>
+              <div class='card-body p-0'>
+                <div class="list-group list-group-flush">
+                """
+            for crispresso_run_name in crispresso_run_names:
+                crispresso_run_names,crispresso_sub_html_files,
+                run_string += "<a href='"+data_path+crispresso_sub_html_files[crispresso_run_name]+"' class='list-group-item list-group-item-action'>"+crispresso_run_name+"</a>\n"
+            run_string += "</div></div></div>"
+            html_str += run_string
+
+        for plot_obj in ordered_plot_objects:
             plot_str = "<div class='card text-center mb-2'>\n\t<div class='card-header'>\n"
-            plot_str += "<h5>"+summary_plot_titles[plot_name]+"</h5>\n"
+            plot_str += "<h5>"+plot_obj.title+"</h5>\n"
             plot_str += "</div>\n"
             plot_str += "<div class='card-body'>\n"
-            plot_str += "<a href='"+data_path+plot_name+".pdf'><img src='"+data_path + plot_name + ".png' width='80%' ></a>\n"
-            plot_str += "<label>"+summary_plot_labels[plot_name]+"</label>\n"
-            for (plot_data_label,plot_data_path) in summary_plot_datas[plot_name]:
+            plot_str += "<a href='"+data_path+plot_obj.name+".pdf'><img src='"+data_path + plot_obj.name + ".png' width='80%' ></a>\n"
+            plot_str += "<label>"+plot_obj.label+"</label>\n"
+            for (plot_data_label,plot_data_path) in plot_obj.datas:
                 plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n";
             plot_str += "</div></div>\n";
             html_str += plot_str
@@ -2196,7 +2609,6 @@ body {
         with open(report_file,'w') as fo:
             fo.write(html_str)
         logging.info('Wrote ' + report_file)
-
 
 
 
