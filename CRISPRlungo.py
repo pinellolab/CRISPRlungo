@@ -24,7 +24,6 @@ def main():
     assert_dependencies(
             samtools_command=settings['samtools_command'],
             bowtie2_command=settings['bowtie2_command'],
-            flash_command=settings['flash_command'],
             crispresso_command=settings['crispresso_command'],
             casoffinder_command=settings['casoffinder_command']
             )
@@ -61,7 +60,6 @@ def main():
     if target_padding < 0:
         target_length += target_padding
         target_padding = 0
-    if settings['fastq_r2'] != None and not settings['use_fastq_r2_only_in_validation']:
         target_padding += av_read_length
 
     (target_names,target_info) = make_artificial_targets(
@@ -112,92 +110,89 @@ def main():
     crispresso_infos = [] #meta info about the crispresso runs
             #tuple of: name, chr, start, end, readCount, amplicon
 
-    if not settings['align_to_targets_first']:
-        (genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file
-            ) = align_reads(
-                    root = settings['root']+'.genomeAlignment',
-                    fastq_r1 = reads_to_align_r1,
-                    fastq_r2 = reads_to_align_r2,
-                    use_fastq_r2_only_in_validation=settings['use_fastq_r2_only_in_validation'],
-                    bowtie2_reference = settings['bowtie2_genome'],
-                    reference_name = 'genome',
-                    bowtie2_command = settings['bowtie2_command'],
-                    bowtie2_threads = settings['bowtie2_threads'],
-                    samtools_command = settings['samtools_command'],
-                    flash_min_overlap = settings['flash_min_overlap'],
-                    flash_command = settings['flash_command']
-                    )
-        reads_to_align_r1 = genome_unmapped_r1
-        reads_to_align_r2 = genome_unmapped_r2
+    #keep track of where every read is assigned
+    #these lists keep track of the files containing assignments from the separate analyses
+    r1_assignment_files = []
+    r2_assignment_files = []
+
+    (genome_r1_assignments,genome_r2_assignments,genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file,genome_chr_aln_plot_obj,genome_tlen_plot_object
+        ) = align_reads(
+                root = settings['root']+'.genomeAlignment',
+                fastq_r1 = reads_to_align_r1,
+                fastq_r2 = reads_to_align_r2,
+                bowtie2_reference = settings['bowtie2_genome'],
+                reference_name = 'genome',
+                target_info = target_info,
+                bowtie2_command = settings['bowtie2_command'],
+                bowtie2_threads = settings['bowtie2_threads'],
+                samtools_command = settings['samtools_command'],
+                keep_intermediate = settings['keep_intermediate']
+                )
+    r1_assignment_files.append(genome_r1_assignments)
+    if genome_r2_assignments is not None:
+        r2_assignment_files.append(genome_r2_assignments)
 
     if len(target_names) > 0:
-        (custom_unmapped_fastq_r1_file,custom_unmapped_fastq_r2_file,custom_aligned_count,custom_mapped_bam_file
+        #first, align the unaligned r1s
+        logging.info('Processing unaligned R1 reads')
+        (custom_r1_assignments,none_file,custom_unmapped_r1, none_file2, custom_r1_aligned_count, custom_r1_mapped_bam_file,custom_r1_chr_aln_plot_obj,none_custom_tlen_plot_object
             ) = align_reads(
-                    root = settings['root']+'.customTargetAlignment',
-                    fastq_r1 = reads_to_align_r1,
-                    fastq_r2 = reads_to_align_r2,
-                    use_fastq_r2_only_in_validation=settings['use_fastq_r2_only_in_validation'],
+                    root = settings['root']+'.r1.customTargetAlignment',
+                    fastq_r1 = genome_unmapped_r1,
+                    fastq_r2 = None,
                     bowtie2_reference=custom_index_fasta,
                     reference_name='custom targets',
-                    flash_min_overlap = settings['flash_min_overlap'],
+                    target_info = target_info,
                     bowtie2_command=settings['bowtie2_command'],
                     bowtie2_threads=settings['bowtie2_threads'],
                     samtools_command=settings['samtools_command'],
-                    flash_command=settings['flash_command']
+                    keep_intermediate = settings['keep_intermediate']
                     )
-        reads_to_align_r1 = custom_unmapped_fastq_r1_file
-        reads_to_align_r2 = custom_unmapped_fastq_r2_file
-
-    if settings['align_to_targets_first']:
-        (genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file
-            ) = align_to_genome(
-                    root = settings['root']+'.genomeAlignment',
-                    fastq_r1 = reads_to_align_r1,
-                    fastq_r2 = reads_to_align_r2,
-                    use_fastq_r2_only_in_validation=settings['use_fastq_r2_only_in_validation'],
-                    bowtie2_reference = settings['bowtie2_genome'],
-                    reference_name = 'genome',
-                    bowtie2_command = settings['bowtie2_command'],
-                    bowtie2_threads = settings['bowtie2_threads'],
-                    samtools_command = settings['samtools_command'],
-                    flash_command=settings['flash_command']
-                    )
-        reads_to_align_r1 = genome_unmapped_r1
-        reads_to_align_r2 = genome_unmapped_r2
-
-
-    (aligned_locs, mapped_chrs, global_aln_plot_obj
-        ) = analyze_global_aln(
-                root = settings['root']+".genomeAlignment",
-                genome_mapped_bam_file = genome_mapped_bam_file,
-                samtools_command=settings['samtools_command']
-                )
-
+        r1_assignment_files.append(custom_r1_assignments)
+        #if input is paired, align second reads to the custom targets as welll
+        if genome_unmapped_r2 is not None:
+            logging.info('Processing unaligned R2 reads')
+            (custom_r2_assignments,none_file,custom_unmapped_r2, none_file2, custom_r2_aligned_count, custom_r2_mapped_bam_file,custom_r2_chr_aln_plot_obj,none_custom_tlen_plot_object
+                ) = align_reads(
+                        root = settings['root']+'.r2.customTargetAlignment',
+                        fastq_r1 = genome_unmapped_r2,
+                        fastq_r2 = None,
+                        bowtie2_reference=custom_index_fasta,
+                        reference_name='custom targets',
+                        target_info = target_info,
+                        bowtie2_command=settings['bowtie2_command'],
+                        bowtie2_threads=settings['bowtie2_threads'],
+                        samtools_command=settings['samtools_command'],
+                        keep_intermediate = settings['keep_intermediate']
+                        )
+            r2_assignment_files.append(custom_r2_assignments)
 
     #chop reads
-    (mapped_chopped_sam_file, max_frags, frags_plot_obj
-        ) = create_chopped_reads(
-                root = settings['root'],
-                unmapped_reads_fastq_r1 = reads_to_align_r1,
-                unmapped_reads_fastq_r2 = reads_to_align_r2,
-                use_fastq_r2_only_in_validation=settings['use_fastq_r2_only_in_validation'],
+    (frag_r1_assignments,frag_r2_assignments,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj
+        ) = chop_reads(
+                root = settings['root']+".frags",
+                unmapped_reads_fastq_r1 = custom_unmapped_r1,
+                unmapped_reads_fastq_r2 = custom_unmapped_r2,
                 bowtie2_genome = settings['bowtie2_genome'],
-                fragment_size=settings['fragment_size'],
-                fragment_step_size=settings['fragment_step_size'],
-                flash_min_overlap=settings['flash_min_overlap'],
-                bowtie2_command=settings['bowtie2_command'],
-                bowtie2_threads=settings['bowtie2_threads'],
-                samtools_command=settings['samtools_command'],
-                flash_command=settings['flash_command']
+                fragment_size = settings['fragment_size'],
+                fragment_step_size = settings['fragment_step_size'],
+                bowtie2_command = settings['bowtie2_command'],
+                bowtie2_threads = settings['bowtie2_threads'],
+                samtools_command = settings['samtools_command'],
                 )
+    r1_assignment_files.append(frag_r1_assignments)
+    if frag_r2_assignments is not None:
+        r2_assignment_files.append(frag_r2_assignments)
 
-    # Analyze them
-    (translocation_count,large_deletion_count,unidentified_count
-        ) = analyze_chopped_reads(
-                root = settings['root'],
-                mapped_chopped_sam_file=mapped_chopped_sam_file,
-                mapped_chrs = mapped_chrs,
-                max_frags = max_frags)
+    final_assignment_file,r1_read_ids_for_crispresso = make_final_read_assignments(
+            root = settings['root']+'.final',
+            r1_assignment_files = r1_assignment_files,
+            r2_assignment_files = r2_assignment_files,
+            cut_sites = cut_sites,
+            target_info = target_info
+            )
+
+    quit()
 
     # Prepare CRISPResso runs
     (genome_crispresso_infos, genome_crispresso_commands,genome_read_count_at_cuts
@@ -207,7 +202,8 @@ def main():
                 genome = settings['genome'],
                 genome_len_file = settings['genome']+'.fai',
                 crispresso_cutoff = settings['crispresso_cutoff'],
-                aligned_locs = aligned_locs,
+                r1_read_ids_for_crispresso = r1_read_ids_for_crispresso,
+                aligned_locs = genome_aligned_locs,
                 av_read_length = av_read_length,
                 genome_mapped_bam_file = genome_mapped_bam_file,
                 run_crispresso_genome_sites = settings['run_crispresso_genome_sites'],
@@ -332,6 +328,8 @@ def parse_settings(args):
 
     settings['root'] = settings_file + ".CRISPRlungo"
 
+    settings['keep_intermediate'] = (settings['keep_intermediate'] == 'True') if 'keep_intermediate' in settings else False
+
     # two parameters control the size and stride of fragment creation
     # size of fragment
     settings['fragment_size'] = int(settings['fragment_size']) if 'fragment_size' in settings else 20
@@ -340,9 +338,6 @@ def parse_settings(args):
 
     # number of bp to extend beyond av read length around cut site for custom index
     settings['alignment_extension'] = int(settings['alignment_extension']) if 'alignment_extension' in settings else 50
-
-    # minimum overlap for flash (merging of R1 and R2
-    settings['flash_min_overlap'] = int(settings['flash_min_overlap']) if 'flash_min_overlap' in settings else 20
 
     #min number of reads to analyze using crispresso
     settings['crispresso_cutoff'] = settings['crispresso_cutoff'] if 'crispresso_cutoff' in settings else 50
@@ -366,18 +361,6 @@ def parse_settings(args):
         settings['add_non_primer_cut_targets'] = False
 
 
-    #whether R2 should be used in initial alignments or only in validation of potential alignments
-    if 'use_fastq_r2_only_in_validation' in settings and settings['use_fastq_r2_only_in_validation'] == 'False':
-        settings['use_fastq_r2_only_in_validation'] = False
-    else:
-        settings['use_fastq_r2_only_in_validation'] = True
-
-    #whether alignment should be performed to targets first -- if true, alignment to custom targets will be performed before alignment to the genome
-    if 'align_to_targets_first' in settings and settings['align_to_targets_first'] == 'True':
-        settings['align_to_targets_first'] = True
-    else:
-        settings['align_to_targets_first'] = False
-
     #boolean for whether to run crispresso on highly-aligned genomic locations (if false, crispresso will only be run at cut sites and artificial targets)
     if 'run_crispresso_genome_sites' in settings and settings['run_crispresso_genome_sites'] == 'True':
         settings['run_crispresso_genome_sites'] = True
@@ -387,7 +370,6 @@ def parse_settings(args):
     settings['samtools_command'] = settings['samtools_command'] if 'samtools_command' in settings else 'samtools'
     settings['bowtie2_command'] = settings['bowtie2_command'] if 'bowtie2_command' in settings else 'bowtie2'
     settings['bowtie2_threads'] = int(settings['bowtie2_threads']) if 'bowtie2_threads' in settings else 1
-    settings['flash_command'] = settings['flash_command'] if 'flash_command' in settings else 'flash'
     settings['crispresso_command'] = settings['crispresso_command'] if 'crispresso_command' in settings else 'CRISPResso'
     settings['casoffinder_command'] = settings['casoffinder_command'] if 'casoffinder_command' in settings else 'cas-offinder'
 
@@ -439,14 +421,13 @@ def parse_settings(args):
     return settings
 
 
-def assert_dependencies(samtools_command='samtools',bowtie2_command='bowtie2',flash_command='flash',crispresso_command='CRISPResso',casoffinder_command='cas-offinder'):
+def assert_dependencies(samtools_command='samtools',bowtie2_command='bowtie2',crispresso_command='CRISPResso',casoffinder_command='cas-offinder'):
     """
-    Asserts the presence of required software (faidx, bowtie2, flash)
+    Asserts the presence of required software (faidx, bowtie2, casoffinder)
 
     params:
         samtools_command: location of samtools to run
         bowtie2_command: location of bowtie2 to run
-        flash_command: location of flash to run
         crispresso_command: location of crispresso to run
         casoffinder_command: location of casoffinder to run
 
@@ -467,12 +448,6 @@ def assert_dependencies(samtools_command='samtools',bowtie2_command='bowtie2',fl
         bowtie_result = subprocess.check_output('%s --version'%bowtie2_command, stderr=subprocess.STDOUT,shell=True)
     except Exception:
         raise Exception('Error: bowtie2 is required')
-
-    #check flash
-    try:
-        flash_result = subprocess.check_output('%s --version'%flash_command, stderr=subprocess.STDOUT,shell=True)
-    except Exception:
-        raise Exception('Error: flash is required')
 
     #check crispresso
     try:
@@ -637,6 +612,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
             target_info[target_name]['cut2_site']
+            target_info[target_name]['query_pos']: genomic start of query (bp)
             target_info[target_name]['query_start']: bp after which query starts (in case of padding)
             target_info[target_name]['query_end']
             target_info[target_name]['target_cut_idx']: bp of cut in target
@@ -660,6 +636,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                 'cut1_site':'Primer',
                 'cut2_chr':'Primer',
                 'cut2_site':'Primer',
+                'query_pos':0,
                 'query_start':0,
                 'query_end':len(primer_seq)*2,
                 'target_cut_idx':len(primer_seq)
@@ -676,8 +653,10 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                 'cut1_site':'Primer',
                 'cut2_chr':'Primer',
                 'cut2_site':'Primer',
+                'query_pos':0,
                 'query_start':0,
-                'query_end':len(primer_seq)*2
+                'query_end':len(primer_seq)*2,
+                'target_cut_idx':len(primer_seq)
                 }
 
         for j,cut in enumerate(cuts):
@@ -710,6 +689,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut1_site':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq)
@@ -725,6 +705,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut1_site':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq)
@@ -740,6 +721,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut1_site':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq)
@@ -755,6 +737,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                     'cut1_site':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq)
@@ -799,6 +782,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut1_site':site_A,
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length
@@ -815,6 +799,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut1_site':site_A,
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length
@@ -831,6 +816,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut1_site':site_A,
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length
@@ -847,6 +833,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut1_site':site_A,
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length
@@ -862,6 +849,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                         'cut1_site':site_A,
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length
@@ -902,6 +890,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -920,6 +909,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -939,6 +929,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -957,6 +948,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -976,6 +968,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -994,6 +987,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -1013,6 +1007,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -1031,6 +1026,7 @@ def make_artificial_targets(cuts,genome,target_length,target_padding,primer_chr 
                             'cut1_site':site_A,
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length
@@ -1058,6 +1054,7 @@ def make_target_index(root,target_names,target_info,bowtie2_command,bowtie2_thre
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
             target_info[target_name]['cut2_site']
+            target_info[target_name]['query_pos']: genomic start of query (bp)
             target_info[target_name]['query_start']: bp after which query starts (in case of padding)
             target_info[target_name]['query_end']
         bowtie2_command: location of bowtie2 to run
@@ -1097,7 +1094,7 @@ def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,writ
         post_dedup_read_count: number of reads that contributed to the deduplicated reads (post_dedup_read_count reads were seen that were deduplicated to post_dedup_count reads. If post_dedup_count == post_dedup_read_count then every UMI-read pair was seen once.)
     """
 
-    dedup_stats_file = root + ".log"
+    dedup_stats_file = root + ".info"
     fastq_r1_dedup = "NA"
     fastq_r2_dedup = "NA"
     tot_read_count = -1
@@ -1375,216 +1372,583 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
     #done processing just plotting now
     return(fastq_r1_dedup,fastq_r2_dedup)
 
-def align_reads(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_validation,bowtie2_reference,reference_name,flash_min_overlap=20,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',flash_command='flash'):
+def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_info,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False):
     """
     Aligns reads to the provided reference (either artificial targets or genome)
-    If only R1 is provided, R1 is aligned to reference
-    If R1 and R2 are provided:
-        - R1 and R2 are merged
-        - the merged reads are aligned to reference
-        - reads that a) did not merge or b) did not align to reference when merged are aligned to reference
 
     params:
         root: root for written files
         fastq_r1: fastq_r1 to align
         fastq_r2: fastq_r2 to align
-        use_fastq_r2_only_in_validation: if True, don't use R2 in this step -- only for validation
         bowtie2_reference: bowtie2 reference to align to (either artificial targets or reference)
         reference_name: Name displayed to user for updates (e.g. 'Genome' or 'Artificial Targets')
-        flash_min_overlap: min overlap (in bp) for R1 and R2 for merging
+        target_info: hash of information for each target_name
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
         samtools_command: location of samtools to run
-        flash_command: location of flash to run
+        keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
 
     returns:
+        r1_assignments_file: file showing locations of assignments for r1
+        r2_assignments_file: file showing locations of assignments for r2
         unmapped_fastq_r1_file: fastq_r1 file of reads not aligning
         unmapped_fastq_r2_file: fastq_r2 file of reads not aligning
         aligned_count: number of reads aligned
         mapped_bam_file: aligned reads
-
+        chr_aln_plot_obj: plot object showing chr locations of alignments
+        tlen_plot_object: plot object showing insert sizes for paired alignments
     """
+
     logging.info('Aligning to %s'%reference_name)
 
     mapped_bam_file = root + ".bam"
 
-    if fastq_r2 is not None and not use_fastq_r2_only_in_validation: #paired-end reads
+    bowtie_log = root + '.bowtie2Log'
+    if fastq_r2 is not None: #paired-end reads
+        logging.info('Aligning paired reads to %s using %s'%(reference_name,bowtie2_command))
+        aln_command = '{bowtie2_command} --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -1 {fastq_r1} -2 {fastq_r2} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
+                bowtie2_command=bowtie2_command,
+                bowtie2_threads=bowtie2_threads,
+                bowtie2_reference=bowtie2_reference,
+                fastq_r1=fastq_r1,
+                fastq_r2=fastq_r2,
+                samtools_command=samtools_command,
+                mapped_bam_file=mapped_bam_file)
+        logging.debug(aln_command)
+        aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
+        logging.debug(aln_result)
+        with open (bowtie_log,'w') as lout:
+            lout.write('\nAligning paired reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
+    #unpaired reads
+    else:
+        logging.info('Aligning single-end reads to %s using %s'%(reference_name,bowtie2_command))
+        aln_command = '{bowtie2_command} --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -U {fastq_r1} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
+                bowtie2_command=bowtie2_command,
+                bowtie2_threads=bowtie2_threads,
+                bowtie2_reference=bowtie2_reference,
+                fastq_r1=fastq_r1,
+                samtools_command=samtools_command,
+                mapped_bam_file=mapped_bam_file)
+        logging.debug(aln_command)
+        aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
+        logging.debug(aln_result)
+        with open (bowtie_log,'w') as lout:
+            lout.write('\nAligning single-end reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
+
+    logging.info('Analyzing reads aligned to %s'%(reference_name))
+
+    #analyze alignments
+    # - if read aligned, store read id and loc in dict r1_assignments
+    # - if read unaligned, write read to unaligned fastq
+    mapped_tlens = defaultdict(int) # observed fragment lengths
+    mapped_chrs = {} #stores the counts aligning to chrs or to templates
+    aligned_locs = {} # aligned reads will not be chopped, but keep track of where they aligned for CRISPResso output
+    aligned_chr_counts = {}
+
+    unmapped_fastq_r1_file = root + '.unmapped.fastq'
+    unmapped_fastq_r2_file = None
+    r1_assignments_file = root + '.assignments.txt'
+    r2_assignments_file = None
+    if fastq_r2 is not None: #paired-end reads
+        r1_assignments_file = root + '.assignments_r1.txt'
         unmapped_fastq_r1_file = root + '.unmapped_r1.fastq'
+        r2_assignments_file = root + '.assignments_r2.txt'
         unmapped_fastq_r2_file = root + '.unmapped_r2.fastq'
+        uf2 = open(unmapped_fastq_r2_file,'w')
+        af2 = open(r2_assignments_file,'w')
+    uf1 = open(unmapped_fastq_r1_file,'w')
+    af1 = open(r1_assignments_file,'w')
 
-        if not os.path.isfile(mapped_bam_file):
-            #first flash
-            logging.info('Merging R1 and R2 using %s'%flash_command)
-            flash_root = root+'.flash'
-            flash_cmd = '%s --allow-outies --min-overlap %d -o %s %s %s'%(flash_command,flash_min_overlap,flash_root, fastq_r1, fastq_r2)
-            logging.debug(flash_cmd)
-            flash_result = subprocess.check_output(flash_cmd,shell=True,stderr=subprocess.STDOUT)
-            logging.debug(flash_result)
-            with open (flash_root + '.log','w') as lout:
-                lout.write('Command used:\n===\n%s\n===\nOutput:\n===\n%s'%(flash_cmd,flash_result))
+    read_count = 0
+    r1_count = 0
+    r2_count = 0
+    unmapped_r1_count = 0
+    unmapped_r2_count = 0
 
-            flash_merged_fastq = flash_root + '.extendedFrags.fastq'
-            flash_unmerged_r1 = flash_root + '.notCombined_1.fastq'
-            flash_unmerged_r2 = flash_root + '.notCombined_2.fastq'
+    #-F 256 - not primary aligment (filter secondary alignments)
+    for line in read_command_output('%s view -F 256 %s'%(samtools_command,mapped_bam_file)):
+        if line.strip() == "": break
 
-            flash_merged_sam = flash_root + '.combined.sam'
-            flash_merged_unaligned_fastq = flash_root + '.combined.unaligned.fastq'
-            logging.info('Aligning merged reads to %s using %s'%(reference_name,bowtie2_command))
-            aln_command = '%s --no-unal --end-to-end --threads %d -x %s -U %s -S %s' % (bowtie2_command,bowtie2_threads,bowtie2_reference,flash_merged_fastq,flash_merged_sam)
-            logging.debug(aln_command)
+        line_els = line.split("\t")
+        read_count += 1
 
-            aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
-            logging.debug(aln_result)
-            bowtie_log = root + '.bowtie2Log'
-            with open (bowtie_log,'w') as lout:
-                lout.write('Alignment to %s\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
+        read_has_multiple_segments = int(line_els[1]) & 0x1
+        read_is_paired_read_1 = int(line_els[1]) & 0x40 # only set with bowtie if read is from paired reads
 
-            logging.info('Finding un-alignable and un-mergeable reads')
-            # then take the unmergable R1s and the mergable failed-to-align R1s and align them to the reference
-            # (in other words, any read that did not align in a merged fashion)
-            # create a dict with the aligned read ids
-            count_merged_aligned = 0
-            merged_aligned_ids = {}
-            with open(flash_merged_sam,'r') as fms:
-                for line in fms:
-                    if line.startswith('@'):
-                        continue
-                    read_id = line.split('\t')[0].split(" ")[0]
-                    merged_aligned_ids[read_id] = 1
-                    count_merged_aligned += 1
+        read_is_r1 = True
+        if read_has_multiple_segments and not read_is_paired_read_1:
+            r2_count += 1
+            read_is_r1 = False
+        else:
+            r1_count += 1
 
-            logging.info('Found %d aligned merged reads'%count_merged_aligned)
+        read_id = line_els[0]
 
-            count_r1s_not_merged_not_aligned = 0
-            count_r1s_merged_id_founds = 0
-            unaligned_unmerged_r1_fastq = flash_root + '.unaligned_1.fastq'
-            with open(unaligned_unmerged_r1_fastq,'w') as uf1:
-                with open(fastq_r1,'r') as f1:
-                    id_line = f1.readline()
-                    while(id_line):
-                        seq_line = f1.readline()
-                        plus_line = f1.readline()
-                        qual_line = f1.readline()
-
-                        this_id = id_line.split(" ")[0][1:]
-                        if this_id in merged_aligned_ids:
-                            count_r1s_merged_id_founds += 1
-                        else:
-                            uf1.write('%s%s%s%s'%(id_line,seq_line,plus_line,qual_line))
-                            count_r1s_not_merged_not_aligned += 1
-                        id_line = f1.readline()
-
-            logging.info('Found ids for %d merged reads'%count_r1s_merged_id_founds)
-            logging.info('Continuing analysis with %d unalignable or unmergable reads'%count_r1s_not_merged_not_aligned)
-
-            logging.info('Aligning reads to %s using %s'%(reference_name,bowtie2_command))
-            unmerged_unaligned_sam = flash_root + '.uncombined.sam'
-            aln_command = '%s --no-unal --no-hd --end-to-end --threads %d -x %s -U %s --un %s -S %s' % (bowtie2_command,bowtie2_threads,bowtie2_reference,unaligned_unmerged_r1_fastq,unmapped_fastq_r1_file,unmerged_unaligned_sam)
-            logging.debug(aln_command)
-            aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
-            logging.debug(aln_result)
-            with open (bowtie_log,'a') as lout:
-                lout.write('\nAligning unaligned reads from previous step to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
-
-            sam_command = 'cat %s %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (flash_merged_sam,unmerged_unaligned_sam,samtools_command,samtools_command,mapped_bam_file,samtools_command,mapped_bam_file)
-            logging.debug(sam_command)
-            sam_result = subprocess.check_output(sam_command,shell=True,stderr=subprocess.STDOUT)
-            logging.debug(sam_result)
-
-        #create unaligned r2 file
-        unaligned_r1_ids = {}
-        with open(unmapped_fastq_r1_file,'r') as uf1:
-            id_line = uf1.readline()
-            while(id_line):
-                seq_line = uf1.readline()
-                plus_line = uf1.readline()
-                qual_line = uf1.readline()
-
-                this_id = id_line.split(" ")[0]
-                unaligned_r1_ids[this_id] = 1
-                id_line = uf1.readline()
-
-        with open(unmapped_fastq_r2_file,'w') as uf2, open(fastq_r2,'r') as f2:
-            id_line = f2.readline()
-            while(id_line):
-                seq_line = f2.readline()
-                plus_line = f2.readline()
-                qual_line = f2.readline()
-
-                this_id = id_line.split(" ")[0]
-                if this_id in unaligned_r1_ids:
-                    uf2.write('%s%s%s%s'%(id_line,seq_line,plus_line,qual_line))
-                id_line = f2.readline()
-
-    else: #single end reads
-        unmapped_fastq_r1_file = root + '.unmapped_r1.fastq'
-        unmapped_fastq_r2_file = None
-        if not os.path.isfile(mapped_bam_file):
-            logging.info('Aligning reads to %s using %s'%(reference_name,bowtie2_command))
-            aln_command = '%s --no-unal --threads %d --end-to-end -x %s -U %s --un %s | %s view -Shu - | %s sort -o %s - && %s index %s' % (bowtie2_command,bowtie2_threads,bowtie2_reference,fastq_r1,unmapped_fastq_r1_file,samtools_command,samtools_command,mapped_bam_file,samtools_command,mapped_bam_file)
-            logging.debug(aln_command)
-            aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
-            logging.debug(aln_result)
-            bowtie_log = root + '.bowtie2Log'
-            with open (bowtie_log,'w') as lout:
-                lout.write('Alignment to %s\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
-
-    aligned_count = int(subprocess.check_output('%s view -F 4 -c %s'%(samtools_command,mapped_bam_file),shell=True).strip())
-
-    logging.info('Aligned %d reads to %s'%(aligned_count,reference_name))
-    return(unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file)
+        line_unmapped = int(line_els[1]) & 0x4
+        if line_unmapped:
+            seq = line_els[9]
+            qual = line_els[10]
+            if read_is_r1:
+                uf1.write("@%s\n%s\n+\n%s\n"%(read_id,seq,qual))
+                unmapped_r1_count += 1
+            else:
+                uf2.write("@%s\n%s\n+\n%s\n"%(read_id,seq,qual))
+                unmapped_r2_count += 1
+            continue
 
 
+        line_chr = line_els[2]
+        if not line_chr in mapped_chrs:
+            mapped_chrs[line_chr] = 0
+        mapped_chrs[line_chr] += 1
 
-def align_to_genome(root,fastq_r1,fastq_r2,use_fastq_r2_only_in_validation,bowtie2_genome,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools'):
+        line_mapq = line_els[5]
+        line_start = int(line_els[3])-1
+
+        if line_chr not in aligned_locs:
+            aligned_locs[line_chr] = {}
+        if line_start not in aligned_locs[line_chr]:
+            aligned_locs[line_chr][line_start] = 0
+
+        aligned_locs[line_chr][line_start] += 1
+        if line_chr not in aligned_chr_counts:
+            aligned_chr_counts[line_chr] = 0
+        aligned_chr_counts[line_chr] += 1
+
+        curr_classification = 'Linear'
+        curr_position = line_chr + ":" + str(line_start)
+        curr_annotation = ''
+        curr_cut = line_chr + ":" + str(line_start) + "_" + str(line_start + len(line_els[9]))
+        if line_chr in target_info: #if this aligned to a custom chromosome
+            curr_classification = target_info[line_chr]['class']
+            curr_annotation = line_chr
+            custom_start = target_info[line_chr]['query_pos'] + line_start
+            curr_position = target_info[line_chr]['cut1_chr'] +":" + str(custom_start)
+            #if custom ref is not linear, set cuts and genome aln locations
+            if curr_classification != 'Linear':
+
+                cut1 =  target_info[line_chr]['cut1_chr'] + ":" +  str(target_info[line_chr]['cut1_site'])
+                cut2 =  target_info[line_chr]['cut2_chr'] + ":" +  str(target_info[line_chr]['cut2_site'])
+                curr_cut = cut1 + "-" + cut2
+                if cut1 == cut2: #cut1 could == cut2 if it's a chimeric read
+                    curr_cut = cut1
+                else:
+                    curr_position += "-"+ target_info[line_chr]['cut2_chr'] + ":" +  str(target_info[line_chr]['cut2_site'])
+
+        if read_is_r1:
+            af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(read_id,reference_name,curr_classification,curr_annotation,curr_position,curr_cut))
+        else:
+            af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(read_id,reference_name,curr_classification,curr_annotation,curr_position,curr_cut))
+
+        if read_is_paired_read_1: #only set if paired
+            insert_size = int(line_els[8])
+            mapped_tlens[insert_size] += 1
+
+    uf1.close()
+    af1.close()
+    if unmapped_fastq_r2_file is not None:
+        uf2.close()
+        af2.close()
+
+    chr_aln_plot_root = root + ".chrs"
+    keys = sorted(aligned_chr_counts.keys())
+    vals = [str(aligned_chr_counts[key]) for key in keys]
+    with open(chr_aln_plot_root+".txt","w") as chrs:
+        chrs.write('chr\tnumReads\n')
+        for key in sorted(aligned_chr_counts.keys()):
+            chrs.write(key + '\t' + str(aligned_chr_counts[key]) + '\n')
+
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_ylabel('Number of Reads')
+    ax.set_title('Location of reads aligned to the '+reference_name)
+    plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(chr_aln_plot_root+".png",pad_inches=1,bbox_inches='tight')
+
+    chr_aln_plot_obj = PlotObject(
+            plot_name = chr_aln_plot_root,
+            plot_title = reference_name.capitalize() + ' Alignment Summary',
+            plot_label = 'Bar plot showing alignment location of reads aligned to ' + reference_name,
+            plot_datas = [(reference_name.capitalize() + 'Alignment Summary',chr_aln_plot_root + ".txt")]
+            )
+
+    tlen_plot_root = root + ".insertSizes"
+    keys = sorted(mapped_tlens.keys())
+    vals = [mapped_tlens[key] for key in keys]
+    with open(tlen_plot_root+".txt","w") as fout:
+        fout.write('insertSize\tnumReads\n')
+        for key in keys:
+            fout.write(str(key) + '\t' + str(mapped_tlens[key]) + '\n')
+
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.bar(keys,vals)
+    ax.set_ylabel('Number of Reads')
+    ax.set_title('Insert size')
+    plt.savefig(tlen_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(tlen_plot_root+".png",pad_inches=1,bbox_inches='tight')
+
+    tlen_plot_obj = PlotObject(
+            plot_name = tlen_plot_root,
+            plot_title = reference_name.capitalize() + ' Alignment Insert Size Summary',
+            plot_label = 'Bar plot showing insert size of reads aligned to ' + reference_name,
+            plot_datas = [(reference_name.capitalize() + ' Alignment Insert Size Summary',tlen_plot_root + ".txt")]
+            )
+
+    aligned_count = read_count - (unmapped_r1_count + unmapped_r2_count)
+
+    with open (root+".info",'w') as fout:
+        fout.write("\t".join([str(x) for x in ["read_count","r1_count","r2_count","unmapped_r1_count","unmapped_r2_count","aligned_count","unmapped_fastq_r1_file","unmapped_fastq_r2_file"]])+"\n")
+        fout.write("\t".join([str(x) for x in [read_count,r1_count,r2_count,unmapped_r1_count,unmapped_r2_count,aligned_count,unmapped_fastq_r1_file,unmapped_fastq_r2_file]]))
+    return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
+
+def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,target_info,cut_merge_dist=200,genome_map_resolution=1000000):
     """
-    Aligns reads to entire genome
+    Makes final read assignments after:
+        Pairing R1 and R2 if they were processed in separate steps
+        Deduplicating based on UMI and alignment location
 
     params:
         root: root for written files
-        fastq_r1: fastq R1 to align
-        fastq_r2: fastq R2 to align
-        use_fastq_r2_only_in_validation: if True, don't use R2 in this step -- only for validation
-        bowtie2_genome: location of bowtie2 genome files (root of files)
-        bowtie2_command: location of bowtie2 to run
-        bowtie2_threads: number of threads to use for bowtie
-        samtools_command: location of samtools to run
+        r1_assignment_files: list of r1 assignment files
+        r2_assignment_files: list of r2 assignment files
+        cut_sites: array of known cut sites
+        target_info: hash of information for each target_name
+        cut_merge_dist: cuts within this distance (bp) will be merged
+        genome_map_resolution: window size (bp) for reporting number of reads aligned
 
     returns:
-        genome_aligned_bam: bam of reads after alignment to genome
-        genome_aligned_count: number of reads aligning to genome
-        genome_unmapped_r1: fastq r1 file of reads unmapped
-        genome_unmapped_r2: fastq r2 file of reads unmapped
+        final_assignment_filename: filename of final assignments
+        r1_read_ids_for_crispresso: dict of cut=>list of read ids for each cut
     """
-    logging.info('Aligning reads to genome')
 
-    genome_mapped_bam_file = root + ".genomeMapped.bam"
-    if fastq_r2 is not None and not use_fastq_r2_only_in_validation: #paired-end reads
-        genome_unmapped_bowtie = root + ".genomeUnmapped.fastq" #bowtie adds .1 and .2 before final . in path for paired ends
-        aln_command = '%s --threads %d --end-to-end -x %s -1 %s -2 %s --un-conc %s | %s view -Shu - | %s sort -o %s - && %s index %s'%(bowtie2_command,bowtie2_threads,bowtie2_genome,fastq_r1,fastq_r2,genome_unmapped_bowtie,samtools_command,samtools_command,genome_mapped_bam_file,samtools_command,genome_mapped_bam_file)
-        genome_unmapped_r1 = root + ".genomeUnmapped.1.fastq"
-        genome_unmapped_r2 = root + ".genomeUnmapped.2.fastq"
+    logging.info('Making final read assignments')
 
-    else: # single end reads
-        genome_unmapped_r1 = root + ".genomeUnmapped.fastq"
-        genome_unmapped_r2 = None
-        aln_command = '%s --threads %d --end-to-end -x %s --un %s -U %s | %s view -f 66 -Shu - | %s sort -o %s - && %s index %s'%(bowtie2_command,bowtie2_threads,bowtie2_genome,genome_unmapped_r1,fastq_r1,samtools_command,samtools_command,genome_mapped_bam_file,samtools_command,genome_mapped_bam_file)
-    logging.debug(aln_command)
+    sorted_r1_file = root + '.r1.sorted'
+    sorted_r2_file = root + '.r2.sorted'
+    final_file = root + '.final_assignments'
+    final_file_tmp = root + '.final_assignments.tmp'
+    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort > ' + sorted_r1_file
+    logging.debug('r1 cat command: ' + str(cat_and_sort_cmd))
+    cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
+
+    cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort > ' + sorted_r2_file
+    logging.debug('r2 cat command: ' + str(cat_and_sort_cmd))
+    cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
+
+    #first pass through file:
+    # -merge r1 and r2
+    # -deduplicate by UMI
+    # -aggregate cut sites that will be later cleaned
+
+    id_ind = 0
+    source_ind = 1
+    classification_ind = 2
+    annotation_ind = 3
+    alignment_ind = 4
+    cut_point_ind = 5
+
+    seen_reads = {} #put into this dict if it's been seen for deduplicating
+    total_reads_processed = 0
+    dups_seen = 0
+    r1_seen_custom_targets = defaultdict(int) #count of each custom target
+    cut_points_by_chr = {} # dict of arrays for each chr contianing observedcuts
+    with open(sorted_r1_file,'r') as sf1, open(sorted_r2_file,'r') as sf2, open(final_file_tmp,'w') as ff:
+        for r1_line in sf1:
+            r1_line = r1_line.strip()
+            r2_line = sf2.readline().strip()
+            total_reads_processed += 1
+
+            r1_line_els = r1_line.split("\t")
+            r1_id = r1_line_els[0]
+            r1_umi = r1_line_els[0].split(":")[-1]
+
+            r2_line_els = r2_line.split("\t")
+            r2_id = r2_line_els[0]
+            r2_umi = r2_line_els[0].split(":")[-1]
 
 
-    aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf8')
-    logging.debug('Alignment to genome: ' + aln_result)
-    bowtie_log = root + '.genomeMapped.bowtie2Log'
-    with open (bowtie_log,'w') as lout:
-        lout.write('Command used:\n===\n%s\n===\nOutput:\n===\n%s'%(aln_command,aln_result))
+            if r1_id.split(" ")[0] != r2_id.split(" ")[0]:
+                raise Exception("Some reads were lost -- read ids don't match up:\n1:"+r1_line+"\n2:"+r2_line)
 
-    genome_aligned_count = int(subprocess.check_output('%s view -F 4 -c %s'%(samtools_command,genome_mapped_bam_file),shell=True).strip())
+            this_key = r1_umi + " " + r1_line_els[alignment_ind] + " " + r2_line_els[alignment_ind]
+            #if this is a duplicate, skip it
+            if this_key in seen_reads:
+                dups_seen += 1
+                ff.write(r1_line + "\t" + r2_line + "\tduplicate\t"+seen_reads[this_key]+"\n")
+                continue
 
-    logging.info('Aligned ' + str(genome_aligned_count) + ' reads to genome')
-    return(genome_mapped_bam_file,genome_aligned_count,genome_unmapped_r1,genome_unmapped_r2)
+            #if not a duplicate:
+            seen_reads[this_key] = r1_id
+            ff.write(r1_line + "\t" + r2_line + "\tnot_duplicate\tNA\n")
+
+            r1_seen_custom_targets[r1_line_els[annotation_ind]] += 1
+
+            #parse out cut positions and record them
+            r1_cut_points = r1_line_els[cut_point_ind]
+            r2_cut_points = r2_line_els[cut_point_ind]
+            if r1_line_els[classification_ind] != 'Linear':
+                for cut_point in r1_cut_points.split("-"):
+                    (cut_chr,cut_pos) = cut_point.split(":")
+                    if cut_chr != "*":
+                        if cut_chr not in cut_points_by_chr:
+                            cut_points_by_chr[cut_chr] = []
+                        cut_points_by_chr[cut_chr].append(int(cut_pos))
+            if r2_line_els[classification_ind] != 'Linear':
+                for cut_point in r2_cut_points.split("-"):
+                    (cut_chr,cut_pos) = cut_point.split(":")
+                    if cut_chr != "*":
+                        if cut_chr not in cut_points_by_chr:
+                            cut_points_by_chr[cut_chr] = []
+                        cut_points_by_chr[cut_chr].append(int(cut_pos))
+
+    #now that we've aggregated all cut sites, find likely cut positions and record assignments to those positions in final_cut_point_lookup
+    #cut sites are input by user
+    known_cut_points_by_chr = {}
+    for cut_site in cut_sites:
+        (cut_chr,cut_pos) = cut_site.split(":")
+        if cut_chr not in known_cut_points_by_chr:
+            known_cut_points_by_chr[cut_chr] = []
+        known_cut_points_by_chr[cut_chr].append(int(cut_pos))
+
+    with open(root+'.seen_cut_points','w') as fout:
+        for cut_chr in cut_points_by_chr:
+            these_cut_points = sorted(cut_points_by_chr[cut_chr])
+            for cut_point in these_cut_points:
+                fout.write(cut_chr + ':' + str(cut_point)+"\n")
 
 
-def run_command(command):
+    final_cut_points_by_chr = {} #dict of final cut points by chromozome
+    final_cut_point_lookup = {} #dict from old(fuzzy/imprecise) position to new
+
+    observed_cut_points = defaultdict(int) # hash of cut point -> count
+    for cut_chr in cut_points_by_chr:
+        these_cut_points = sorted(cut_points_by_chr[cut_chr])
+        last_seen_point = these_cut_points[0]
+        curr_points = [last_seen_point]
+        for i in range(1,len(these_cut_points)+1):
+            #if this point is within cut_merge_dist, merge!
+            if i == len(these_cut_points) or abs(these_cut_points[i] - these_cut_points[i-1]) > cut_merge_dist:
+                this_mean = int(sum(curr_points)/float(len(curr_points)))
+                this_pos = this_mean
+                min_dist = cut_merge_dist
+                if cut_chr in known_cut_points_by_chr:
+                    for known_cut_point in known_cut_points_by_chr[cut_chr]:
+                        this_dist = abs(known_cut_point - this_mean)
+                        if this_dist <= min_dist:
+                            this_pos = known_cut_point
+                            min_dist = this_dist
+                observed_cut_points[cut_chr+":"+str(this_pos)] += len(these_cut_points)
+                if cut_chr not in final_cut_points_by_chr:
+                    final_cut_points_by_chr[cut_chr] = []
+                final_cut_points_by_chr[cut_chr].append(this_pos)
+
+                #add this assignment to the lookup
+                for curr_point in curr_points:
+                    final_cut_point_lookup[cut_chr+":"+str(curr_point)] = cut_chr+":"+str(this_pos)
+
+                curr_points = []
+
+            if i < len(these_cut_points):
+                curr_points.append(these_cut_points[i])
+
+    with open(root + ".final_cut_points.txt",'w') as fout:
+        for chrom in sorted(final_cut_points_by_chr.keys()):
+            for pos in sorted(final_cut_points_by_chr[chrom]):
+                fout.write("%s\t%d\n"%(chrom,pos))
+    with open(root+".final_cut_points_lookup.txt",'w') as fout:
+        for key in sorted(final_cut_point_lookup.keys()):
+            fout.write("%s\t%s\n"%(key,final_cut_point_lookup[key]))
+
+
+    final_total_count = 0
+    final_duplicate_count = 0
+
+
+    #keep track of alignments to genome
+    r1_aln_pos_counts_by_chr = {}
+    r1_aln_pos_genome_counts_by_chr = {}
+    r1_aln_pos_custom_aln_counts_by_chr = {}
+    r1_aln_pos_frag_counts_by_chr = {}
+
+    r2_aln_pos_counts_by_chr = {}
+    r2_aln_pos_genome_counts_by_chr = {}
+    r2_aln_pos_custom_aln_counts_by_chr = {}
+    r2_aln_pos_frag_counts_by_chr = {}
+
+    #keep track of alignments to custom chrs
+    r1_custom_aln_counts = {}
+
+    r1_uncut_counts = defaultdict(int)
+    r1_uncut_genome_counts = defaultdict(int)
+    r1_uncut_custom_aln_counts = defaultdict(int)
+    r1_uncut_frag_counts = defaultdict(int)
+    r1_cut_counts = defaultdict(int)
+    r1_cut_custom_aln_counts = defaultdict(int)
+    r1_cut_frag_counts = defaultdict(int)
+
+    r2_uncut_counts = defaultdict(int)
+    r2_uncut_genome_counts = defaultdict(int)
+    r2_uncut_custom_aln_counts = defaultdict(int)
+    r2_uncut_frag_counts = defaultdict(int)
+    r2_cut_counts = defaultdict(int)
+    r2_cut_custom_aln_counts = defaultdict(int)
+    r2_cut_frag_counts = defaultdict(int)
+
+    #keep track of translocations
+    r1_translocation_cut_counts = {}
+
+    #keep track of read ids aligning to cuts
+    #reads with these ids will be pulled out of the fastq for analysis by CRISPResso
+    r1_read_ids_for_crispresso = {}
+
+    #column indices in the final file
+    ind_offset = cut_point_ind + 1
+    r1_id_ind = id_ind
+    r1_source_ind = source_ind
+    r1_classification_ind = classification_ind
+    r1_alignment_ind = alignment_ind
+    r1_cut_point_ind = cut_point_ind
+    r2_source_ind = source_ind + ind_offset
+    r2_classification_ind = classification_ind + ind_offset
+    r2_alignment_ind = alignment_ind + ind_offset
+    r2_cut_point_ind = cut_point_ind + ind_offset
+    duplicate_ind = 12
+    with open(final_file_tmp,'r') as fin, open(final_file,'w') as fout:
+        for line in fin:
+            line = line.strip()
+            final_total_count += 1
+            line_els = line.split("\t")
+            if line_els[duplicate_ind] == "duplicate":
+                final_duplicate_count += 1
+                continue
+            r1_classification = line_els[r1_classification_ind]
+            r1_cut_points = line_els[r1_cut_point_ind]
+            r1_source = line_els[r1_source_ind]
+
+            r1_associated_cut_points = []
+
+            if r1_classification == 'Linear':
+                (r1_chr,r1_range) = r1_cut_points.split(":")
+                (r1_start,r1_stop) = r1_range.split("_")
+                #check to see if this read overlaps with any known cutpoints
+                if r1_chr in final_cut_points_by_chr:
+                    for cut_point in final_cut_points_by_chr[r1_chr]:
+                        if cut_point > int(r1_start) and cut_point < int(r1_stop):
+                            key = r1_chr+":"+str(cut_point)
+                            r1_associated_cut_points.append(key)
+                            r1_uncut_counts[key] += 1
+                            if r1_source == 'genome':
+                                r1_uncut_genome_counts[key] += 1
+                            elif r1_source == 'fragmented':
+                                r1_uncut_frag_counts[key] += 1
+                            elif r1_source == 'custom targets':
+                                r1_uncut_custom_aln[key] += 1
+            else:
+                #if it's not Linear, we've already annotated the cut points
+                for cut_point in r1_cut_points.split("-"):
+                    if "*" not in cut_point:
+                        final_cut_point = final_cut_point_lookup[cut_point]
+                        r1_associated_cut_points.append(final_cut_point)
+                        r1_cut_counts[final_cut_point] += 1
+                        if r1_source == 'fragmented':
+                            r1_cut_frag_counts[final_cut_point] += 1
+                        elif r1_source == 'custom targets':
+                            r1_cut_custom_aln_counts[final_cut_point] += 1
+
+            #map translocation cuts
+            if len(r1_associated_cut_points) > 0:
+                cut1 = r1_associated_cut_points[0]
+                cut2 = r1_associated_cut_points[-1] #this may be the same as [0] for linear ones
+                if cut1 not in r1_translocation_cut_counts:
+                    r1_translocation_cut_counts[cut1] = defaultdict(int)
+                if cut2 not in r1_translocation_cut_counts:
+                    r1_translocation_cut_counts[cut2] = defaultdict(int)
+                r1_translocation_cut_counts[cut1][cut2] += 1
+                if cut1 != cut2:
+                    r1_translocation_cut_counts[cut2][cut1] += 1
+
+                #also keep track of read ids covering each cut for analysis by CRISPResso
+                cut_key = cut1 + " " + cut2
+                if cut_key not in r1_read_ids_for_crispresso:
+                    r1_read_ids_for_crispresso[cut_key] = []
+                r1_read_ids_for_crispresso[cut_key].append(line_els[r1_id_ind])
+
+            r1_position = line_els[r1_alignment_ind]
+            for r1_aln_pos in r1_position.split("-"):
+                (aln_chr,aln_pos) = r1_aln_pos.split(":")
+                aln_pos_window = int(aln_pos)/genome_map_resolution
+                if aln_chr not in r1_aln_pos_counts_by_chr:
+                    r1_aln_pos_counts_by_chr[aln_chr] = defaultdict(int)
+                    r1_aln_pos_genome_counts_by_chr[aln_chr] = defaultdict(int)
+                    r1_aln_pos_custom_aln_counts_by_chr[aln_chr] = defaultdict(int)
+                    r1_aln_pos_frag_counts_by_chr[aln_chr] = defaultdict(int)
+                #assign each read to neighboring windows
+                r1_aln_pos_counts_by_chr[aln_chr][aln_pos_window] += 1
+                if r1_source == 'genome':
+                    r1_aln_pos_genome_counts_by_chr[aln_chr][aln_pos_window] += 1
+                elif r1_source == 'fragmented':
+                    r1_aln_pos_frag_counts_by_chr[aln_chr][aln_pos_window] += 1
+                elif r1_source == 'custom targets':
+                    r1_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
+
+            fout.write("%s\t%s"%(line,",".join(r1_associated_cut_points))+"\n")
+
+    logging.info('Deduplicated %d/%d reads (kept %d)'%(final_duplicate_count,final_total_count,final_total_count-final_duplicate_count))
+
+
+    cut_report = root + ".r1_cut_report.txt"
+    with open (cut_report,'w') as fout:
+        fout.write('chr\tstart\tcut_tot\tuncut_tot\tuncut_genome\tcut_custom\tuncut_custom\tcut_frags\tuncut_frags\n')
+        for chrom in sorted(final_cut_points_by_chr.keys()):
+            if chrom == "*":
+                continue
+            for pos in sorted(final_cut_points_by_chr[chrom]):
+                cut_key = chrom + ":" + str(pos)
+                known_str = 'Novel'
+                if chrom in known_cut_points_by_chr and pos in known_cut_points_by_chr[chrom]:
+                    known_str = 'Known'
+                fout.write("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n"%(chrom,pos,
+                    r1_cut_counts[cut_key],
+                    r1_uncut_counts[cut_key],
+                    r1_uncut_genome_counts[cut_key],
+                    r1_cut_custom_aln_counts[cut_key],
+                    r1_uncut_custom_aln_counts[cut_key],
+                    r1_cut_frag_counts[cut_key],
+                    r1_uncut_frag_counts[cut_key],
+                    known_str))
+
+    logging.info('Wrote cut report ' + cut_report)
+    tx_keys = sorted(r1_translocation_cut_counts.keys())
+    tx_report = root + ".r1_translocation_table.txt"
+    with open (tx_report,'w') as fout:
+        fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
+        for tx_key in tx_keys:
+            fout.write(tx_key+"\t"+"\t".join([str(r1_translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
+    logging.info('Wrote translocation table ' + tx_report)
+
+    align_report = root + ".r1_align_report.txt"
+    with open (align_report,'w') as fout:
+        fout.write('chr\tstart\tread_tot\tread_genome\tread_custom\tread_frags\n')
+        for chrom in sorted(r1_aln_pos_counts_by_chr.keys()):
+            for pos in sorted(r1_aln_pos_counts_by_chr[chrom].keys()):
+
+                #divide counts by two because we counted each read in two windows above
+                fout.write("%s\t%d\t%d\t%d\t%d\t%d\n"%(chrom,pos*genome_map_resolution,
+                    r1_aln_pos_counts_by_chr[chrom][pos],
+                    r1_aln_pos_genome_counts_by_chr[chrom][pos],
+                    r1_aln_pos_custom_aln_counts_by_chr[chrom][pos],
+                    r1_aln_pos_frag_counts_by_chr[chrom][pos]))
+
+
+    print('Finished final assignments')
+    return final_file,r1_read_ids_for_crispresso
+
+
+
+
+def read_command_output(command):
     """
     Runs a shell command and returns an iter to read the output
 
@@ -1603,102 +1967,7 @@ def run_command(command):
             bufsize=-1) #bufsize system default
     return iter(p.stdout.readline, b'')
 
-def analyze_global_aln(root,genome_mapped_bam_file,samtools_command='samtools'):
-    """
-    Report locations where reads map
-
-    params:
-        root: root for written files
-        genome_mapped_bam_file: bam of reads after alignment to genome (some will be unaligned)
-        samtools_command: location of samtools to run
-
-    returns:
-        aligned_locs: hash of locations aligned to on each chromosome aligned_locs[chr][position] = count
-        mapped_chrs: hash of counts of reads aligned to each chr in the genome-alignment step
-        global_aln_plot_obj: plot object showing locations of alignments
-    """
-    logging.info('Analyzing global alignments')
-
-    mapped_tlens = defaultdict(int) # observed fragment lengths
-    mapped_chrs = {}
-    aligned_locs = {} # aligned reads will not be chopped, but keep track of where they aligned for CRISPResso output
-    aligned_chr_counts = {}
-    for line in run_command('%s view %s'%(samtools_command,genome_mapped_bam_file)):
-        if line.strip() == "": break
-        line_els = line.split("\t")
-        line_chr = line_els[2]
-        if not line_chr in mapped_chrs:
-            mapped_chrs[line_chr] = 0
-        mapped_chrs[line_chr] += 1
-
-        line_mapq = line_els[5]
-        line_unmapped = int(line_els[1]) & 0x4
-        line_start = int(line_els[3])-1
-
-        if line_chr not in aligned_locs:
-            aligned_locs[line_chr] = {}
-        if line_start not in aligned_locs[line_chr]:
-            aligned_locs[line_chr][line_start] = 0
-
-        aligned_locs[line_chr][line_start] += 1
-        if line_chr not in aligned_chr_counts:
-            aligned_chr_counts[line_chr] = 0
-        aligned_chr_counts[line_chr] += 1
-
-        line_is_first = int(line_els[1]) & 0x40
-        if line_is_first:
-            insert_size = int(line_els[8])
-            mapped_tlens[insert_size] += 1
-
-    global_aligned_chrs_root = root + ".chrs"
-    keys = sorted(aligned_chr_counts.keys())
-    vals = [str(aligned_chr_counts[key]) for key in keys]
-    with open(global_aligned_chrs_root+".txt","w") as chrs:
-        chrs.write('chr\tnumReads\n')
-        for key in sorted(aligned_chr_counts.keys()):
-            chrs.write(key + '\t' + str(aligned_chr_counts[key]) + '\n')
-
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.bar(range(len(keys)),vals,tick_label=keys)
-    ax.set_ylabel('Number of Reads')
-    ax.set_title('Location of reads aligned to the genome')
-    plt.savefig(global_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(global_aligned_chrs_root+".png",pad_inches=1,bbox_inches='tight')
-
-    global_aligned_plot_obj = PlotObject(
-            plot_name = global_aligned_chrs_root,
-            plot_title = 'Global Alignment Summary',
-            plot_label = 'Bar plot showing alignment location of reads aligned genome-wide',
-            plot_datas = [('Global Alignment Summary',global_aligned_chrs_root + ".txt")]
-            )
-
-    global_aligned_tlens_root = root + ".insertSizes"
-    keys = sorted(mapped_tlens.keys())
-    vals = [mapped_tlens[key] for key in keys]
-    with open(global_aligned_tlens_root+".txt","w") as fout:
-        fout.write('insertSize\tnumReads\n')
-        for key in keys:
-            fout.write(key + '\t' + str(mapped_tlens[key]) + '\n')
-
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.bar(keys,vals)
-    ax.set_ylabel('Number of Reads')
-    ax.set_title('Insert size')
-    plt.savefig(global_aligned_tlens_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(global_aligned_tlens_root+".png",pad_inches=1,bbox_inches='tight')
-
-    global_aligned_tlen_plot_obj = PlotObject(
-            plot_name = global_aligned_chrs_root,
-            plot_title = 'Global Alignment Insert Size Summary',
-            plot_label = 'Bar plot showing insert size of reads aligned genome-wide',
-            plot_datas = [('Global Alignment Insert Size Summary',global_aligned_tlens_root + ".txt")]
-            )
-
-    return(aligned_locs,mapped_chrs,global_aligned_plot_obj)
-
-def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,use_fastq_r2_only_in_validation,bowtie2_genome,fragment_size,fragment_step_size,flash_min_overlap=20,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',flash_command='flash'):
+def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_genome,fragment_size,fragment_step_size,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools'):
     """
     Creates chopped reads
     Keeps track of locations where reads map
@@ -1706,22 +1975,22 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
 
     params:
         root: root for written files
-        unmapped_reads_fastq_r1: r1 fastq file of unmappable reads to chop
-        unmapped_reads_fastq_r2: r2 fastq file of unmappable reads to chop
-        use_fastq_r2_only_in_validation: if True, don't use merge r1 and r2 before fragmenting in this step -- only for validation
+        unmapped_reads_fastq_r1: fastq file of r1 unmappable reads to chop
+        unmapped_reads_fastq_r2: fastq file of r2 unmappable reads to chop
         bowtie2_genome: location of bowtie2 indexed reference genome
         fragment_size: size of resulting chopped fragments.
         fragment_step_size: stride between chopped fragments. 5 results in a new fragment every 5bp
-        flash_min_overlap: min overlap (in bp) for R1 and R2 for merging
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
         samtools_command: location of samtools to run
-        flash_command: location of flash to run
 
 
     returns:
-        mapped_chopped_sam_file: mapped chopped fragments
-        max_frags: max number of fragments created per read
+        r1_assignments_file: file of location assignments for each r1 read
+        r2_assignments_file: file of location assignments for each r2 read
+        translocation_count: number of reads that were identified as translocations
+        large_deletion_count: number of reads that were identified as large deletion
+        unidentified_count: number of reads that couldn't be identified as translocations
         frags_plot_obj: plot object summarizing fragments
     """
     logging.info('Creating read fragments')
@@ -1731,104 +2000,56 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
     max_frags = 0 #max frags produced for a read
     frags_per_read = {} #number of fragments created per read
 
-    unmapped_reads_fastq=unmapped_reads_fastq_r1 #file with reads to fragment
-    if unmapped_reads_fastq_r2 != None and not use_fastq_r2_only_in_validation:
-        logging.info('Merging R1 and R2 for fragmenting using %s'%flash_command)
-        flash_root = root+'.fragment.flash'
-        flash_cmd = '%s --allow-outies --min-overlap %d -o %s %s %s'%(flash_command,flash_min_overlap,flash_root, unmapped_reads_fastq_r1, unmapped_reads_fastq_r2)
-        logging.debug(flash_cmd)
-        flash_result = subprocess.check_output(flash_cmd,shell=True,stderr=subprocess.STDOUT)
-        logging.debug(flash_result)
-        with open (flash_root + '.log','w') as lout:
-            lout.write('Command used:\n===\n%s\n===\nOutput:\n===\n%s'%(flash_cmd,flash_result))
+    read_files_to_frag = [unmapped_reads_fastq_r1]
+    if unmapped_reads_fastq_r2 is not None:
+        read_files_to_frag.append(unmapped_reads_fastq_r2)
+    unmapped_frag_file = root + ".unmapped.fastq"
+    with open(unmapped_frag_file,"w") as unmapped_fastq:
+        for (read_idx,unmapped_reads_fastq) in enumerate(read_files_to_frag):
+            with open(unmapped_reads_fastq,'r') as unmapped_reads:
+                line_id = unmapped_reads.readline()
+                while(line_id):
+                    line_id = line_id.strip()
+                    line_seq = unmapped_reads.readline().strip()
+                    line_plus = unmapped_reads.readline().strip()
+                    line_qual = unmapped_reads.readline().strip()
 
-        flash_merged_fastq = flash_root + '.extendedFrags.fastq'
-        flash_unmerged_r1 = flash_root + '.notCombined_1.fastq'
-        flash_unmerged_r2 = flash_root + '.notCombined_2.fastq'
+                    this_id = line_id
 
+                    frag_num = 0
+                    offset = 0
+                    while offset + fragment_size < len(line_seq):
+                        new_id = "%s.CLR%d.CLID%s.CLO%s.CLF%s"%(this_id,read_idx+1,unmapped_id,offset,frag_num)
+                        new_seq =  line_seq[offset:offset + fragment_size]
+                        new_qual = line_qual[offset:offset + fragment_size]
+                        unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
+                        frag_num += 1
+                        offset += fragment_step_size
 
-        #this code force-merges R1 and R2 before fragmenting. Potentially, this could discover reads where R1 comes from one chromosome and R2 comes from another chromosome. However, I think this pipeline is about discovering translocations where the event can actually be observed in either R1 or R2.. so let's leave this out for now
-        if (False):
-            nt_complement=dict({'A':'T','C':'G','G':'C','T':'A','N':'N','_':'_','-':'-'})
-            def reverse_complement(seq):
-                return "".join([nt_complement[c] for c in seq.upper()[-1::-1]])
-            force_merged_fastq = flash_root + '.force_merged.fastq'
-            logging.info('Force-merging R1 and R2 reads before fragmenting')
-            force_merge_read_count = 0
-            with open(flash_unmerged_r1,'r') as f1, open(flash_unmerged_r2,'r') as f2, open(force_merged_fastq,'w') as out:
-                id1 = f1.readline()
-                while id1:
-                    force_merge_read_count += 1
-                    seq1 = f1.readline()
-                    seq1 = seq1.strip()
-                    plus1 = f1.readline()
-                    qual1 = f1.readline()
-                    qual1 = qual1.strip()
+                    #write last frag
+                    if len(line_seq) > fragment_size:
+                        offset = len(line_seq)-fragment_size
+                        new_id = "%s.CLR%d.CLID%s.CLO%s.CLF%s"%(this_id,read_idx+1,unmapped_id,offset,frag_num)
+                        new_seq =  line_seq[offset:offset + fragment_size]
+                        new_qual = line_qual[offset:offset + fragment_size]
+                        unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
+                        frag_num += 1
 
-                    id2 = f2.readline()
-                    seq2 = reverse_complement(f2.readline().strip())
-                    plus2 = f2.readline()
-                    qual2 = f2.readline().strip()[-1::-1]
+                    #write frags that are too short
+                    if len(line_seq) <= fragment_size:
+                        new_id = "%s.CLR%d.CLID%s.CLO%s.CLF%s"%(this_id,read_idx+1,unmapped_id,0,0)
+                        unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
+                        frag_num += 1
 
-                    out.write(id1+seq1+seq2+"\n"+plus1+qual1+qual2+"\n")
+                    if frag_num > max_frags:
+                        max_frags = frag_num
+                    if frag_num not in frags_per_read:
+                        frags_per_read[frag_num] = 0
+                    frags_per_read[frag_num] += 1
 
-                    id2 = f2.readline()
-                    seq2 = f2.readline()
-                    plus2 = f2.readline()
-                    qual2 = f2.readline()
+                    unmapped_id += 1
 
-                    out.write(id1+seq1+seq2+plus1+qual1+qual2)
-
-                    id1 = f1.readline()
-            logging.info('Force-merged %d reads'%force_merge_read_count)
-
-        fragment_input = root + '.fragment_input.fastq'
-        #cat_command = 'cat %s %s > %s' % (flash_merged_fastq,force_merged_fastq,fragment_input)
-        cat_command = 'cat %s %s > %s' % (flash_merged_fastq,flash_unmerged_r1,fragment_input)
-        logging.debug(cat_command)
-        cat_result = subprocess.check_output(cat_command,shell=True,stderr=subprocess.STDOUT)
-        logging.debug(cat_result)
-        unmapped_reads_fastq = fragment_input
-
-    unmapped_frag_file = root + ".fragUnmapped.fastq"
-    with open(unmapped_frag_file,"w") as unmapped_fastq, open(unmapped_reads_fastq,'r') as unmapped_reads:
-        line_id = unmapped_reads.readline()
-        while(line_id):
-            line_id = line_id.strip()
-            line_seq = unmapped_reads.readline().strip()
-            line_plus = unmapped_reads.readline().strip()
-            line_qual = unmapped_reads.readline().strip()
-
-            this_id = line_id.split(" ")[0]
-
-            frag_num = 0
-            offset = 0
-            while offset + fragment_size < len(line_seq):
-                new_id = "%s.CLID%s.CLO%s.CLF%s"%(this_id,unmapped_id,offset,frag_num)
-                new_seq =  line_seq[offset:offset + fragment_size]
-                new_qual = line_qual[offset:offset + fragment_size]
-                unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
-                frag_num += 1
-                offset += fragment_step_size
-
-            #write last frag
-            if len(line_seq) > fragment_size:
-                offset = len(line_seq)-fragment_size
-                new_id = "%s.CLID%s.CLO%s.CLF%s"%(this_id,unmapped_id,offset,frag_num)
-                new_seq =  line_seq[offset:offset + fragment_size]
-                new_qual = line_qual[offset:offset + fragment_size]
-                unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
-                frag_num += 1
-
-            if frag_num > max_frags:
-                max_frags = frag_num
-            if frag_num not in frags_per_read:
-                frags_per_read[frag_num] = 0
-            frags_per_read[frag_num] += 1
-
-            unmapped_id += 1
-
-            line_id = unmapped_reads.readline()
+                    line_id = unmapped_reads.readline()
 
     number_unmapped_reads_chopped = unmapped_id
     logging.info('Created chopped reads for ' + str(number_unmapped_reads_chopped) + ' reads')
@@ -1859,9 +2080,9 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
             )
 
 
-    mapped_chopped_sam_file = root + ".fragMapped.sam"
-    chopped_bowtie_log = root + ".fragMapped.bowtie2Log"
-    chopped_aln_command = '%s --reorder --threads %d --end-to-end -x %s -U %s -S %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file)
+    mapped_chopped_sam_file = root + ".mapped.sam"
+    chopped_bowtie_log = root + ".mapped.bowtie2Log"
+    chopped_aln_command = '%s --sam-no-qname-trunc --reorder --no-hd --threads %d --end-to-end -x %s -U %s -S %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file)
 
     logging.debug(chopped_aln_command)
     aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf-8')
@@ -1870,124 +2091,217 @@ def create_chopped_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,us
         lout.write('Alignment of chopped fragments to genome\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(chopped_aln_command,aln_result))
 
 
-    return(mapped_chopped_sam_file,max_frags,frags_plot_obj)
 
-def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
-    """
-    Analyzes reads aligned globally
-    Keeps track of locations where reads map
-    For reads that do not map, create chopped fragments which are be mapped
-
-    params:
-        root: root for written files
-        mapped_chopped_sam_file: file with mapped chopped fragments
-        mapped_chrs: counts of reads aligned to each chr in the genome-alignment step
-        max_frags: max number of fragments a read was split into
-
-
-    returns:
-        translocation_count: number of reads that were identified as translocations
-        large_deletion_count: number of reads that were identified as large deletion
-        unidentified_count: number of reads that couldn't be identified as translocations
-    """
     logging.info('Analyzing chopped reads')
 
-    def analyze_curr_id_vals(curr_id_vals,max_frags):
+    def analyze_curr_id_vals(curr_id_vals,fragment_size,fragment_step_size,max_frags,min_seen_count=2):
         """
         Helper function to analyze a list of curr_id_vals
+        A midpoint is found that splits the aligned fragments such that the number of locations in each split is minimized. 
+        A string describing this read and the aligned fragments is also created
         I pulled it out into a separate function because it's used in two spots and may need to be changed
-        curr_id_vals are a dict of fragNum:alnPos for each fragment in a specific read
+
+        params:
+            curr_id_vals: dict of fragNum:alnPos for each fragment in a specific read
+            fragment_size: size of resulting chopped fragments.
+            fragment_step_size: stride between chopped fragments. 5 results in a new fragment every 5bp
+            max_frags: the max number of frags to print (for constructing the outline to be printed)
+            min_seen_count: the minimum number of fragments aligned to a location for it to be counted (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_count of 2 would not allow position A)
+        returns:
+            outline: String to be printed to output with locationa and max_frags number of columns describing where each fragment aligned
+            curr_chr_count: how many chrs fragments from this read aligned to 
+            left_chr: Chr location where the left part of this read was determined to come from
+            left_cut_pos: Base Location where the left part could have resulted from a cut at
+            left_pos: Base location where the left part of the read aligned
+            right_chr: Location where the right part of this read was determined to come from
+            right_cut_pos
+            right_pos
+            left_potential_cut: Location of genomic cut producing left part of this read
+            right_potential_cut: Location of genomic cut producing right part of read
         """
-        outline = ""
-        curr_id_chrs = {}
+        # first create arrays from the dict of positions
+        curr_id_chrs = {} #dict of where fragments align chr->count
+        pos_list = [None]*max_frags #chr and pos where each frag mapped
+        val_list = [] #for printing the outline
+        mapped_frag_len = 0 # length of array for which all frags are mapped frag (some reads are shorter, and don't have any fragments on the left side). I used the length so I can perform range and indexing operations (as opposed to keeping the index of the last mapped frag)
+
         for i in range(max_frags):
             val = ""
             if i in curr_id_vals:
+                mapped_frag_len = i+1
                 val = curr_id_vals[i]
                 val_chr,val_pos = curr_id_vals[i].split(" ")
                 if val_chr != "*":
                     if val_chr not in curr_id_chrs:
                         curr_id_chrs[val_chr] = 0
                     curr_id_chrs[val_chr] += 1
-            outline += "\t"+val
-        outline+="\n"
+                    pos_list[i] = val
 
-        first_chr = "*"
-        first_pos = -2
-        for i in range(max_frags-1):
-            if i in curr_id_vals and i+1 in curr_id_vals:
-                val1_chr,val1_pos = curr_id_vals[i].split(" ")
-                val1_pos = int(int(val1_pos)/100) * 100 #100bp resolution
-                val2_chr,val2_pos = curr_id_vals[i+1].split(" ")
-                val2_pos = int(int(val2_pos)/100) * 100
-                if val1_chr == val2_chr:
-                    if val1_chr == "*":
-                        first_chr = "*"
-                        first_pos = -1
-                        break
-                    elif val1_pos == val2_pos:
-                        first_chr = val1_chr
-                        first_pos = val1_pos
-                        break
-        last_chr = "*"
-        last_pos = -2
-        for i in range(max_frags-1,0,-1):
-            if i in curr_id_vals and i+1 in curr_id_vals:
-                val1_chr,val1_pos = curr_id_vals[i].split(" ")
-                val1_pos = int(int(val1_pos)/100)
-                val2_chr,val2_pos = curr_id_vals[i+1].split(" ")
-                val2_pos = int(int(val2_pos)/200)
-                if val1_chr == val2_chr:
-                    if val1_chr == "*":
-                        last_chr = "*"
-                        last_pos = -1
-                        break
-                    elif val1_pos == val2_pos:
-                        last_chr = val1_chr
-                        last_pos = val1_pos
-                        break
-        outline = '%s\t%s\t%s\t%s\t%s'%(first_chr,first_pos,last_chr,last_pos,outline)
+            val_list.append(val)
+
+        min_pos_unique_sum = max_frags
+        max_majority_sum = 0
+        min_i = None
+        #create partitions of the fragments, choose the one that:
+        # - minimizes the number of unique locations seen in each partition
+        # - maximizes the number of fragments that are the majority in their respective partitions
+#        print('pos list: ' + str(pos_list))
+#        print('last frag ind: ' + str(mapped_frag_len))
+        for i in range(1,mapped_frag_len):
+            left_list = filter(None,pos_list[0:i])
+            num_pos_left = len(set(left_list))
+
+            right_list = filter(None,pos_list[i:mapped_frag_len])
+            len_right_list = len(right_list)
+            num_pos_right = len(set(filter(None,pos_list[i:mapped_frag_len])))
+
+            #if one of the partitions has no pos (all are None), continue
+            if num_pos_right == 0 or num_pos_left == 0:
+                continue
+
+#            if val_list[0] == "chr1 223763905" and val_list[1] == "chr2 60498399":
+#                print("i:"+str(i)+"/"+str(mapped_frag_len))
+#                print('left bit: ' + str(pos_list[0:i]))
+#                print('right bit: ' + str(pos_list[i:mapped_frag_len]))
+#                print('num_pos_left: ' + str(num_pos_left))
+#                print('num_pos_right: ' + str(num_pos_right))
+#                print('ratio left: ' + str(ratio_left))
+#                print('ratio right: ' + str(ratio_right))
+#                if i > 5:
+#                    toggle = 1
+#                if toggle == 1 and i < 5:
+#                    asdf()
+
+            this_unique_sum = num_pos_left + num_pos_right
+            #if the total num of unique positions in each partition is minimized here, set this to be the best partition so far
+            #or if it is a tie, calculate the majority ratio and choose the partitioning that maximizes that
+            if this_unique_sum <= min_pos_unique_sum:
+                #calculate the ratio of the most-frequent position observed out of all positions in that partition for left and right partitions
+                left_counts = {}
+                left_val = None;
+                left_majority_count = 0
+                for val in left_list:
+                    left_counts[val] = left_counts.get(val,0) + 1
+                    if left_counts[val] > left_majority_count and val is not None:
+                        left_majority_count = left_counts[val]
+                        left_val = val
+
+                right_counts = {}
+                right_val = None;
+                right_majority_count = 0
+                for val in right_list:
+                    right_counts[val] = right_counts.get(val,0) + 1
+                    if right_counts[val] > right_majority_count and val is not None and val != left_val:
+                        right_majority_count = right_counts[val]
+                        right_val = val
+
+                this_majority_sum = left_majority_count + right_majority_count
+
+                #if the unique sum is less, then just set this i to min_i
+                if this_unique_sum < min_pos_unique_sum:
+                    min_pos_unique_sum = this_unique_sum
+                    max_majority_count = this_majority_sum
+                    min_i = i
+                elif this_majority_sum > max_majority_sum: #this_unique_sum == min_pos_unique_sum from if statement above
+                    min_pos_unique_sum = this_unique_sum
+                    max_majority_sum = this_majority_sum
+                    min_i = i
+
+#        print('min_i:' + str(min_i))
+        if min_i is not None:
+            left_counts = {}
+            left_val = None;
+            left_count = 0
+            for val in pos_list[0:min_i]:
+                left_counts[val] = left_counts.get(val,0) + 1
+                if left_counts[val] > left_count and not val is None:
+                    left_count = left_counts[val]
+                    left_val = val
+            if left_count > 0:
+                if left_counts[left_val] >= min_seen_count:
+                    left_chr,left_pos = left_val.split(" ")
+                else: #an alignment was seen, but below the cutoff
+                    left_chr = "*"
+                    left_pos = "1"
+            else: #no alignments were seen
+                left_chr = "*"
+                left_pos = "2"
+
+            right_counts = {}
+            right_val = None;
+            right_count = 0
+            for val in pos_list[min_i:mapped_frag_len]:
+                right_counts[val] = right_counts.get(val,0) + 1
+                if right_counts[val] > right_count and not val is None:
+                    right_count = right_counts[val]
+                    right_val = val
+            if right_count > 0:
+                if right_counts[right_val] >= min_seen_count:
+                    right_chr,right_pos = right_val.split(" ")
+                else: #an alignment was seen, but below the cutoff
+                    right_chr = "*"
+                    right_pos = "1"
+            else: #no alignments were seen
+                right_chr = "*"
+                right_pos = "2"
+        else: #no alignments were seen, min_i is None
+            left_chr = "*"
+            left_pos = "3"
+            right_chr = "*"
+            right_pos = "3"
+            min_i = -1
+
+        # estimate position where cuts may have occurred to create this read
+        left_cut_pos = "*"
+        if left_chr != "*":
+            left_cut_pos = int(left_pos) + int((min_i*fragment_step_size)*fragment_size/2)
+        right_cut_pos = "*"
+        if right_chr != "*":
+            right_cut_pos = int(right_pos) + int((min_i*fragment_step_size)*fragment_size/2)
+
+        outline = '%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n'%(left_chr,str(left_cut_pos),left_pos,right_chr,str(right_cut_pos),right_pos,min_i,"\t".join(val_list))
 
         #sort so we don't count mix up chr1>chr2 with chr2>chr1 when they are really the same
-        if last_chr < first_chr or (last_chr == first_chr and last_pos < first_pos):
-            tmp_chr = first_chr
-            tmp_pos = first_pos
-            first_chr = last_chr
-            first_pos = last_pos
-            last_chr = tmp_chr
-            last_pos = tmp_pos
+        if right_chr < left_chr or (right_chr == left_chr and int(right_pos) < int(left_pos)):
+            tmp_chr = left_chr
+            tmp_pos = left_pos
+            tmp_cut_pos = left_cut_pos
+            left_chr = right_chr
+            left_pos = right_pos
+            left_cut_pos = right_cut_pos
+            right_chr = tmp_chr
+            right_pos = tmp_pos
+            right_cut_pos = tmp_cut_pos
 
         curr_chr_count = len(curr_id_chrs.keys())
-        return outline,curr_chr_count,first_chr,first_pos,last_chr,last_pos
+        return outline,curr_chr_count,left_chr,left_cut_pos,left_pos,right_chr,right_cut_pos,right_pos
 
-    frag_meta_file = root + ".fragMeta.txt"
-    with open(frag_meta_file,"w") as frag_file:
-        head = "ID\tleft_chr\tleft_pos\tright_chr\tright_pos"
+    frag_meta_file = root + ".meta.txt"
+
+    r1_assignments_file = root + '.assignments_r1.txt'
+    r2_assignments_file = root + '.assignments_r2.txt'
+    frags_mapped_chrs = defaultdict(int)
+    with open(frag_meta_file,"w") as frag_file, open(r1_assignments_file,'w') as af1, open(r2_assignments_file,'w') as af2:
+        head = "ID\tleft_chr\tleft_cut\tleft_pos\tright_chr\tright_cut\tright_pos\tbreak_index"
         for i in range(max_frags):
             head += "\t"+str(i)
         frag_file.write(head+"\n")
 
         with open(mapped_chopped_sam_file,'r') as aln_frags:
-            #read header
-            line1 = aln_frags.readline()
-            while line1 and not line1.startswith('@PG'):
-                line1 = aln_frags.readline()
-
-            curr_id = ""
+            curr_id = "" #whole id of the read (alignments will be aggregated based on this id)
+            curr_idx = "" #read index (either 1 for r1 or 2 for r2
             curr_id_chrs = {} # keep track of which chrs frags from this id map to
             curr_id_vals = {} # keep track of where each frag maps to (this is a hash but it's like an array, so we can check for uninitialized values)
-            translocations = {} # hash of all translocation locations
+            translocations = defaultdict(int) # hash of all translocation locations
             translocation_count = 0
             large_deletion_count = 0
             unidentified_count = 0
-            chroms_per_frag_read_count = {} # keep track for all read how many chrs the fragments mapped to
+            chroms_per_frag_read_count = defaultdict(int) # keep track for all read how many chrs the fragments mapped to
             frags_mapped_count = 0
             for line in aln_frags:
                 line_els = line.split("\t")
                 line_chr = line_els[2]
-                if line_chr not in mapped_chrs:
-                    mapped_chrs[line_chr] = 0
-                mapped_chrs[line_chr] += 1
+                frags_mapped_chrs[line_chr] += 1
                 frags_mapped_count += 1
 
                 line_mapq = line_els[5]
@@ -1995,47 +2309,55 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                 line_reverse = int(line_els[1]) & 0x10
                 line_start = int(line_els[3])-1
 
-                match = re.match('(.*)\.CLID(\d+)\.CLO(-?\d+)\.CLF(-?\d+)$',line_els[0])
+                match = re.match('(.*)\.CLR(\d)\.CLID(\d+)\.CLO(-?\d+)\.CLF(-?\d+)$',line_els[0])
                 if not match:
                     raise Exception('Cannot parse id %s from line %s in %s. Perhaps line was trimmed?\n'%(line_els[0],line,mapped_chopped_sam_file))
-                (orig_id,lungo_id,lungo_offset,lungo_frag) = match.groups()
+                (next_id,read_idx,lungo_id,lungo_offset,lungo_frag) = match.groups()
 
                 #write results from last id if this line is for a new id
-                if curr_id != orig_id and curr_id != "":
-                    (outline,curr_chr_count,first_chr,first_pos,last_chr,last_pos) = analyze_curr_id_vals(curr_id_vals,max_frags)
+                if curr_id != next_id and curr_id != "":
+                    (outline,curr_chr_count,first_chr,first_cut_pos,first_pos,last_chr,last_cut_pos,last_pos) = analyze_curr_id_vals(curr_id_vals,fragment_size,fragment_step_size,max_frags)
                     frag_file.write(curr_id+"\t"+outline)
 
+                    curr_classification = "NA"
                     if first_chr == "*" or last_chr == "*":
                         unidentified_count += 1
+                        curr_classification = "Unidentified"
                     else:
                         key = first_chr + " " + first_pos + " " + last_chr + " " + last_pos
-                        if key not in translocations:
-                            translocations[key] = 0
                         translocations[key] += 1
 
+                        #can't be linear otherwise it would have mapped in genomic alignment previuosly
                         if first_chr == last_chr:
                             large_deletion_count += 1
+                            curr_classification = "Large deletion"
                         else:
                             translocation_count += 1
+                            curr_classification = "Translocation"
 
-                    if curr_chr_count not in chroms_per_frag_read_count:
-                        chroms_per_frag_read_count[curr_chr_count] = 0
                     chroms_per_frag_read_count[curr_chr_count] += 1
+                    curr_loc = first_chr + ":" + str(first_pos) + "-" + last_chr + ":" + str(last_pos)
+                    curr_cuts = first_chr + ":" + str(first_cut_pos) + "-" + last_chr + ":" + str(last_cut_pos)
+                    curr_annotation = ''
+                    if int(curr_idx) == 1:
+                        af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
+                    else:
+                        af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
 
                     curr_id_chrs = {}
                     curr_id_vals = {}
 
-                curr_id = orig_id
+                curr_id = next_id
+                curr_idx = read_idx
 
                 inferred_start = line_start - int(lungo_offset)
                 if line_reverse:
                     inferred_start = line_start + int(lungo_offset)
                 curr_id_vals[int(lungo_frag)] = line_chr + " " + str(inferred_start)
-                curr_id_vals['last'] = line_chr + " " + str(inferred_start)
 
             #finish last item
             if frags_mapped_count > 0:
-                (outline,curr_chr_count,first_chr,first_pos,last_chr,last_pos) = analyze_curr_id_vals(curr_id_vals,max_frags)
+                (outline,curr_chr_count,first_chr,first_cut,first_pos,last_chr,last_cut,last_pos) = analyze_curr_id_vals(curr_id_vals,fragment_size,fragment_step_size,max_frags)
                 frag_file.write(curr_id+"\t"+outline)
 
                 if first_chr == "*" or last_chr == "*":
@@ -2051,20 +2373,26 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                     else:
                         translocation_count += 1
 
-                if curr_chr_count not in chroms_per_frag_read_count:
-                    chroms_per_frag_read_count[curr_chr_count] = 0
                 chroms_per_frag_read_count[curr_chr_count] += 1
+                curr_loc = first_chr + ":" + str(first_pos) + "-" + last_chr + ":" + str(last_pos)
+                curr_cuts = first_chr + ":" + str(first_cut_pos) + "-" + last_chr + ":" + str(last_cut_pos)
+                curr_annotation = ''
+                if int(curr_idx) == 1:
+                    af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
+                else:
+                    af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
             #done with last one
 
+    logging.info("debug read frags mapped count: " + str(frags_mapped_count))
     logging.info("Found %d translocations, %d large deletions, and %d unidentified reads"%(translocation_count,large_deletion_count,unidentified_count))
 
-    frags_aligned_chrs_root = root + ".fragsAlignedChrs"
-    keys = sorted(mapped_chrs.keys())
-    vals = [str(mapped_chrs[key]) for key in keys]
+    frags_aligned_chrs_root = root + ".chrs"
+    keys = sorted(frags_mapped_chrs.keys())
+    vals = [str(frags_mapped_chrs[key]) for key in keys]
     with open(frags_aligned_chrs_root+".txt","w") as fout:
         fout.write("chr\tnumReads\n")
         for key in keys:
-            fout.write(str(key) + '\t' + str(mapped_chrs[key]) + '\n')
+            fout.write(str(key) + '\t' + str(frags_mapped_chrs[key]) + '\n')
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
     ax.bar(range(len(keys)),vals,tick_label=keys)
@@ -2074,7 +2402,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
     plt.savefig(frags_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(frags_aligned_chrs_root+".png",pad_inches=1,bbox_inches='tight')
 
-    frag_chroms_per_read_root = root + ".fragsChromsPerRead"
+    frag_chroms_per_read_root = root + ".alignedChromsPerRead"
     keys = sorted(chroms_per_frag_read_count.keys())
     vals = [str(chroms_per_frag_read_count[key]) for key in keys]
     with open(frag_chroms_per_read_root+".txt","w") as fout:
@@ -2099,7 +2427,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
     with open(translocation_report_file,"w") as fout:
         fout.write("from\tto\tcount\n")
         for key in sorted(translocations.keys()):
-            (from_chr,to_chr) = key.split(" ")
+            (from_chr,from_pos,to_chr,to_pos) = key.split(" ")
             fout.write(from_chr+'\t'+to_chr+ '\t' + str(translocations[key]) + '\n')
             if from_chr not in translocation_table:
                 translocation_table[from_chr] = {}
@@ -2121,8 +2449,7 @@ def analyze_chopped_reads(root,mapped_chopped_sam_file,mapped_chrs,max_frags):
                 line += "\t"+str(val)
             fout.write(line+"\n")
 
-    return (translocation_count,large_deletion_count,unidentified_count)
-
+    return (r1_assignments_file,r2_assignments_file,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
 
 
 def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,aligned_locs,av_read_length,genome_mapped_bam_file,run_crispresso_genome_sites,crispresso_min_aln_score,samtools_command,crispresso_command,query_bp_around_cut):
@@ -2133,6 +2460,7 @@ def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,a
 
     params:
         root: root for written files
+        final_assignments_file: file with final assignments for each read
         cuts: array of cut locations -- these will be pulled out for crispresso analysis
         target_info: hash of information for each target_name
             target_info[target_name]['sequence']: fasta sequence of artificial target
@@ -2141,8 +2469,10 @@ def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,a
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
             target_info[target_name]['cut2_site']
+            target_info[target_name]['query_pos']: genomic start of query (bp)
             target_info[target_name]['query_start']: bp after which query starts (in case of padding)
             target_info[target_name]['query_end']
+            target_info[target_name]['target_cut_idx']: bp of cut in target
 
         genome: path to genome fa file
         genome_len_file: path to tab-sep file with lengths of chrs in genome (ends with .fai)
@@ -2196,7 +2526,8 @@ def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,a
         name = target_name + "_" + cut_chrom + "_" + str(cut_loc)
         logging.debug('Analyzing cut target in genomic alignment ' + str(i) + ': ' + name)
 
-        read_count_command = '%s view -F 4 -c %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,cut_chrom,cut_query_start,cut_query_end)
+        # -F 260 - filter read unmapped (4) or not primary alignment (240)
+        read_count_command = '%s view -F 260 -c %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,cut_chrom,cut_query_start,cut_query_end)
         logging.debug(read_count_command)
         read_count = int(subprocess.check_output(read_count_command,shell=True).strip())
         logging.debug('got ' + str(read_count) + ' reads')
@@ -2211,7 +2542,7 @@ def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,a
             read_count = 0
             reads_file = root + ".CRISPResso_data/"+name+".fastq"
             with open(reads_file,'w') as reads_out:
-                for line in run_command('%s view -F 4 %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,cut_chrom,cut_query_start,cut_query_end)):
+                for line in read_command_output('%s view -F 260 %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,cut_chrom,cut_query_start,cut_query_end)):
                     if line.strip() == "": break
                     line_els = line.split("\t")
                     seq = line_els[9]
@@ -2273,7 +2604,7 @@ def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,a
                 read_count = 0
                 reads_file = root + ".CRISPResso_data/"+name+".fastq"
                 with open(reads_file,'w') as reads_out:
-                    for line in run_command('%s view -F 4 %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,chrom,start_locs[i],end_locs[i])):
+                    for line in read_command_output('%s view -F 260 %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,chrom,start_locs[i],end_locs[i])):
                         if line.strip() == "": break
                         line_els = line.split("\t")
                         seq = line_els[9]
@@ -2307,8 +2638,10 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
             target_info[target_name]['cut1_site']
             target_info[target_name]['cut2_chr']: cut information for cut 2
             target_info[target_name]['cut2_site']
+            target_info[target_name]['query_pos']: genomic start of query (bp)
             target_info[target_name]['query_start']: bp after which query starts (in case of padding)
             target_info[target_name]['query_end']
+            target_info[target_name]['target_cut_idx']: bp of cut in target
         genome_read_count_at_cuts: number of reads discovered at cut sites in genomic alignment (to be added to 'Linear' class category)
         crispresso_min_aln_score: minimum score for reads to align to amplicons
         samtools_command: location of samtools to run
@@ -2341,8 +2674,8 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
             end_ind = target_info[target_names[i]]['query_end']
 
             logging.debug('Analyzing target ' + str(i) + ': ' + target_name)
-            logging.debug('%s view -F 4 -c %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind))
-            read_count = int(subprocess.check_output('%s view -F 4 -c %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind),shell=True).strip())
+            logging.debug('%s view -F 260 -c %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind))
+            read_count = int(subprocess.check_output('%s view -F 260 -c %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind),shell=True).strip())
             logging.debug('got ' + str(read_count) + ' reads')
 
             custom_chr_class = target_info[target_name]['class']
@@ -2363,7 +2696,7 @@ def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,c
                 reads_file = root + ".crispresso."+target_name+".fastq"
                 printed_read_count = 0
                 with open(reads_file,'w') as reads_out:
-                    for line in run_command('%s view -F 4 %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind)):
+                    for line in read_command_output('%s view -F 260 %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind)):
                         if line.strip() == "": break
                         line_els = line.split("\t")
                         seq = line_els[9]
