@@ -2,6 +2,7 @@ import argparse
 from collections import defaultdict
 import gzip
 import io
+import json
 import logging
 import matplotlib
 matplotlib.use('AGG')
@@ -83,7 +84,6 @@ def main():
                 cut_sites = cut_sites,
                 target_info = target_info
                 )
-        print('Prepping crispresso runs')
 
         # Prepare CRISPResso runs
         (genome_crispresso_infos, genome_crispresso_commands
@@ -100,8 +100,6 @@ def main():
                     samtools_command=settings['samtools_command'],
                     crispresso_command=settings['crispresso_command'],
                     )
-        crispresso_commands.extend(genome_crispresso_commands)
-        crispresso_infos.extend(genome_crispresso_infos)
         print('DONEEEEE')
         exit()
 
@@ -226,47 +224,23 @@ def main():
             target_info = target_info
             )
 
-    quit()
-
-    # Prepare CRISPResso runs
-    (genome_crispresso_infos, genome_crispresso_commands,genome_read_count_at_cuts
-        ) = prep_crispresso2_global(
+    (genome_crispresso_infos, genome_crispresso_commands
+        ) = prep_crispresso2(
                 root = settings['root'],
-                cuts = settings['cuts'],
+                input_fastq_file = settings['fastq_r1'],
+                read_ids_for_crispresso = r1_read_ids_for_crispresso,
+                cut_counts_for_crispresso = r1_cut_counts_for_crispresso,
+                av_read_length = av_read_length,
                 genome = settings['genome'],
                 genome_len_file = settings['genome']+'.fai',
                 crispresso_cutoff = settings['crispresso_cutoff'],
-                r1_read_ids_for_crispresso = r1_read_ids_for_crispresso,
-                aligned_locs = genome_aligned_locs,
-                av_read_length = av_read_length,
-                genome_mapped_bam_file = genome_mapped_bam_file,
-                run_crispresso_genome_sites = settings['run_crispresso_genome_sites'],
                 crispresso_min_aln_score = settings['crispresso_min_aln_score'],
                 samtools_command=settings['samtools_command'],
                 crispresso_command=settings['crispresso_command'],
                 )
+
     crispresso_commands.extend(genome_crispresso_commands)
     crispresso_infos.extend(genome_crispresso_infos)
-
-    if len(target_names) > 0:
-        (targets_crispresso_infos, targets_crispresso_commands
-            ) = prep_crispresso2_artificial_targets(
-                    root = settings['root'],
-                    genome_len_file=settings['genome']+'.fai',
-                    crispresso_cutoff=settings['crispresso_cutoff'],
-                    custom_index_fasta = custom_index_fasta,
-                    custom_mapped_bam_file = custom_mapped_bam_file,
-                    target_names = target_names,
-                    target_info = target_info,
-                    genome_read_count_at_cuts = genome_read_count_at_cuts,
-                    crispresso_min_aln_score = settings['crispresso_min_aln_score'],
-                    samtools_command=settings['samtools_command'],
-                    crispresso_command=settings['crispresso_command'],
-                    )
-        crispresso_commands.extend(targets_crispresso_commands)
-        crispresso_infos.extend(targets_crispresso_infos)
-
-
 
     crispresso_results = run_and_aggregate_crispresso(
                 root = settings['root'],
@@ -295,9 +269,6 @@ def main():
                     plot_datas = [('Alignment summary',alignment_summary_root + ".txt")]
                     ))
 
-    summary_plot_objects.append(global_aln_plot_obj)
-    summary_plot_objects.append(frags_plot_obj)
-
     make_report(report_file=settings['root']+".html",
             report_name = 'Report',
             crisprlungo_folder = '',
@@ -306,8 +277,6 @@ def main():
             summary_plot_objects = summary_plot_objects,
             )
 
-
-    cleanup(settings['root'])
 
     logging.info('Successfully completed!')
 
@@ -1174,159 +1143,159 @@ def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,writ
                 post_dedup_count = int(post_dedup_count_str)
                 post_dedup_read_count = int(post_dedup_read_count_str)
                 logging.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
+    if tot_read_count != -1:
+        return(fastq_r1_dedup,fastq_r2_dedup)
 
     #otherwise perform deduplication (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
-    if tot_read_count == -1:
-        logging.info('Deduplicating input fastqs')
-        
-        #first, create the regex that matches UMIs
-        umi_regex_string = umi_regex
+    logging.info('Deduplicating input fastqs')
+    
+    #first, create the regex that matches UMIs
+    umi_regex_string = umi_regex
 
-        umi_regex_string = umi_regex_string.replace('I','([ATCG])')
-        umi_regex_string = umi_regex_string.replace('N','([ATCG])')
-        umi_regex_string = umi_regex_string.replace('R','([AG])')
-        umi_regex_string = umi_regex_string.replace('Y','([CT])')
-        umi_regex_string = umi_regex_string.replace('S','([GC])')
-        umi_regex_string = umi_regex_string.replace('W','([AT])')
-        umi_regex_string = umi_regex_string.replace('K','([GT])')
-        umi_regex_string = umi_regex_string.replace('M','([AC])')
-        umi_regex_string = umi_regex_string.replace('B','([CGT])')
-        umi_regex_string = umi_regex_string.replace('D','([AGT])')
-        umi_regex_string = umi_regex_string.replace('H','([ACT])')
-        umi_regex_string = umi_regex_string.replace('V','([ACG])')
+    umi_regex_string = umi_regex_string.replace('I','([ATCG])')
+    umi_regex_string = umi_regex_string.replace('N','([ATCG])')
+    umi_regex_string = umi_regex_string.replace('R','([AG])')
+    umi_regex_string = umi_regex_string.replace('Y','([CT])')
+    umi_regex_string = umi_regex_string.replace('S','([GC])')
+    umi_regex_string = umi_regex_string.replace('W','([AT])')
+    umi_regex_string = umi_regex_string.replace('K','([GT])')
+    umi_regex_string = umi_regex_string.replace('M','([AC])')
+    umi_regex_string = umi_regex_string.replace('B','([CGT])')
+    umi_regex_string = umi_regex_string.replace('D','([AGT])')
+    umi_regex_string = umi_regex_string.replace('H','([ACT])')
+    umi_regex_string = umi_regex_string.replace('V','([ACG])')
 
-        umi_regex = re.compile(umi_regex_string)
+    umi_regex = re.compile(umi_regex_string)
 
-        tot_read_count = 0
-        count_with_regex = 0
+    tot_read_count = 0
+    count_with_regex = 0
 
-        umi_keys_with_most_counts = {} #umi->key (key has most counts)
-        umi_key_counts = {} #umi->count (count of fastqs key has seen) 
+    umi_keys_with_most_counts = {} #umi->key (key has most counts)
+    umi_key_counts = {} #umi->count (count of fastqs key has seen) 
 
-        umi_seq_counts = {} #umi_seq->count of that pair
-        umi_seq_best_qual_fastqs = {} #umi_seq->fastq to be printed
-        umi_seq_best_qual_sum = {} #best qual sum for the best fastq
+    umi_seq_counts = {} #umi_seq->count of that pair
+    umi_seq_best_qual_fastqs = {} #umi_seq->fastq to be printed
+    umi_seq_best_qual_sum = {} #best qual sum for the best fastq
 
-        if fastq_r1.endswith('.gz'):
-            f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
-        else:
-            f1_in = open(fastq_r1,'r')
+    if fastq_r1.endswith('.gz'):
+        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
+    else:
+        f1_in = open(fastq_r1,'r')
 
-        if fastq_r2.endswith('.gz'):
-            f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
-        else:
-            f2_in = open(fastq_r2,'r')
+    if fastq_r2.endswith('.gz'):
+        f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
+    else:
+        f2_in = open(fastq_r2,'r')
 
-        #now iterate through f1/f2/umi files
-        while (1):
-            f1_id_line   = f1_in.readline().strip()
-            f1_seq_line  = f1_in.readline().strip()
-            f1_plus_line = f1_in.readline()
-            f1_qual_line = f1_in.readline().strip()
+    #now iterate through f1/f2/umi files
+    while (1):
+        f1_id_line   = f1_in.readline().strip()
+        f1_seq_line  = f1_in.readline().strip()
+        f1_plus_line = f1_in.readline()
+        f1_qual_line = f1_in.readline().strip()
 
-            if not f1_qual_line : break
-            if not f1_plus_line.startswith("+"):
-                raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
-            tot_read_count += 1
+        if not f1_qual_line : break
+        if not f1_plus_line.startswith("+"):
+            raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+        tot_read_count += 1
 
-            f2_id_line   = f2_in.readline().strip()
-            f2_seq_line  = f2_in.readline().strip()
-            f2_plus_line = f2_in.readline()
-            f2_qual_line = f2_in.readline().strip()
+        f2_id_line   = f2_in.readline().strip()
+        f2_seq_line  = f2_in.readline().strip()
+        f2_plus_line = f2_in.readline()
+        f2_qual_line = f2_in.readline().strip()
 
-            this_UMI = f1_id_line.split(":")[-1].upper()
+        this_UMI = f1_id_line.split(":")[-1].upper()
 
-            if umi_regex.match(this_UMI):
-                count_with_regex += 1
+        if umi_regex.match(this_UMI):
+            count_with_regex += 1
 
-                #group 1 is the whole string
-                #this_key = this_UMI + " # " + f1_seq_line + f2_seq_line
-                this_key = this_UMI
+            #group 1 is the whole string
+            #this_key = this_UMI + " # " + f1_seq_line + f2_seq_line
+            this_key = this_UMI
 
 
-                qual_sum = np.sum(np.fromstring(f1_qual_line + f2_qual_line,dtype=np.uint8))
-                if this_key not in umi_seq_counts:
-                    umi_seq_counts[this_key] = 1
+            qual_sum = np.sum(np.fromstring(f1_qual_line + f2_qual_line,dtype=np.uint8))
+            if this_key not in umi_seq_counts:
+                umi_seq_counts[this_key] = 1
+                umi_seq_best_qual_sum[this_key] = qual_sum
+                umi_seq_best_qual_fastqs[this_key] = (
+                        f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line,
+                        f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line
+                        )
+            else:
+                umi_seq_counts[this_key] += 1
+                #if this sequence has the highest quality, store it
+                if umi_seq_best_qual_sum[this_key] < qual_sum:
                     umi_seq_best_qual_sum[this_key] = qual_sum
                     umi_seq_best_qual_fastqs[this_key] = (
                             f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line,
                             f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line
                             )
-                else:
-                    umi_seq_counts[this_key] += 1
-                    #if this sequence has the highest quality, store it
-                    if umi_seq_best_qual_sum[this_key] < qual_sum:
-                        umi_seq_best_qual_sum[this_key] = qual_sum
-                        umi_seq_best_qual_fastqs[this_key] = (
-                                f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line,
-                                f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line
-                                )
 
-                if this_UMI not in umi_key_counts:
-                    umi_key_counts[this_UMI] = 1
-                    umi_keys_with_most_counts[this_UMI] = this_key
-                else:
-                    umi_key_counts[this_UMI] += 1
-                    #if this sequence is the most seen for this UMI, store it
-                    if umi_seq_counts[this_key] > umi_key_counts[this_UMI]:
-                        umi_keys_with_most_counts[this_UMI] = this_key
-        #finished iterating through fastq file
-        f1_in.close()
-        f2_in.close()
-
-
-        if tot_read_count == 0:
-            raise Exception("UMI dedup failed. Got no reads from " + fastq_r1 + " and " + fastq_r2 )
-
-        umi_list = sorted(umi_key_counts, key=lambda k: umi_key_counts[k])
-        umi_count = len(umi_list)
-    #    print("umi_list: " + str(umi_list))
-
-        logging.info('Read %d reads'%tot_read_count)
-        logging.info("Processed " + str(umi_count) + " UMIs")
-        if umi_count == 1 and umi_list[0] == '':
-            raise Exception("Error: only the empty barcode '' was found.")
-
-        fastq_r1_dedup = root + '.r1.gz'
-        f1_out = gzip.open(fastq_r1_dedup, 'wb')
-        fastq_r2_dedup = root + '.r2.gz'
-        f2_out = gzip.open(fastq_r2_dedup, 'wb')
-
-        collision_count = 0
-        collision_count_reads = 0
-        too_few_reads_count = 0
-        too_few_reads_count_reads = 0
-        post_dedup_count = 0
-        post_dedup_read_count = 0
-        collided_umi_reads = []
-        for umi_seq in umi_seq_counts:
-            if umi_seq_counts[umi_seq] < min_umi_seen_to_keep_read:
-                too_few_reads_count += 1
-                too_few_reads_count_reads += umi_seq_counts[umi_seq]
+            if this_UMI not in umi_key_counts:
+                umi_key_counts[this_UMI] = 1
+                umi_keys_with_most_counts[this_UMI] = this_key
             else:
-                (seq1,seq2) = umi_seq_best_qual_fastqs[umi_seq]
-                f1_out.write(seq1+"\n")
-                f2_out.write(seq2+"\n")
-                post_dedup_count += 1
-                post_dedup_read_count += umi_seq_counts[umi_seq]
-
-        f1_out.close()
-        f2_out.close()
-
-        if write_UMI_counts:
-            fout = open(root+".umiCounts.txt","w")
-            fout.write('UMI\tCount\n')
-            for umi in sorted(umi_key_counts):
-                fout.write(umi + "\t" + str(umi_key_counts[umi]) + "\n")
-            loggin.info('Wrote UMI counts to ' + root+".umiCounts.txt")
+                umi_key_counts[this_UMI] += 1
+                #if this sequence is the most seen for this UMI, store it
+                if umi_seq_counts[this_key] > umi_key_counts[this_UMI]:
+                    umi_keys_with_most_counts[this_UMI] = this_key
+    #finished iterating through fastq file
+    f1_in.close()
+    f2_in.close()
 
 
-        logging.info('Wrote %d deduplicated reads'%post_dedup_count)
-        with open(dedup_stats_file,'w') as fout:
-            fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count","count_with_regex","post_dedup_count","post_dedup_read_count"])+"\n")
-            fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count,count_with_regex,post_dedup_count,post_dedup_read_count]])+"\n")
+    if tot_read_count == 0:
+        raise Exception("UMI dedup failed. Got no reads from " + fastq_r1 + " and " + fastq_r2 )
 
-    #done processing just plotting now
+    umi_list = sorted(umi_key_counts, key=lambda k: umi_key_counts[k])
+    umi_count = len(umi_list)
+#    print("umi_list: " + str(umi_list))
+
+    logging.info('Read %d reads'%tot_read_count)
+    logging.info("Processed " + str(umi_count) + " UMIs")
+    if umi_count == 1 and umi_list[0] == '':
+        raise Exception("Error: only the empty barcode '' was found.")
+
+    fastq_r1_dedup = root + '.r1.gz'
+    f1_out = gzip.open(fastq_r1_dedup, 'wb')
+    fastq_r2_dedup = root + '.r2.gz'
+    f2_out = gzip.open(fastq_r2_dedup, 'wb')
+
+    collision_count = 0
+    collision_count_reads = 0
+    too_few_reads_count = 0
+    too_few_reads_count_reads = 0
+    post_dedup_count = 0
+    post_dedup_read_count = 0
+    collided_umi_reads = []
+    for umi_seq in umi_seq_counts:
+        if umi_seq_counts[umi_seq] < min_umi_seen_to_keep_read:
+            too_few_reads_count += 1
+            too_few_reads_count_reads += umi_seq_counts[umi_seq]
+        else:
+            (seq1,seq2) = umi_seq_best_qual_fastqs[umi_seq]
+            f1_out.write(seq1+"\n")
+            f2_out.write(seq2+"\n")
+            post_dedup_count += 1
+            post_dedup_read_count += umi_seq_counts[umi_seq]
+
+    f1_out.close()
+    f2_out.close()
+
+    if write_UMI_counts:
+        fout = open(root+".umiCounts.txt","w")
+        fout.write('UMI\tCount\n')
+        for umi in sorted(umi_key_counts):
+            fout.write(umi + "\t" + str(umi_key_counts[umi]) + "\n")
+        loggin.info('Wrote UMI counts to ' + root+".umiCounts.txt")
+
+
+    logging.info('Wrote %d deduplicated reads'%post_dedup_count)
+    with open(dedup_stats_file,'w') as fout:
+        fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count","count_with_regex","post_dedup_count","post_dedup_read_count"])+"\n")
+        fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count,count_with_regex,post_dedup_count,post_dedup_read_count]])+"\n")
+
     return(fastq_r1_dedup,fastq_r2_dedup)
 
 def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
@@ -1463,6 +1432,37 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
     logging.info('Aligning to %s'%reference_name)
 
     mapped_bam_file = root + ".bam"
+
+    info_file = root + '.info'
+    if os.path.isfile(info_file):
+        read_count = -1
+        with open (info_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().strip().split("\t")
+            if len(line_els) == 11:
+                (read_count_str,r1_count_str,r2_count_str,unmapped_r1_count_str,unmapped_r2_count_str,aligned_count_str,r1_assignments_file_str,r2_assignments_file_str,unmapped_fastq_r1_file_str,unmapped_fastq_r2_file_str,mapped_bam_file_str) = line_els
+                r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
+                r2_assignments_file = None if r2_assignments_file_str == "None" else r2_assignments_file_str
+                unmapped_fastq_r1_file = None if unmapped_fastq_r1_file_str == "None" else unmapped_fastq_r1_file_str
+                unmapped_fastq_r2_file = None if unmapped_fastq_r2_file_str == "None" else unmapped_fastq_r2_file_str
+                read_count  = int(read_count_str)
+                mapped_bam_file = None if mapped_bam_file == "None" else mapped_bam_file_str
+
+                chr_aln_plot_obj_str = fin.readline().strip()
+                chr_aln_plot_obj = None
+                if chr_aln_plot_obj_str != "" and chr_aln_plot_obj_str != "None":
+                    chr_aln_plot_obj = PlotObject.from_json(chr_aln_plot_obj_str)
+
+                tlen_plot_obj_str = fin.readline().strip()
+                tlen_plot_obj = None
+                if tlen_plot_obj_str != "" and tlen_plot_obj_str != "None":
+                    tlen_plot_obj = PlotObject.from_json(tlen_plot_obj_str)
+                if read_count > 0:
+                    logging.info('Using previously-processed alignment for ' + str(read_count) + ' reads')
+                    return r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file, unmapped_fastq_r2_file, read_count, mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj
+                else:
+                    logging.info('Could not recover previously-analyzed alignments. Reanalyzing.')
+
 
     bowtie_log = root + '.bowtie2Log'
     if fastq_r2 is not None: #paired-end reads
@@ -1664,6 +1664,15 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
     with open (root+".info",'w') as fout:
         fout.write("\t".join([str(x) for x in ["read_count","r1_count","r2_count","unmapped_r1_count","unmapped_r2_count","aligned_count","unmapped_fastq_r1_file","unmapped_fastq_r2_file"]])+"\n")
         fout.write("\t".join([str(x) for x in [read_count,r1_count,r2_count,unmapped_r1_count,unmapped_r2_count,aligned_count,unmapped_fastq_r1_file,unmapped_fastq_r2_file]]))
+    with open(info_file,'w') as fout:
+        fout.write("\t".join([str(x) for x in ["read_count","r1_count","r2_count","unmapped_r1_count","unmapped_r2_count","aligned_count","r1_assignments_file","r2_assignments_file","unmapped_fastq_r1_file","unmapped_fastq_r2_file","mapped_bam_file"]])+"\n")
+        fout.write("\t".join([str(x) for x in [read_count,r1_count,r2_count,unmapped_r1_count,unmapped_r2_count,aligned_count,r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,mapped_bam_file]])+"\n")
+
+        chr_aln_plot_obj_str = chr_aln_plot_obj.to_json()
+        fout.write(chr_aln_plot_obj_str+"\n")
+        tlen_plot_obj_str = tlen_plot_obj.to_json()
+        fout.write(tlen_plot_obj_str+"\n")
+
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
 
 def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,target_info,cut_merge_dist=100,genome_map_resolution=1000000):
@@ -1682,16 +1691,67 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         genome_map_resolution: window size (bp) for reporting number of reads aligned
 
     returns:
-        final_assignment_filename: filename of final assignments
-        r1_read_ids_for_crispresso: dict of readID=>cut assignment
+        final_assignment_filename: filename of final assignments for each read id pair
+        r1_read_ids_for_crispresso: dict of readID=>list of cutIDs for that read
+        r1_cut_counts_for_crispresso: dict of cutID=>count how many times each cut was seen -- when we iterate through the reads (fastq) in the next step, we check to see that the cut was seen above a threshold before printing those reads. The count is stored in this dict.
         r2_read_ids_for_crispresso: dict of readID=>cut assignment
+        r2_cut_points_for_crispresso
     """
+
+    final_file = root + '.final_assignments'
+    info_file = root + '.info'
+    #check to see if this anaylsis has been completed previously
+    if os.path.isfile(info_file) and os.path.isfile(final_file):
+        read_total_read_count = 0 #how many lines we read in this time by reading the final assignments file
+        previous_total_read_count = -1 #how many lines were reported to be read the preivous time (if the analysis was completed previously)
+        with open (info_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().strip().split("\t")
+            if len(line_els) == 3:
+                (previous_total_read_count_str,final_duplicate_count_str,final_observed_cuts_count_str) = line_els
+                previous_total_read_count = int(previous_total_read_count_str)
+                final_duplicate_count = int(final_duplicate_count_str)
+                final_observed_cuts_count = int(final_observed_cuts_count_str)
+
+        if previous_total_read_count > 0:
+            #read final assignments from file
+            r1_read_ids_for_crispresso = defaultdict(list)
+            r1_cut_counts_for_crispresso = defaultdict(int)
+            r2_read_ids_for_crispresso = defaultdict(list)
+            r2_cut_counts_for_crispresso = defaultdict(int)
+            with open (final_file,'r') as fin:
+                head_line = fin.readline().strip()
+                head_line_els = head_line.split("\t")
+                read_total_read_count = 0
+                r1_final_cut_ind = 15
+                r2_final_cut_ind = 17
+                #make sure header matches
+                if len(head_line_els) == 18 and head_line_els[r1_final_cut_ind] == "r1_final_cut_keys" and head_line_els[r2_final_cut_ind] == "r2_final_cut_keys":
+                    #if header matches, read file
+                    for line in fin:
+                        read_total_read_count += 1
+                        line_els = line.rstrip("\r\n").split("\t")
+                        if line_els[r1_final_cut_ind] != "NA":
+                            r1_keys = line_els[r1_final_cut_ind].split(",")
+                            r1_read_ids_for_crispresso[0] = r1_keys
+                            for key in r1_keys:
+                                r1_cut_counts_for_crispresso[key] += 1
+                        if line_els[r2_final_cut_ind] != "NA":
+                            r2_keys = line_els[r2_final_cut_ind].split(",")
+                            r2_read_ids_for_crispresso[0] = r2_keys
+                            for key in r2_keys:
+                                r2_cut_counts_for_crispresso[key] += 1
+
+                if previous_total_read_count == read_total_read_count:
+                    logging.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' reads')
+                    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso
+                else:
+                    logging.info('Read ' + str(previous_total_read_count) + ' reads previously, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
 
     logging.info('Making final read assignments')
 
     sorted_r1_file = root + '.r1.sorted'
     sorted_r2_file = root + '.r2.sorted'
-    final_file = root + '.final_assignments'
     final_file_tmp = root + '.final_assignments.tmp'
     cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort > ' + sorted_r1_file
     logging.debug('r1 cat command: ' + str(cat_and_sort_cmd))
@@ -1893,12 +1953,18 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     r2_cut_point_ind = cut_point_ind + ind_offset
     duplicate_ind = 12
     with open(final_file_tmp,'r') as fin, open(final_file,'w') as fout:
+        fout.write("\t".join(['r1_id','r1_source','r1_classification','r1_annotation','r1_alignment','r1_cut_point','r2_id','r2_source','r2_classification','r2_annotation','r2_alignment','r2_cut_point','read_duplicate_status','read_duplicate_of','r1_final_cut_points','r1_final_cut_keys','r2_final_cut_points','r2_final_cut_keys'])+"\n")
         for line in fin:
             line = line.strip()
             final_total_count += 1
             line_els = line.split("\t")
             if line_els[duplicate_ind] == "duplicate":
                 final_duplicate_count += 1
+                r1_cut_points_str = "NA"
+                r1_cut_keys_str = "NA"
+                r2_cut_points_str = "NA"
+                r2_cut_keys_str = "NA"
+                fout.write("%s\t%s\t%s\t%s\t%s\n"%(line,r1_cut_points_str,r1_cut_keys_str,r2_cut_points_str,r2_cut_keys_str))
                 continue
             r1_classification = line_els[r1_classification_ind]
             r1_cut_points = line_els[r1_cut_point_ind]
@@ -2089,12 +2155,17 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         r2_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
             #finished r2
 
+            r1_cut_points_str = ",".join(r1_associated_cut_points) if r1_associated_cut_points else "NA"
+            r1_cut_keys_str = ",".join(r1_cut_keys) if r1_cut_keys else "NA"
+            r2_cut_points_str = ",".join(r2_associated_cut_points) if r2_associated_cut_points else "NA"
+            r2_cut_keys_str = ",".join(r2_cut_keys) if r2_cut_keys else "NA"
 
-            fout.write("%s\t%s\t%s\t%s\t%s\n"%(line,",".join(r1_associated_cut_points),",".join(r1_cut_keys),",".join(r2_associated_cut_points),",".join(r2_cut_keys)))
+            fout.write("%s\t%s\t%s\t%s\t%s\n"%(line,r1_cut_points_str,r1_cut_keys_str,r2_cut_points_str,r2_cut_keys_str))
 
     logging.info('Deduplicated %d/%d reads (kept %d)'%(final_duplicate_count,final_total_count,final_total_count-final_duplicate_count))
 
 
+    final_observed_cuts_count = 0
     r1_cut_report = root + ".r1_cut_report.txt"
     r2_cut_report = root + ".r2_cut_report.txt"
     with open (r1_cut_report,'w') as r1_cut_out, open(r2_cut_report,'w') as r2_cut_out:
@@ -2104,6 +2175,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             if chrom == "*":
                 continue
             for pos in sorted(final_cut_points_by_chr[chrom]):
+                final_observed_cuts_count += 1
                 cut_key = chrom + ":" + str(pos)
                 known_str = 'Novel'
                 if chrom in known_cut_points_by_chr and pos in known_cut_points_by_chr[chrom]:
@@ -2127,7 +2199,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     r2_uncut_frag_counts[cut_key],
                     known_str))
 
-    logging.info('Wrote cut reports ' + r1_cut_report + ' ' + r2_cut_report)
+    logging.info('Wrote cut reports ' + r1_cut_report + ' ' + r2_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
 
     #r1 translocations
     tx_keys = sorted(r1_translocation_cut_counts.keys())
@@ -2175,8 +2247,10 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     r2_aln_pos_custom_aln_counts_by_chr[chrom][pos],
                     r2_aln_pos_frag_counts_by_chr[chrom][pos]))
 
+    with open(info_file,'w') as fout:
+        fout.write("\t".join(['total_reads_processed','duplicate_reads_discarded','unique_cuts_observed_count'])+"\n")
+        fout.write("\t".join(str(x) for x in [final_total_count,final_duplicate_count,final_observed_cuts_count])+"\n")
 
-    print('Finished final assignments')
     return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso
 
 
@@ -2692,7 +2766,6 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
             #done with last one
 
-    logging.info("debug read frags mapped count: " + str(frags_mapped_count))
     logging.info("Found %d translocations, %d large deletions, and %d unidentified reads"%(translocation_count,large_deletion_count,unidentified_count))
 
     frags_aligned_chrs_root = root + ".chrs"
@@ -2821,6 +2894,8 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         plus_line = f_in.readline()
         qual_line = f_in.readline().strip()
 
+        print('read line ' + id_line)
+
         if not qual_line : break
 
         total_read_count+=1
@@ -2829,10 +2904,15 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         read_id = id_line_els[0]
 
         if read_id not in read_ids_for_crispresso:
+            print('read ids is: ' + str(read_ids_for_crispresso))
+            asdf()
             continue
 
 
         for this_cut in read_ids_for_crispresso[read_id]:
+            print('this cut: ' + this_cut)
+            print('count: ' + str(cut_counts_for_crispresso[this_cut]))
+            print('cutoff: ' + str(crispresso_cutoff))
 
             if '*' in this_cut:
                 continue
@@ -2928,282 +3008,6 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 
     return (crispresso_infos,crispresso_commands)
 
-def prep_crispresso2_global(root,cuts,genome,genome_len_file,crispresso_cutoff,aligned_locs,av_read_length,genome_mapped_bam_file,run_crispresso_genome_sites,crispresso_min_aln_score,samtools_command,crispresso_command,query_bp_around_cut):
-    """
-    Prepares globally-aligned data for crispresso2
-    Frequently-aligned locations with a min number of reads (crispresso_cutoff) are identified
-    Reads from these locations are extracted and prepared for analysis by CRISPResso2
-
-    params:
-        root: root for written files
-        final_assignments_file: file with final assignments for each read
-        cuts: array of cut locations -- these will be pulled out for crispresso analysis
-        target_info: hash of information for each target_name
-            target_info[target_name]['sequence']: fasta sequence of artificial target
-            target_info[target_name]['class']: class of targets (corresponding to targets)
-            target_info[target_name]['cut1_chr']: cut information for cut 1
-            target_info[target_name]['cut1_site']
-            target_info[target_name]['cut2_chr']: cut information for cut 2
-            target_info[target_name]['cut2_site']
-            target_info[target_name]['query_pos']: genomic start of query (bp)
-            target_info[target_name]['query_start']: bp after which query starts (in case of padding)
-            target_info[target_name]['query_end']
-            target_info[target_name]['target_cut_idx']: bp of cut in target
-            target_info[target_name]['target_cut_str']: string designating the cut site, as well as the direction each side of the read comes off of the cut site e.g. w-chr1:50_chr2:60+c means that the left part of the read started on the left side (designated by the -) watson-strand of chr1:50, and the right part of the read started at chr2:60 and extended right on the crick-strand (complement of reference)
-
-        genome: path to genome fa file
-        genome_len_file: path to tab-sep file with lengths of chrs in genome (ends with .fai)
-        crispresso_cutoff: min number of reads at site for crispresso2 processing
-        aligned_locs: hash of locations aligned to on each chromosome aligned_locs[chr][position] = count
-        av_read_length: length of average sequencing read in sample
-        genome_mapped_bam_file: bam of reads mapped to genome
-        run_crispresso_genome_sites: boolean of whether to run crispresso on highly-aligned genomic locations (if false, crispresso will be run only at cut sites)
-        crispresso_min_aln_score: minimum score for reads to align to amplicons
-        samtools_command: location of samtools to run
-        crispresso_command: location of crispresso to run
-        query_bp_around_cut: extract reads that are within this bp of the cut site
-
-    returns:
-        cut_infos
-        crispresso_infos: metadata about each crispresso run
-            tuple of: name, chr, start, end, readCount, amplicon
-        crispresso_commands: list of crispresso commands to run
-        genome_read_count_at_cuts: dict for each target name of the number of reads discovered at that cut site (to be added to Linear class)
-    """
-    logging.info('Preparing global alignments for CRISPResso2')
-
-    chrom_lens = {}
-    chroms = []
-    with open(genome_len_file,'r') as gfile:
-        for line in gfile:
-            line_els = line.split("\t")
-            line_chrom = line_els[0]
-            line_len = line_els[1]
-            chrom_lens[line_chrom] = line_len
-            chroms.append(line_chrom)
-
-    crispresso_infos = [] #information about each crispresso_name
-    crispresso_commands = []
-
-    if not os.path.isdir(root+'.CRISPResso_data'):
-        os.mkdir(root+'.CRISPResso_data')
-
-    genome_read_count_at_cuts = {}
-    total_genome_read_count_at_cuts = 0
-    for i,cut in enumerate(cuts):
-        cut_els = cut.split(":")
-        cut_chrom = cut_els[0]
-        cut_loc = int(cut_els[1])
-        cut_query_start = cut_loc - query_bp_around_cut #pull out reads in this region
-        cut_query_end = cut_loc + query_bp_around_cut
-        cut_start = cut_loc - av_read_length #define amplicon
-        cut_end = cut_loc + av_read_length
-
-        target_name = 'CRISPRlungo_WT'+str(i)
-        name = target_name + "_" + cut_chrom + "_" + str(cut_loc)
-        logging.debug('Analyzing cut target in genomic alignment ' + str(i) + ': ' + name)
-
-        # -F 260 - filter read unmapped (4) or not primary alignment (240)
-        read_count_command = '%s view -F 260 -c %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,cut_chrom,cut_query_start,cut_query_end)
-        logging.debug(read_count_command)
-        read_count = int(subprocess.check_output(read_count_command,shell=True).strip())
-        logging.debug('got ' + str(read_count) + ' reads')
-        total_genome_read_count_at_cuts += read_count
-        genome_read_count_at_cuts[target_name] = read_count
-
-        if read_count > crispresso_cutoff:
-            amp_seq = subprocess.check_output(
-                '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chrom,cut_start,cut_end),shell=True).decode('utf-8').strip()
-            crispresso_infos.append((name,cut_chrom,cut_start,cut_end,amp_seq))
-
-            read_count = 0
-            reads_file = root + ".CRISPResso_data/"+name+".fastq"
-            with open(reads_file,'w') as reads_out:
-                for line in read_command_output('%s view -F 260 %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,cut_chrom,cut_query_start,cut_query_end)):
-                    if line.strip() == "": break
-                    line_els = line.split("\t")
-                    seq = line_els[9]
-                    qual = line_els[10]
-                    read_id = line_els[0]
-                    reads_out.write("%s\n%s\n+\n%s\n"%(read_id,seq,qual))
-                    read_count += 1
-            crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,root + '.CRISPResso_runs',name,crispresso_min_aln_score,amp_seq,reads_file,reads_file)
-            crispresso_commands.append(crispresso_cmd)
-
-    logging.info('Got %d reads aligned in genome-wide alignment to cut sites.'%total_genome_read_count_at_cuts)
-
-    #if we should run crispresso on highly-aligned genomic sites
-    if run_crispresso_genome_sites:
-        for chrom in aligned_locs.keys():
-            starts = aligned_locs[chrom].keys()
-            if len(starts) == 0:
-                continue
-            starts.sort()
-            big_start_locs = [] #these regions can get pretty big if multiple sites get them
-            big_end_locs = []
-            last_ind = 0
-            for start in starts:
-                count = aligned_locs[chrom][start]
-                if count > crispresso_cutoff:
-                    if len(big_start_locs) == 0:
-                        big_start_locs = [start]
-                        big_end_locs = [start + av_read_length]
-                    elif big_end_locs[last_ind] > start:
-                        big_end_locs[last_ind] = start + av_read_length
-                    else:
-                        last_ind += 1
-                        big_start_locs.append(start)
-                        big_end_locs.append(start + av_read_length)
-            if len(big_start_locs) == 0:
-                continue
-
-            #split big regions into smaller av_read_len-sized regions for analysis
-            region_buffer = 30 #how much longer than av_read_len to allow amplicons to be
-            start_locs = []
-            end_locs = []
-            for i in range(len(big_start_locs)):
-                if big_end_locs[i] - big_start_locs[i] > av_read_length+region_buffer:
-                    for j in range(big_start_locs[i],big_end_locs[i]-(av_read_length+region_buffer),int(av_read_length-region_buffer)):
-                        start_locs.append(j)
-                        end_locs.append(j+av_read_length+region_buffer)
-                    start_locs.append(big_end_locs[i] - (av_read_length+region_buffer))
-                    end_locs.append(big_end_locs[i])
-                else:
-                    start_locs.append(big_start_locs[i])
-                    end_locs.append(big_end_locs[i])
-
-
-            for i in range(len(start_locs)):
-                name = chrom + "_" + str(start_locs[i])
-                amp_seq = subprocess.check_output(
-                        '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chrom,start_locs[i],end_locs[i]),shell=True).decode('utf-8').strip()
-
-                read_count = 0
-                reads_file = root + ".CRISPResso_data/"+name+".fastq"
-                with open(reads_file,'w') as reads_out:
-                    for line in read_command_output('%s view -F 260 %s %s:%d-%d'%(samtools_command,genome_mapped_bam_file,chrom,start_locs[i],end_locs[i])):
-                        if line.strip() == "": break
-                        line_els = line.split("\t")
-                        seq = line_els[9]
-                        qual = line_els[10]
-                        read_id = line_els[0]
-                        reads_out.write("%s\n%s\n+\n%s\n"%(read_id,seq,qual))
-                        read_count += 1
-                crispresso_infos.append((name,chrom,start_locs[i],end_locs[i],read_count,amp_seq))
-                crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,root + '.CRISPResso_runs',name,crispresso_min_aln_score,amp_seq,reads_file,reads_file)
-                crispresso_commands.append(crispresso_cmd)
-    logging.info('Created ' + str(len(crispresso_commands)) + ' CRISPResso commands from global alignment')
-    return (crispresso_infos,crispresso_commands,genome_read_count_at_cuts)
-
-def prep_crispresso2_artificial_targets(root,genome_len_file,crispresso_cutoff,custom_index_fasta,custom_mapped_bam_file,target_names,target_info,genome_read_count_at_cuts,crispresso_min_aln_score,samtools_command='samtools',crispresso_command='CRISPResso'):
-    """
-    Prepares data aligned to artificial targets for analysis with crispresso2
-    Frequently-aligned targets with a min number of reads (crispresso_cutoff) are identified
-    Reads from these locations are extracted and prepared for analysis by CRISPResso2
-
-    params:
-        root: root for written files
-        genome_len_file: path to tab-sep file with lengths of chrs in genome (ends with .fai)
-        crispresso_cutoff: min number of reads at site for crispresso2 processing
-        custom_index_fasta: fasta of artificial targets
-        custom_mapped_bam_file: aligned reads aligning to artificial targets
-        target_names: list of artificial target names
-        target_info: hash of information for each target_name
-            target_info[target_name]['sequence']: fasta sequence of artificial target
-            target_info[target_name]['class']: class of targets (corresponding to targets)
-            target_info[target_name]['cut1_chr']: cut information for cut 1
-            target_info[target_name]['cut1_site']
-            target_info[target_name]['cut2_chr']: cut information for cut 2
-            target_info[target_name]['cut2_site']
-            target_info[target_name]['query_pos']: genomic start of query (bp)
-            target_info[target_name]['query_start']: bp after which query starts (in case of padding)
-            target_info[target_name]['query_end']
-            target_info[target_name]['target_cut_idx']: bp of cut in target
-            target_info[target_name]['target_cut_str']: string designating the cut site, as well as the direction each side of the read comes off of the cut site e.g. w-chr1:50_chr2:60+c means that the left part of the read started on the left side (designated by the -) watson-strand of chr1:50, and the right part of the read started at chr2:60 and extended right on the crick-strand (complement of reference)
-        genome_read_count_at_cuts: number of reads discovered at cut sites in genomic alignment (to be added to 'Linear' class category)
-        crispresso_min_aln_score: minimum score for reads to align to amplicons
-        samtools_command: location of samtools to run
-        crispresso_command: location of crispresso to run
-
-    returns:
-        crispresso_infos: array of metadata information for CRISPResso
-            tuple of: name, chr, start, end, readCount, amplicon
-        crispresso_commands: array of commands to run CRISPResso
-    """
-    logging.info('Preparing artificial targets for CRISPResso2')
-
-    #first, add the counts from the genome alignment
-    #these should all probably be 'Linear', but I'm leaving this generalized here in case things change
-    class_counts = {}
-    for target_name in genome_read_count_at_cuts:
-        custom_class = target_info[target_name]['class']
-        if custom_class not in class_counts:
-            class_counts[custom_class] = 0
-        class_counts[custom_class] += genome_read_count_at_cuts[target_name]
-
-    crispresso_commands = []
-    crispresso_infos = []
-
-    target_summary_file = root + '.customTargetAlignment.summary.txt'
-    with open (target_summary_file,'w') as out:
-        out.write('%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%('target_name','target_class','total_aligned','aligned_to_artificial_targets','aligned_to_genome','cut1_chr','cut1_site','cut2_chr','cut2_site'))
-        for i,target_name in enumerate(target_names):
-            start_ind = target_info[target_names[i]]['query_start']
-            end_ind = target_info[target_names[i]]['query_end']
-
-            logging.debug('Analyzing target ' + str(i) + ': ' + target_name)
-            logging.debug('%s view -F 260 -c %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind))
-            read_count = int(subprocess.check_output('%s view -F 260 -c %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind),shell=True).strip())
-            logging.debug('got ' + str(read_count) + ' reads')
-
-            custom_chr_class = target_info[target_name]['class']
-            if custom_chr_class not in class_counts:
-                class_counts[custom_chr_class] = 0
-            class_counts[custom_chr_class] += read_count
-
-            genome_aligned = 0
-            if target_name in genome_read_count_at_cuts:
-                genome_aligned = genome_read_count_at_cuts[target_name]
-            total_aligned = genome_aligned + read_count
-            out.write('%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n'%(target_name,target_info[target_name]['class'],total_aligned,read_count,genome_aligned,target_info[target_name]['cut1_chr'],str(target_info[target_name]['cut1_site']),target_info[target_name]['cut2_chr'],str(target_info[target_name]['cut2_site'])))
-
-            if read_count > crispresso_cutoff:
-                amp_seq = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,custom_index_fasta,target_name,start_ind,end_ind),shell=True).decode('utf-8').strip()
-
-                reads_file = root + ".crispresso."+target_name+".fastq"
-                printed_read_count = 0
-                with open(reads_file,'w') as reads_out:
-                    for line in read_command_output('%s view -F 260 %s %s:%d-%d'%(samtools_command,custom_mapped_bam_file,target_name,start_ind,end_ind)):
-                        if line.strip() == "": break
-                        line_els = line.split("\t")
-                        seq = line_els[9]
-                        qual = line_els[10]
-                        read_id = line_els[0]
-                        reads_out.write("%s\n%s\n+\n%s\n"%(read_id,seq,qual))
-                        printed_read_count += 1
-
-                loc1 = target_info[target_name]['cut1_chr'] + "_" + str(target_info[target_name]['cut1_site'])
-                loc2 = target_info[target_name]['cut2_chr'] + "_" + str(target_info[target_name]['cut2_site'])
-                crispresso_infos.append((target_name,target_name,loc1,loc2,read_count,amp_seq))
-                crispresso_commands.append("%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,root+'.CRISPResso_runs',target_name,crispresso_min_aln_score,amp_seq,reads_file,reads_file))
-
-    class_counts_root = root + ".class_counts"
-    keys = sorted(class_counts.keys())
-    vals = [str(class_counts[key]) for key in keys]
-    with open(class_counts_root+".txt",'w') as class_out:
-        class_out.write("\t".join(keys)+"\n")
-        class_out.write("\t".join(vals)+"\n")
-
-
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.pie(vals,labels=[keys[idx]+"\n("+str(vals[idx])+")" for idx in range(len(keys))],autopct="%1.2f%%")
-    plt.savefig(class_counts_root+".pdf",pad_inches=1,bbox_inches='tight')
-
-    logging.info('Created ' + str(len(crispresso_commands)) + ' CRISPResso commands from artificial targets')
-    return (crispresso_infos,crispresso_commands)
-
 def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
     """
     Runs CRISPResso2 commands and aggregates output
@@ -3232,8 +3036,6 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
     else:
             import cPickle as cp #python 2.7
     # end nasty pickle part
-
-
 
     crispresso_results = {}
     crispresso_results['run_names'] = []
@@ -3304,16 +3106,6 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
             crispresso_info_file.write("\t".join([str(x) for x in crispresso_infos[idx]])+"\t"+"\t".join([str(x) for x in new_vals])+"\n")
         return crispresso_results
 
-def cleanup(root):
-    """
-    Deletes intermediate files
-
-    params:
-        root: root for written files
-    """
-    delete_result = subprocess.check_output('rm -rf ' + root + '.customIndex.fa.*', stderr=subprocess.STDOUT,shell=True)
-    logging.debug('Deleted bowtie indexes ' + delete_result)
-
 class PlotObject:
     """
     Holds information for plots for future output, namely:
@@ -3329,6 +3121,30 @@ class PlotObject:
         self.label = plot_label
         self.datas = plot_datas
         self.order = plot_order
+
+    def to_json(self):
+        obj = {
+                'plot_name':self.name,
+                'plot_title':self.title,
+                'plot_label':self.label,
+                'plot_datas':self.datas,
+                'plot_order':self.order
+                }
+        obj_str = json.dumps(obj,separators=(',',':'))
+        return obj_str
+
+    #construct from a json string
+    @classmethod
+    def from_json(cls, json_str):
+        obj = json.loads(json_str)
+        return cls(plot_name=obj['plot_name'],
+                plot_title=obj['plot_title'],
+                plot_label=obj['plot_label'],
+                plot_datas=obj['plot_datas'],
+                plot_order=obj['plot_order'])
+
+
+
 
 def make_report(report_file,report_name,crisprlungo_folder,
             crispresso_run_names,crispresso_sub_html_files,
