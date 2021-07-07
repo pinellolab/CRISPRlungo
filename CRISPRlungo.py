@@ -75,36 +75,6 @@ def main():
             add_non_primer_cut_targets=settings['add_non_primer_cut_targets'],
             samtools_command=settings['samtools_command'])
 
-    if (False):
-        print('DEBUGGGGG')
-        final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso = make_final_read_assignments(
-                root = settings['root']+'.final',
-                r1_assignment_files = ['testUmi.settings.CRISPRlungo.genomeAlignment.assignments_r1.txt','testUmi.settings.CRISPRlungo.frags.assignments_r1.txt','testUmi.settings.CRISPRlungo.r1.customTargetAlignment.assignments.txt'],
-                r2_assignment_files = ['testUmi.settings.CRISPRlungo.genomeAlignment.assignments_r2.txt','testUmi.settings.CRISPRlungo.frags.assignments_r2.txt','testUmi.settings.CRISPRlungo.r2.customTargetAlignment.assignments.txt'],
-                cut_sites = cut_sites,
-                target_info = target_info
-                )
-
-        # Prepare CRISPResso runs
-        (genome_crispresso_infos, genome_crispresso_commands
-            ) = prep_crispresso2(
-                    root = settings['root'],
-                    input_fastq_file = settings['fastq_r1'],
-                    read_ids_for_crispresso = r1_read_ids_for_crispresso,
-                    cut_counts_for_crispresso = r1_cut_counts_for_crispresso,
-                    av_read_length = av_read_length,
-                    genome = settings['genome'],
-                    genome_len_file = settings['genome']+'.fai',
-                    crispresso_cutoff = settings['crispresso_cutoff'],
-                    crispresso_min_aln_score = settings['crispresso_min_aln_score'],
-                    samtools_command=settings['samtools_command'],
-                    crispresso_command=settings['crispresso_command'],
-                    )
-        print('DONEEEEE')
-        exit()
-
-
-
     custom_index_fasta = make_target_index(
                     root = settings['root']+'.customTargets',
                     target_names = target_names,
@@ -223,6 +193,7 @@ def main():
             cut_sites = cut_sites,
             target_info = target_info
             )
+    print('read ids for crispresso: ' + str(r1_read_ids_for_crispresso))
 
     (genome_crispresso_infos, genome_crispresso_commands
         ) = prep_crispresso2(
@@ -1636,28 +1607,30 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
             plot_datas = [(reference_name.capitalize() + 'Alignment Summary',chr_aln_plot_root + ".txt")]
             )
 
-    tlen_plot_root = root + ".insertSizes"
-    keys = sorted(mapped_tlens.keys())
-    vals = [mapped_tlens[key] for key in keys]
-    with open(tlen_plot_root+".txt","w") as fout:
-        fout.write('insertSize\tnumReads\n')
-        for key in keys:
-            fout.write(str(key) + '\t' + str(mapped_tlens[key]) + '\n')
+    tlen_plot_obj = None
+    if fastq_r2 is not None: #paired-end reads
+        tlen_plot_root = root + ".insertSizes"
+        keys = sorted(mapped_tlens.keys())
+        vals = [mapped_tlens[key] for key in keys]
+        with open(tlen_plot_root+".txt","w") as fout:
+            fout.write('insertSize\tnumReads\n')
+            for key in keys:
+                fout.write(str(key) + '\t' + str(mapped_tlens[key]) + '\n')
 
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.bar(keys,vals)
-    ax.set_ylabel('Number of Reads')
-    ax.set_title('Insert size')
-    plt.savefig(tlen_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(tlen_plot_root+".png",pad_inches=1,bbox_inches='tight')
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.bar(keys,vals)
+        ax.set_ylabel('Number of Reads')
+        ax.set_title('Insert size')
+        plt.savefig(tlen_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(tlen_plot_root+".png",pad_inches=1,bbox_inches='tight')
 
-    tlen_plot_obj = PlotObject(
-            plot_name = tlen_plot_root,
-            plot_title = reference_name.capitalize() + ' Alignment Insert Size Summary',
-            plot_label = 'Bar plot showing insert size of reads aligned to ' + reference_name,
-            plot_datas = [(reference_name.capitalize() + ' Alignment Insert Size Summary',tlen_plot_root + ".txt")]
-            )
+        tlen_plot_obj = PlotObject(
+                plot_name = tlen_plot_root,
+                plot_title = reference_name.capitalize() + ' Alignment Insert Size Summary',
+                plot_label = 'Bar plot showing insert size of reads aligned to ' + reference_name,
+                plot_datas = [(reference_name.capitalize() + ' Alignment Insert Size Summary',tlen_plot_root + ".txt")]
+                )
 
     aligned_count = read_count - (unmapped_r1_count + unmapped_r2_count)
 
@@ -1668,9 +1641,13 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
         fout.write("\t".join([str(x) for x in ["read_count","r1_count","r2_count","unmapped_r1_count","unmapped_r2_count","aligned_count","r1_assignments_file","r2_assignments_file","unmapped_fastq_r1_file","unmapped_fastq_r2_file","mapped_bam_file"]])+"\n")
         fout.write("\t".join([str(x) for x in [read_count,r1_count,r2_count,unmapped_r1_count,unmapped_r2_count,aligned_count,r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,mapped_bam_file]])+"\n")
 
-        chr_aln_plot_obj_str = chr_aln_plot_obj.to_json()
+        chr_aln_plot_obj_str = "None"
+        if chr_aln_plot_obj is not None:
+            chr_aln_plot_obj_str = chr_aln_plot_obj.to_json()
         fout.write(chr_aln_plot_obj_str+"\n")
-        tlen_plot_obj_str = tlen_plot_obj.to_json()
+        tlen_plot_obj_str = "None"
+        if tlen_plot_obj is not None:
+            tlen_plot_obj_str = tlen_plot_obj.to_json()
         fout.write(tlen_plot_obj_str+"\n")
 
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
@@ -1733,12 +1710,12 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         line_els = line.rstrip("\r\n").split("\t")
                         if line_els[r1_final_cut_ind] != "NA":
                             r1_keys = line_els[r1_final_cut_ind].split(",")
-                            r1_read_ids_for_crispresso[0] = r1_keys
+                            r1_read_ids_for_crispresso[line_els[0]] = r1_keys
                             for key in r1_keys:
                                 r1_cut_counts_for_crispresso[key] += 1
                         if line_els[r2_final_cut_ind] != "NA":
                             r2_keys = line_els[r2_final_cut_ind].split(",")
-                            r2_read_ids_for_crispresso[0] = r2_keys
+                            r2_read_ids_for_crispresso[line_els[0]] = r2_keys
                             for key in r2_keys:
                                 r2_cut_counts_for_crispresso[key] += 1
 
@@ -2299,6 +2276,33 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         unidentified_count: number of reads that couldn't be identified as translocations
         frags_plot_obj: plot object summarizing fragments
     """
+    info_file = root + '.info'
+    if os.path.isfile(info_file):
+        frags_mapped_count = -1
+        with open (info_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().strip().split("\t")
+            if len(line_els) == 6:
+                (r1_assignments_file_str,r2_assignments_file_str,translocation_count_str,large_deletion_count_str,unidentified_count_str,frags_mapped_count_str) = line_els
+                r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
+                r2_assignments_file = None if r2_assignments_file_str == "None" else r2_assignments_file_str
+                translocation_count  = int(translocation_count_str)
+                large_deletion_count  = int(large_deletion_count_str)
+                unidentified_count  = int(unidentified_count_str)
+                frags_mapped_count  = int(frags_mapped_count_str)
+
+                frags_plot_obj_str = fin.readline().strip()
+                frags_plot_obj = None
+                if frags_plot_obj_str != "" and frags_plot_obj_str != "None":
+                    frags_plot_obj = PlotObject.from_json(frags_plot_obj_str)
+
+                if frags_mapped_count > 0:
+                    logging.info('Using previously-processed fragment analysis for ' + str(frags_mapped_count) + ' mapped fragments')
+                    logging.info("Found %d translocations, %d large deletions, and %d unidentified reads"%(translocation_count,large_deletion_count,unidentified_count))
+                    return (r1_assignments_file,r2_assignments_file,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
+                else:
+                    logging.info('Could not recover previously-analyzed fragments. Reanalyzing.')
+
     logging.info('Creating read fragments')
 
     unmapped_ids = {}
@@ -2830,6 +2834,12 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     val = translocation_table[key][key2]
                 line += "\t"+str(val)
             fout.write(line+"\n")
+
+    with open(info_file,'w') as fout:
+        fout.write("\t".join(['r1_assignments_file','r2_assignments_file','translocation_count','large_deletion_count','unidentified_count','read_total'])+"\n")
+        fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,translocation_count,large_deletion_count,unidentified_count,frags_mapped_count]])+"\n")
+        frags_plot_obj_str = frags_plot_obj.to_json()
+        fout.write(frags_plot_obj_str+"\n")
 
     return (r1_assignments_file,r2_assignments_file,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
 
