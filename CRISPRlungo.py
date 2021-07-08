@@ -12,6 +12,8 @@ import os
 import re
 import subprocess
 import sys
+from CRISPResso2 import CRISPRessoMultiProcessing
+from CRISPResso2 import CRISPRessoShared
 
 #todo: validate with R2
 
@@ -80,7 +82,7 @@ def main():
                     target_names = target_names,
                     target_info = target_info,
                     bowtie2_command=settings['bowtie2_command'],
-                    bowtie2_threads = settings['bowtie2_threads'],
+                    bowtie2_threads = settings['n_processes'],
                     )
 
     reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
@@ -126,7 +128,7 @@ def main():
                 reference_name = 'genome',
                 target_info = target_info,
                 bowtie2_command = settings['bowtie2_command'],
-                bowtie2_threads = settings['bowtie2_threads'],
+                bowtie2_threads = settings['n_processes'],
                 samtools_command = settings['samtools_command'],
                 keep_intermediate = settings['keep_intermediate']
                 )
@@ -146,7 +148,7 @@ def main():
                     reference_name='custom targets',
                     target_info = target_info,
                     bowtie2_command=settings['bowtie2_command'],
-                    bowtie2_threads=settings['bowtie2_threads'],
+                    bowtie2_threads=settings['n_processes'],
                     samtools_command=settings['samtools_command'],
                     keep_intermediate = settings['keep_intermediate']
                     )
@@ -163,7 +165,7 @@ def main():
                         reference_name='custom targets',
                         target_info = target_info,
                         bowtie2_command=settings['bowtie2_command'],
-                        bowtie2_threads=settings['bowtie2_threads'],
+                        bowtie2_threads=settings['n_processes'],
                         samtools_command=settings['samtools_command'],
                         keep_intermediate = settings['keep_intermediate']
                         )
@@ -179,7 +181,7 @@ def main():
                 fragment_size = settings['fragment_size'],
                 fragment_step_size = settings['fragment_step_size'],
                 bowtie2_command = settings['bowtie2_command'],
-                bowtie2_threads = settings['bowtie2_threads'],
+                bowtie2_threads = settings['n_processes'],
                 samtools_command = settings['samtools_command'],
                 )
     r1_assignment_files.append(frag_r1_assignments)
@@ -193,7 +195,6 @@ def main():
             cut_sites = cut_sites,
             target_info = target_info
             )
-    print('read ids for crispresso: ' + str(r1_read_ids_for_crispresso))
 
     (genome_crispresso_infos, genome_crispresso_commands
         ) = prep_crispresso2(
@@ -216,7 +217,8 @@ def main():
     crispresso_results = run_and_aggregate_crispresso(
                 root = settings['root'],
                 crispresso_infos = crispresso_infos,
-                crispresso_commands = crispresso_commands
+                crispresso_commands = crispresso_commands,
+                n_processes=settings['n_processes']
                 )
 
     labels = ["Input Reads","Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Unidentified"]
@@ -344,7 +346,7 @@ def parse_settings(args):
 
     settings['samtools_command'] = settings['samtools_command'] if 'samtools_command' in settings else 'samtools'
     settings['bowtie2_command'] = settings['bowtie2_command'] if 'bowtie2_command' in settings else 'bowtie2'
-    settings['bowtie2_threads'] = int(settings['bowtie2_threads']) if 'bowtie2_threads' in settings else 1
+    settings['n_processes'] = int(settings['n_processes']) if 'n_processes' in settings else 1
     settings['crispresso_command'] = settings['crispresso_command'] if 'crispresso_command' in settings else 'CRISPResso'
     settings['casoffinder_command'] = settings['casoffinder_command'] if 'casoffinder_command' in settings else 'cas-offinder'
 
@@ -2904,25 +2906,17 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         plus_line = f_in.readline()
         qual_line = f_in.readline().strip()
 
-        print('read line ' + id_line)
-
         if not qual_line : break
 
         total_read_count+=1
 
         id_line_els = id_line.split("\t")
-        read_id = id_line_els[0]
+        read_id = id_line_els[0][1:] #chop off leading @
 
         if read_id not in read_ids_for_crispresso:
-            print('read ids is: ' + str(read_ids_for_crispresso))
-            asdf()
             continue
 
-
         for this_cut in read_ids_for_crispresso[read_id]:
-            print('this cut: ' + this_cut)
-            print('count: ' + str(cut_counts_for_crispresso[this_cut]))
-            print('cutoff: ' + str(crispresso_cutoff))
 
             if '*' in this_cut:
                 continue
@@ -2931,12 +2925,12 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
                 continue
 
             if this_cut not in cut_names:
-                this_name = this_cut.replace(" ","_").replace("~","_")
-                cut_names[this_cut] = this_name
-            this_name = cut_names[this_cut]
+                cut_name = this_cut.replace(" ","_").replace("~","_").replace(':','_').replace("+","p").replace("-","m")
+                cut_names[this_cut] = cut_name
+            cut_name = cut_names[this_cut]
 
             printed_read_count += 1
-            reads_file = os.path.join(root + ".CRISPResso_data",name+".fastq")
+            reads_file = os.path.join(root + ".CRISPResso_data",cut_name+".fastq")
             if reads_file not in filehandles:
                 fh = open(reads_file,'w')
                 filehandles[reads_file] = fh
@@ -2950,11 +2944,12 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         cut_els = cut.split(" ")
         cut_type = " ".join(cut_els[0:-1]) #Large deltion is two words..
         cut_loc = cut_els[-1]
+        cut_name = cut_names[cut]
         amp_seq = None
         if cut_type == "Linear":
             cut_chr,cut_pos = cut_loc.split(":")
-            amp_start = cut_pos-amp_half_length
-            amp_end = cut_pos+amp_half_length
+            amp_start = int(cut_pos)-amp_half_length
+            amp_end = int(cut_pos)+amp_half_length
             amp_seq = subprocess.check_output(
                 '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,amp_start,amp_end),shell=True).decode('utf-8').strip()
         else:
@@ -2962,7 +2957,9 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             left_direction = cut_loc[1]
             left_cut,right_cut = cut_loc[2:-2].split("~")
             left_chr,left_pos = left_cut.split(":")
+            left_pos = int(left_pos)
             right_chr,right_pos = right_cut.split(":")
+            right_pos = int(right_pos)
             right_strand = cut_loc[-1]
             right_direction = cut_loc[-2]
 
@@ -3012,13 +3009,13 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 
         crispresso_infos.append((cut_names[cut],amp_seq,cut))
 
-        reads_file = root + ".CRISPResso_data/"+name+".fastq"
-        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,root + '.CRISPResso_runs',name,crispresso_min_aln_score,amp_seq,reads_file,reads_file)
+        reads_file = root + ".CRISPResso_data/"+cut_name+".fastq"
+        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,root + '.CRISPResso_runs',cut_name,crispresso_min_aln_score,amp_seq,reads_file,reads_file)
         crispresso_commands.append(crispresso_cmd)
 
     return (crispresso_infos,crispresso_commands)
 
-def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
+def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands,n_processes,skip_failed=True):
     """
     Runs CRISPResso2 commands and aggregates output
 
@@ -3027,13 +3024,15 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
         crispresso_infos: array of metadata information for CRISPResso
             tuple of: name, chr, start, end, readCount, amplicon
         crispresso_commands: array of commands to run CRISPResso
+        n_processes: number of processes to run CRISPResso commands on
+        skip_failed: if true, failed CRISPResso runs are skipped. Otherwise, if one fails, the program will fail.
 
     returns:
         crispresso_infos: array of metadata information for CRISPResso
         crispresso_commands: array of commands to run CRISPResso
 
     """
-    logging.info('Analyzing alignments using CRISPResso2')
+    logging.info('Running and analyzing ' + str(len(crispresso_commands)) + ' alignments using CRISPResso2')
 
 
     # getting rid of pickle in crispresso... so I'm leaving this import here in the meantime
@@ -3047,6 +3046,9 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
             import cPickle as cp #python 2.7
     # end nasty pickle part
 
+
+    CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'CRISPRlungo run',skip_failed)
+
     crispresso_results = {}
     crispresso_results['run_names'] = []
     crispresso_results['run_sub_htmls'] = {}
@@ -3056,9 +3058,6 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands):
         crispresso_info_file.write('name\tchr\tstart\tend\treadCount\tamplicon\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\treads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\treads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\n')
         for idx,command in enumerate(crispresso_commands):
             crispresso_command_file.write(command)
-            logging.debug('Running CRISPResso command '+str(idx))
-            crispresso_output = subprocess.check_output(
-                    command,shell=True).decode('utf-8').strip()
             name = crispresso_infos[idx][0]
             n_total = "NA"
             n_aligned = "NA"
