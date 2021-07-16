@@ -15,9 +15,6 @@ import sys
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
 
-#todo: validate with R2
-
-
 def main():
     settings = parse_settings(sys.argv)
 
@@ -36,6 +33,18 @@ def main():
     logging.info('%d reads in input'%num_reads_input)
 
     cut_sites = settings['cuts']
+    cut_annotations = {}
+    if len(settings['on_target_cuts']) == 0:
+        for cut_site in settings['cuts']:
+            cut_annotations[cut_site] = 'Known'
+    else:
+        for cut_site in settings['cuts']:
+            cut_annotations[cut_site] = 'Off-target'
+        cut_sites.extend(settings['on_target_cuts'])
+        for cut_site in settings['on_target_cuts']:
+            cut_annotations[cut_site] = 'On-target'
+
+
     if settings['PAM'] is not None and settings['on-target_guides'] is not None:
         casoffinder_cut_sites = get_cut_sites_casoffinder(
                 root = settings['root'],
@@ -47,6 +56,8 @@ def main():
                 casoffinder_command=settings['casoffinder_command']
                 )
         cut_sites.extend(casoffinder_cut_sites)
+        for cut_site in casoffinder_cut_sites:
+            cut_annotations[cut_site] = 'Casoffinder'
 
     primer_chr = ""
     primer_loc = -1
@@ -65,9 +76,9 @@ def main():
         target_padding = 0
         target_padding += av_read_length
 
-    (target_names,target_info) = make_artificial_targets(
+    (custom_index_fasta,target_names,target_info) = make_artificial_targets(
             root = settings['root']+'.customTargets',
-            cuts=settings['cuts'],
+            cuts=cut_sites,
             genome=settings['genome'],
             target_length=target_length,
             target_padding=target_padding,
@@ -75,15 +86,10 @@ def main():
             primer_loc=primer_loc,
             primer_seq=primer_seq,
             add_non_primer_cut_targets=settings['add_non_primer_cut_targets'],
-            samtools_command=settings['samtools_command'])
-
-    custom_index_fasta = make_target_index(
-                    root = settings['root']+'.customTargets',
-                    target_names = target_names,
-                    target_info = target_info,
-                    bowtie2_command=settings['bowtie2_command'],
-                    bowtie2_threads = settings['n_processes'],
-                    )
+            samtools_command=settings['samtools_command'],
+            bowtie2_command=settings['bowtie2_command'],
+            bowtie2_threads = settings['n_processes']
+            )
 
     reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
     reads_to_align_r2 = settings['fastq_r2']
@@ -99,7 +105,7 @@ def main():
         reads_to_align_r1 = umi_r1
         reads_to_align_r2 = umi_r2
 
-    if settings['dedup_input']:
+    if settings['dedup_input_on_UMI']:
         dedup_r1, dedup_r2 = dedup_file(
             root = settings['root']+'.dedup',
             fastq_r1 = reads_to_align_r1,
@@ -109,10 +115,7 @@ def main():
         reads_to_align_r1 = dedup_r1
         reads_to_align_r2 = dedup_r2
 
-    custom_aligned_count = 0
-    crispresso_commands = [] #list of crispresso commands to run -- from custom targets and the genomic alignments
-    crispresso_infos = [] #meta info about the crispresso runs
-            #tuple of: name, chr, start, end, readCount, amplicon
+    custom_aligned_count = 0 #number of reads aligned to custom targets
 
     #keep track of where every read is assigned
     #these lists keep track of the files containing assignments from the separate analyses
@@ -124,6 +127,7 @@ def main():
                 root = settings['root']+'.genomeAlignment',
                 fastq_r1 = reads_to_align_r1,
                 fastq_r2 = reads_to_align_r2,
+                reads_name = 'reads',
                 bowtie2_reference = settings['bowtie2_genome'],
                 reference_name = 'genome',
                 target_info = target_info,
@@ -136,14 +140,17 @@ def main():
     if genome_r2_assignments is not None:
         r2_assignment_files.append(genome_r2_assignments)
 
+    custom_unmapped_r1 = None
+    custom_unmapped_r2 = None
+
     if len(target_names) > 0:
         #first, align the unaligned r1s
-        logging.info('Processing unaligned R1 reads')
         (custom_r1_assignments,none_file,custom_unmapped_r1, none_file2, custom_r1_aligned_count, custom_r1_mapped_bam_file,custom_r1_chr_aln_plot_obj,none_custom_tlen_plot_object
             ) = align_reads(
                     root = settings['root']+'.r1.customTargetAlignment',
                     fastq_r1 = genome_unmapped_r1,
                     fastq_r2 = None,
+                    reads_name = 'unaligned R1 reads',
                     bowtie2_reference=custom_index_fasta,
                     reference_name='custom targets',
                     target_info = target_info,
@@ -153,14 +160,15 @@ def main():
                     keep_intermediate = settings['keep_intermediate']
                     )
         r1_assignment_files.append(custom_r1_assignments)
+        custom_aligned_count += custom_r1_aligned_count
         #if input is paired, align second reads to the custom targets as welll
         if genome_unmapped_r2 is not None:
-            logging.info('Processing unaligned R2 reads')
             (custom_r2_assignments,none_file,custom_unmapped_r2, none_file2, custom_r2_aligned_count, custom_r2_mapped_bam_file,custom_r2_chr_aln_plot_obj,none_custom_tlen_plot_object
                 ) = align_reads(
                         root = settings['root']+'.r2.customTargetAlignment',
                         fastq_r1 = genome_unmapped_r2,
                         fastq_r2 = None,
+                        reads_name = 'unaligned R2 reads',
                         bowtie2_reference=custom_index_fasta,
                         reference_name='custom targets',
                         target_info = target_info,
@@ -170,9 +178,10 @@ def main():
                         keep_intermediate = settings['keep_intermediate']
                         )
             r2_assignment_files.append(custom_r2_assignments)
+            custom_aligned_count += custom_r2_aligned_count
 
     #chop reads
-    (frag_r1_assignments,frag_r2_assignments,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj
+    (frag_r1_assignments,frag_r2_assignments,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj
         ) = chop_reads(
                 root = settings['root']+".frags",
                 unmapped_reads_fastq_r1 = custom_unmapped_r1,
@@ -193,12 +202,18 @@ def main():
             r1_assignment_files = r1_assignment_files,
             r2_assignment_files = r2_assignment_files,
             cut_sites = cut_sites,
-            target_info = target_info
+            cut_annotations = cut_annotations,
+            target_info = target_info,
+            cut_merge_dist=20,
+            genome_map_resolution=1000000,
+            dedup_based_on_aln_pos=settings['dedup_input_based_on_aln_pos_and_UMI']
             )
 
-    (genome_crispresso_infos, genome_crispresso_commands
-        ) = prep_crispresso2(
-                root = settings['root'],
+    crispresso_infos = [] #meta info about the crispresso runs
+            #dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
+    logging.info('Preparing R1 reads for analysis')
+    r1_crispresso_infos = prep_crispresso2(
+                root = settings['root']+'.CRISPResso_r1',
                 input_fastq_file = settings['fastq_r1'],
                 read_ids_for_crispresso = r1_read_ids_for_crispresso,
                 cut_counts_for_crispresso = r1_cut_counts_for_crispresso,
@@ -210,14 +225,33 @@ def main():
                 samtools_command=settings['samtools_command'],
                 crispresso_command=settings['crispresso_command'],
                 )
+    for info in r1_crispresso_infos:
+        info['name'] = 'r1_'+info['name']
+        crispresso_infos.append(info)
 
-    crispresso_commands.extend(genome_crispresso_commands)
-    crispresso_infos.extend(genome_crispresso_infos)
+    if settings['fastq_r2'] is not None:
+        logging.info('Preparing R1 reads for analysis')
+        r2_crispresso_infos = prep_crispresso2(
+                    root = settings['root']+'.CRISPResso_r2',
+                    input_fastq_file = settings['fastq_r2'],
+                    read_ids_for_crispresso = r2_read_ids_for_crispresso,
+                    cut_counts_for_crispresso = r2_cut_counts_for_crispresso,
+                    av_read_length = av_read_length,
+                    genome = settings['genome'],
+                    genome_len_file = settings['genome']+'.fai',
+                    crispresso_cutoff = settings['crispresso_cutoff'],
+                    crispresso_min_aln_score = settings['crispresso_min_aln_score'],
+                    samtools_command=settings['samtools_command'],
+                    crispresso_command=settings['crispresso_command'],
+                    )
+
+        for info in r2_crispresso_infos:
+            info['name'] = 'r2_'+info['name']
+            crispresso_infos.append(info)
 
     crispresso_results = run_and_aggregate_crispresso(
-                root = settings['root'],
+                root = settings['root']+".CRISPResso",
                 crispresso_infos = crispresso_infos,
-                crispresso_commands = crispresso_commands,
                 n_processes=settings['n_processes']
                 )
 
@@ -297,8 +331,10 @@ def parse_settings(args):
             if line.startswith("#"):
                 continue
             line_els = line.split("#")[0].strip().split("\t")
+            if line_els == ['']:
+                continue
             if (len(line_els) < 2):
-                raise Exception('Cannot parse line ' + line + '\nA tab must separate the key and value in the settings file')
+                raise Exception('Cannot parse line "' + line + '"\nA tab must separate the key and value in the settings file')
             key = line_els[0].strip()
             val = line_els[1].strip()
             settings[key] = val
@@ -317,10 +353,11 @@ def parse_settings(args):
     settings['alignment_extension'] = int(settings['alignment_extension']) if 'alignment_extension' in settings else 50
 
     #min number of reads to analyze using crispresso
-    settings['crispresso_cutoff'] = settings['crispresso_cutoff'] if 'crispresso_cutoff' in settings else 50
+    settings['crispresso_cutoff'] = int(settings['crispresso_cutoff']) if 'crispresso_cutoff' in settings else 50
 
     #space-delimited list of cut sites in the form chr1:234 chr2:234
     settings['cuts'] = settings['cut_sites'].split(" ") if 'cut_sites' in settings else []
+    settings['on_target_cuts'] = settings['on_target_cut_sites'].split(" ") if 'on_target_cut_sites' in settings else []
 
     #for finding offtargets with casoffinder
     settings['PAM'] = settings['PAM'] if 'PAM' in settings else None
@@ -351,7 +388,8 @@ def parse_settings(args):
     settings['casoffinder_command'] = settings['casoffinder_command'] if 'casoffinder_command' in settings else 'cas-offinder'
 
     settings['umi_regex'] = settings['umi_regex'] if 'umi_regex' in settings else 'NNWNNWNNN'
-    settings['dedup_input'] = (settings['dedup_input'] == 'True') if 'dedup_input' in settings else False
+    settings['dedup_input_on_UMI'] = (settings['dedup_input_on_UMI'] == 'True') if 'dedup_input_on_UMI' in settings else False
+    settings['dedup_input_based_on_aln_pos_and_UMI'] = (settings['dedup_input_based_on_aln_pos_and_UMI'] == 'True') if 'dedup_input_based_on_aln_pos_and_UMI' in settings else True
 
 
     settings['crispresso_min_aln_score'] = int(settings['crispresso_min_aln_score']) if 'crispresso_min_aln_score' in settings else 20
@@ -562,9 +600,9 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     logging.info('Wrote cut sites to ' + cut_log)
     return casoffinder_cut_sites
 
-def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer_chr ="",primer_loc=-1,primer_seq=None,add_non_primer_cut_targets=False,samtools_command='samtools'):
+def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer_chr ="",primer_loc=-1,primer_seq=None,add_non_primer_cut_targets=False,samtools_command='samtools',bowtie2_command='bowtie2',bowtie2_threads=1):
     """
-    Generates fasta sequences surrounding cuts for alignment
+    Generates fasta sequences surrounding cuts for alignment and bowtie2 index
     At each cut point, sequence of length target_length is generated
     Combinations of sequences at each cut site are produced
     If a primer is given, only cut sites that include the primer are used
@@ -579,8 +617,12 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
         primer_seq: sequence of primer binding (if any) (e.g. for dsODN integration and priming). Normally either primer_seq or (primer_chr and primer_loc) are given
         add_non_primer_cut_targets: boolean for whether to add targets for cuts without a primer. If false, only primer-cut1 pairings will be added. If true, cut1-cut2 pairings will be added.
         samtools_command: location of samtools to run
+        bowtie2_command: location of bowtie2 to run
+        bowtie2_threads: number of threads to run bowtie2 with
+    returns:
 
     returns:
+        custom_index_fasta: fasta of artificial targets
         target_names: array of target names (corresponding to targets)
         target_info: hash of information for each target_name
             target_info[target_name]['sequence']: fasta sequence of artificial target
@@ -598,6 +640,50 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
     logging.info('Making artificial targets')
     target_names = []
     target_info = {}
+    info_file = root + '.info'
+    if os.path.isfile(info_file):
+        target_count = -1
+        with open (info_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().strip().split("\t")
+            if len(line_els) == 3:
+                (custom_index_fasta,target_count_str,target_list_file) = line_els
+                target_count = int(target_count_str)
+                read_target_count = 0
+                if target_count > 0 and os.path.isfile(target_list_file):
+                    target_cut_str_index = 0
+                    with open(target_list_file,'r') as fin:
+                        head_line = fin.readline().strip()
+                        head_line_els = head_line.split("\t")
+                        for line in fin:
+                            read_target_count += 1
+                            (target_name,target_cut_str,target_class,cut1_chr,cut1_site_str,cut2_chr,cut2_site_str,query_pos,query_start,query_end,target_cut_idx,sequence) = line.strip().split("\t")
+
+                            cut1_site = int(cut1_site_str)
+                            cut2_site = int(cut2_site_str)
+
+                            target_names.append(target_name)
+                            target_info[target_name] = {
+                                'sequence':sequence,
+                                'class':target_class,
+                                'cut1_chr':cut1_chr,
+                                'cut1_site':cut1_site,
+                                'cut2_chr':cut2_chr,
+                                'cut2_site':cut2_site,
+                                'query_pos':query_pos,
+                                'query_start':query_start,
+                                'query_end':query_end,
+                                'target_cut_idx':target_cut_idx,
+                                'target_cut_str':target_cut_str
+                                }
+                    if read_target_count == target_count:
+                        logging.info('Using ' + str(target_count) + ' previously-created targets')
+                        return custom_index_fasta,target_names,target_info
+                    else:
+                        logging.info('In attempting to recover previuosly-created custom targets, expecting ' + str(target_count) + ' targets, but only read ' + str(read_target_count) + ' from ' + target_list_file + '. Recreating.')
+                else:
+                    logging.info('Could not recover previously-created targets. Recreating.')
+
     fasta_cache = {}
 
     #first, if the primer_seq is given (for dsODN) add targets between itself and all other cuts
@@ -611,14 +697,14 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                 'sequence': LALA,
                 'class': 'Primed',
                 'cut1_chr':'Primer',
-                'cut1_site':'Primer',
+                'cut1_site':0,
                 'cut2_chr':'Primer',
-                'cut2_site':'Primer',
+                'cut2_site':0,
                 'query_pos':0,
                 'query_start':0,
                 'query_end':len(primer_seq)*2,
                 'target_cut_idx':len(primer_seq),
-                'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer','Primer','Primer','Primer')
+                'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer',0,'Primer',0)
                 }
 
 
@@ -629,14 +715,14 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                 'sequence': LALAc,
                 'class': 'Primed',
                 'cut1_chr':'Primer',
-                'cut1_site':'Primer',
+                'cut1_site':0,
                 'cut2_chr':'Primer',
-                'cut2_site':'Primer',
+                'cut2_site':0,
                 'query_pos':0,
                 'query_start':0,
                 'query_end':len(primer_seq)*2,
                 'target_cut_idx':len(primer_seq),
-                'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer','Primer','Primer','Primer')
+                'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer',0,'Primer',0)
                 }
 
         for j,cut in enumerate(cuts):
@@ -666,14 +752,14 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'sequence': LARB,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':'Primer',
+                    'cut1_site':0,
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s+w"%('Primer','Primer',chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s+w"%('Primer',0,chr_B,site_B)
                     }
 
             LARBc = left_bit_A + complement(right_bit_B)
@@ -683,14 +769,14 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'sequence': LARBc,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':'Primer',
+                    'cut1_site':0,
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s+c"%('Primer','Primer',chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s+c"%('Primer',0,chr_B,site_B)
                     }
 
             LALB = left_bit_A + reverse(left_bit_B)
@@ -700,14 +786,14 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'sequence': LALB,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':'Primer',
+                    'cut1_site':0,
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer','Primer',chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer',0,chr_B,site_B)
                     }
 
             LALBc = left_bit_A + reverse_complement(left_bit_B)
@@ -717,14 +803,14 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'sequence': LALBc,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':'Primer',
+                    'cut1_site':0,
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer','Primer',chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer',0,chr_B,site_B)
                     }
 
 
@@ -1034,48 +1120,29 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                         target_info[target_name]['class'] = 'Translocation'
 
 
-    logging.info('Created ' + str(len(target_names)) + ' targets')
-    with open (root+".info",'w') as fout:
-        fout.write('\t'.join(['target_name','target_cut_str','cut1_chr','cut1_site','cut2_chr','cut2_site','query_pos','query_start','query_end','target_cut_idx','sequence'])+"\n")
-        for target_name in target_names:
-            fout.write(target_name+'\t'+'\t'.join([str(target_info[target_name][x]) for x in ['target_cut_str','cut1_chr','cut1_site','cut2_chr','cut2_site','query_pos','query_start','query_end','target_cut_idx','sequence']])+"\n")
-    return(target_names,target_info)
 
-
-def make_target_index(root,target_names,target_info,bowtie2_command,bowtie2_threads=1):
-    """
-    Creates a bowtie index for artificial targets
-    params:
-        root: root for written files
-        target_names: array of target names
-        target_info: hash of information for each target_name
-            target_info[target_name]['sequence']: fasta sequence of artificial target
-            target_info[target_name]['class']: class of targets (corresponding to targets)
-            target_info[target_name]['cut1_chr']: cut information for cut 1
-            target_info[target_name]['cut1_site']
-            target_info[target_name]['cut2_chr']: cut information for cut 2
-            target_info[target_name]['cut2_site']
-            target_info[target_name]['query_pos']: genomic start of query (bp)
-            target_info[target_name]['query_start']: bp after which query starts (in case of padding)
-            target_info[target_name]['query_end']
-            target_info[target_name]['target_cut_idx']: bp of cut in target
-            target_info[target_name]['target_cut_str']: string designating the cut site, as well as the direction each side of the read comes off of the cut site e.g. w-chr1:50_chr2:60+c means that the left part of the read started on the left side (designated by the -) watson-strand of chr1:50, and the right part of the read started at chr2:60 and extended right on the crick-strand (complement of reference)
-        bowtie2_command: location of bowtie2 to run
-        bowtie2_threads: number of threads to run bowtie2 with
-    returns:
-        custom_index_fasta: fasta of artificial targets
-    """
     custom_index_fasta = root + '.fa'
     logging.info('Printing ' + str(len(target_names)) + ' targets to custom index (' + custom_index_fasta + ')')
     with open(custom_index_fasta,'w') as fout:
         for i in range(len(target_names)):
             fout.write('>'+target_names[i]+'\n'+target_info[target_names[i]]['sequence']+'\n')
 
-    if not os.path.isfile(custom_index_fasta + '.1.bt2'):
-        logging.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
-        index_result = subprocess.check_output(bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta, shell=True,stderr=subprocess.STDOUT)
+    logging.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
+    index_result = subprocess.check_output(bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta, shell=True,stderr=subprocess.STDOUT)
 
-    return custom_index_fasta
+    target_list_file = root+".txt"
+    with open (target_list_file,'w') as fout:
+        fout.write('\t'.join(['target_name','target_cut_str','target_class','cut1_chr','cut1_site','cut2_chr','cut2_site','query_pos','query_start','query_end','target_cut_idx','sequence'])+"\n")
+        for target_name in target_names:
+            fout.write(target_name+'\t'+'\t'.join([str(target_info[target_name][x]) for x in ['target_cut_str','class','cut1_chr','cut1_site','cut2_chr','cut2_site','query_pos','query_start','query_end','target_cut_idx','sequence']])+"\n")
+
+
+    #write info file for restarting
+    with open(info_file,'w') as fout:
+        fout.write("\t".join([str(x) for x in ["custom_index_fasta","target_count","target_list_file"]])+"\n")
+        fout.write("\t".join([str(x) for x in [custom_index_fasta,str(len(target_names)),target_list_file]])+"\n")
+    return(custom_index_fasta,target_names,target_info)
+
 
 def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False):
     """
@@ -1304,7 +1371,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
     #otherwise perform umi adding (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
     if tot_read_count == -1:
         logging.info('Adding UMIs to input fastqs')
-        
+
         tot_read_count = 0
 
         if fastq_r1.endswith('.gz'):
@@ -1353,7 +1420,6 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
 
             f1_out.write(f1_id_line + ":" + this_UMI + "\n" + f1_seq_line + f1_plus_line + f1_qual_line)
             f2_out.write(f2_id_line + ":" + this_UMI + "\n" + f2_seq_line + f2_plus_line + f2_qual_line)
-            
 
 
         #finished iterating through fastq file
@@ -1375,7 +1441,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
     #done processing just plotting now
     return(fastq_r1_dedup,fastq_r2_dedup)
 
-def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_info,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False):
+def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False):
     """
     Aligns reads to the provided reference (either artificial targets or genome)
 
@@ -1383,6 +1449,7 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
         root: root for written files
         fastq_r1: fastq_r1 to align
         fastq_r2: fastq_r2 to align
+        reads_name: Name displayed to user about read origin (e.g. 'R1' or 'R2')
         bowtie2_reference: bowtie2 reference to align to (either artificial targets or reference)
         reference_name: Name displayed to user for updates (e.g. 'Genome' or 'Artificial Targets')
         target_info: hash of information for each target_name
@@ -1402,7 +1469,7 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
         tlen_plot_object: plot object showing insert sizes for paired alignments
     """
 
-    logging.info('Aligning to %s'%reference_name)
+    logging.info('Aligning %s to %s'%(reads_name,reference_name))
 
     mapped_bam_file = root + ".bam"
 
@@ -1416,6 +1483,10 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
                 (read_count_str,r1_count_str,r2_count_str,unmapped_r1_count_str,unmapped_r2_count_str,aligned_count_str,r1_assignments_file_str,r2_assignments_file_str,unmapped_fastq_r1_file_str,unmapped_fastq_r2_file_str,mapped_bam_file_str) = line_els
                 r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
                 r2_assignments_file = None if r2_assignments_file_str == "None" else r2_assignments_file_str
+                r1_count = int(r1_count_str)
+                r2_count = int(r2_count_str)
+                unmapped_r1_count = int(unmapped_r1_count_str)
+                unmapped_r2_count = int(unmapped_r2_count_str)
                 unmapped_fastq_r1_file = None if unmapped_fastq_r1_file_str == "None" else unmapped_fastq_r1_file_str
                 unmapped_fastq_r2_file = None if unmapped_fastq_r2_file_str == "None" else unmapped_fastq_r2_file_str
                 read_count  = int(read_count_str)
@@ -1431,7 +1502,9 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
                 if tlen_plot_obj_str != "" and tlen_plot_obj_str != "None":
                     tlen_plot_obj = PlotObject.from_json(tlen_plot_obj_str)
                 if read_count > 0:
-                    logging.info('Using previously-processed alignment for ' + str(read_count) + ' reads')
+                    r1_aln_count = r1_count-unmapped_r1_count
+                    r2_aln_count = r2_count-unmapped_r2_count
+                    logging.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 reads (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reference_name))
                     return r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file, unmapped_fastq_r2_file, read_count, mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj
                 else:
                     logging.info('Could not recover previously-analyzed alignments. Reanalyzing.')
@@ -1479,15 +1552,15 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
     aligned_locs = {} # aligned reads will not be chopped, but keep track of where they aligned for CRISPResso output
     aligned_chr_counts = {}
 
-    unmapped_fastq_r1_file = root + '.unmapped.fastq'
+    unmapped_fastq_r1_file = root + '.unmapped.fq'
     unmapped_fastq_r2_file = None
     r1_assignments_file = root + '.assignments.txt'
     r2_assignments_file = None
     if fastq_r2 is not None: #paired-end reads
         r1_assignments_file = root + '.assignments_r1.txt'
-        unmapped_fastq_r1_file = root + '.unmapped_r1.fastq'
+        unmapped_fastq_r1_file = root + '.unmapped_r1.fq'
         r2_assignments_file = root + '.assignments_r2.txt'
-        unmapped_fastq_r2_file = root + '.unmapped_r2.fastq'
+        unmapped_fastq_r2_file = root + '.unmapped_r2.fq'
         uf2 = open(unmapped_fastq_r2_file,'w')
         af2 = open(r2_assignments_file,'w')
     uf1 = open(unmapped_fastq_r1_file,'w')
@@ -1636,9 +1709,6 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
 
     aligned_count = read_count - (unmapped_r1_count + unmapped_r2_count)
 
-    with open (root+".info",'w') as fout:
-        fout.write("\t".join([str(x) for x in ["read_count","r1_count","r2_count","unmapped_r1_count","unmapped_r2_count","aligned_count","unmapped_fastq_r1_file","unmapped_fastq_r2_file"]])+"\n")
-        fout.write("\t".join([str(x) for x in [read_count,r1_count,r2_count,unmapped_r1_count,unmapped_r2_count,aligned_count,unmapped_fastq_r1_file,unmapped_fastq_r2_file]]))
     with open(info_file,'w') as fout:
         fout.write("\t".join([str(x) for x in ["read_count","r1_count","r2_count","unmapped_r1_count","unmapped_r2_count","aligned_count","r1_assignments_file","r2_assignments_file","unmapped_fastq_r1_file","unmapped_fastq_r2_file","mapped_bam_file"]])+"\n")
         fout.write("\t".join([str(x) for x in [read_count,r1_count,r2_count,unmapped_r1_count,unmapped_r2_count,aligned_count,r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,mapped_bam_file]])+"\n")
@@ -1652,9 +1722,12 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,reference_name,target_i
             tlen_plot_obj_str = tlen_plot_obj.to_json()
         fout.write(tlen_plot_obj_str+"\n")
 
+    r1_aln_count = r1_count-unmapped_r1_count
+    r2_aln_count = r2_count-unmapped_r2_count
+    logging.info('Finished analysis of %d/%d R1 and %d/%d R2 reads (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reference_name))
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
 
-def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,target_info,cut_merge_dist=100,genome_map_resolution=1000000):
+def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True):
     """
     Makes final read assignments after:
         Pairing R1 and R2 if they were processed in separate steps
@@ -1665,9 +1738,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         r1_assignment_files: list of r1 assignment files
         r2_assignment_files: list of r2 assignment files
         cut_sites: array of known cut sites
+        cut_annotations: dict of cut_site->annotation for description of cut (e.g. either On-target, Off-target, Known, Casoffinder, etc)
         target_info: hash of information for each target_name
         cut_merge_dist: cuts within this distance (bp) will be merged
         genome_map_resolution: window size (bp) for reporting number of reads aligned
+        dedup_based_on_aln_pos: if true, reads with the same UMI and alignment positions will be removed from analysis
 
     returns:
         final_assignment_filename: filename of final assignments for each read id pair
@@ -1702,9 +1777,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 head_line = fin.readline().strip()
                 head_line_els = head_line.split("\t")
                 read_total_read_count = 0
-                r1_final_cut_ind = 15
-                r2_final_cut_ind = 17
+                r1_final_cut_ind = 15 #for paired-end
+                r2_final_cut_ind = 17 #for paired-end
+                single_r1_final_cut_ind = 9 #for single-end
                 #make sure header matches
+                #paired-end mode
                 if len(head_line_els) == 18 and head_line_els[r1_final_cut_ind] == "r1_final_cut_keys" and head_line_els[r2_final_cut_ind] == "r2_final_cut_keys":
                     #if header matches, read file
                     for line in fin:
@@ -1721,11 +1798,24 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                             for key in r2_keys:
                                 r2_cut_counts_for_crispresso[key] += 1
 
+                elif len(head_line_els) == 10 and head_line_els[single_r1_final_cut_ind] == "final_cut_keys":
+                    r2_read_ids_for_crispresso = None
+                    r2_cut_counts_for_crispresso = None
+                    #if header matches, read file
+                    for line in fin:
+                        read_total_read_count += 1
+                        line_els = line.rstrip("\r\n").split("\t")
+                        if line_els[single_r1_final_cut_ind] != "NA":
+                            r1_keys = line_els[single_r1_final_cut_ind].split(",")
+                            r1_read_ids_for_crispresso[line_els[0]] = r1_keys
+                            for key in r1_keys:
+                                r1_cut_counts_for_crispresso[key] += 1
+
                 if previous_total_read_count == read_total_read_count:
                     logging.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' reads')
                     return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso
                 else:
-                    logging.info('Read ' + str(previous_total_read_count) + ' reads previously, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
+                    logging.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
 
     logging.info('Making final read assignments')
 
@@ -1736,14 +1826,16 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     logging.debug('r1 cat command: ' + str(cat_and_sort_cmd))
     cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
 
-    cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort > ' + sorted_r2_file
-    logging.debug('r2 cat command: ' + str(cat_and_sort_cmd))
-    cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
+    #if single end
+    if len(r2_assignment_files) == 0:
+        sorted_r2_file = None
+    else:
+        cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort > ' + sorted_r2_file
+        logging.debug('r2 cat command: ' + str(cat_and_sort_cmd))
+        cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
 
     #first pass through file:
-    # -merge r1 and r2
-    # -deduplicate by UMI
-    # -aggregate cut sites that will be later cleaned
+    # -aggregate cut sites that will be later aggregated into final cut sites
 
     id_ind = 0
     source_ind = 1
@@ -1755,58 +1847,88 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     seen_reads = {} #put into this dict if it's been seen for deduplicating
     total_reads_processed = 0
     dups_seen = 0
-    r1_seen_custom_targets = defaultdict(int) #count of each custom target
-    cut_points_by_chr = {} # dict of arrays for each chr contianing observedcuts
-    with open(sorted_r1_file,'r') as sf1, open(sorted_r2_file,'r') as sf2, open(final_file_tmp,'w') as ff:
-        for r1_line in sf1:
-            r1_line = r1_line.strip()
-            r2_line = sf2.readline().strip()
-            total_reads_processed += 1
+    cut_points_by_chr = {} # dict of cut points for each chr contianing observedcuts cut_points_by_chr[chr1][1559988] = count seen
+    if sorted_r2_file is None:
+        #single end pre-processing of cut sites
+        with open(sorted_r1_file,'r') as sf1, open(final_file_tmp,'w') as ff:
+            for r1_line in sf1:
+                r1_line = r1_line.strip()
+                total_reads_processed += 1
 
-            r1_line_els = r1_line.split("\t")
-            r1_id = r1_line_els[0]
-            r1_umi = r1_line_els[0].split(":")[-1]
+                r1_line_els = r1_line.split("\t")
+                r1_id = r1_line_els[0]
+                r1_umi = r1_line_els[0].split(":")[-1]
 
-            r2_line_els = r2_line.split("\t")
-            r2_id = r2_line_els[0]
-            r2_umi = r2_line_els[0].split(":")[-1]
+                this_key = r1_umi + " " + r1_line_els[alignment_ind]
+                #if this is a duplicate, skip it
+                if this_key in seen_reads:
+                    dups_seen += 1
+                    ff.write(r1_line + "\tduplicate\t"+seen_reads[this_key]+"\n")
+                    continue
+
+                #if not a duplicate:
+                seen_reads[this_key] = r1_id
+                ff.write(r1_line + "\tnot_duplicate\tNA\n")
+
+                #parse out cut positions and record them
+                r1_cut_points = r1_line_els[cut_point_ind]
+                if r1_line_els[classification_ind] != 'Linear':
+                    for cut_point in r1_cut_points.split("~"):
+                        (cut_chr,cut_pos) = cut_point.split(":")
+                        if cut_chr != "*":
+                            if cut_chr not in cut_points_by_chr:
+                                cut_points_by_chr[cut_chr] = defaultdict(int)
+                            cut_points_by_chr[cut_chr][int(cut_pos)] += 1
+    else:
+        #paired end pre-processing of cut sites
+        with open(sorted_r1_file,'r') as sf1, open(sorted_r2_file,'r') as sf2, open(final_file_tmp,'w') as ff:
+            for r1_line in sf1:
+                r1_line = r1_line.strip()
+                r2_line = sf2.readline().strip()
+                total_reads_processed += 1
+
+                r1_line_els = r1_line.split("\t")
+                r1_id = r1_line_els[0]
+                r1_umi = r1_line_els[0].split(":")[-1]
+
+                r2_line_els = r2_line.split("\t")
+                r2_id = r2_line_els[0]
+                r2_umi = r2_line_els[0].split(":")[-1]
 
 
-            if r1_id.split(" ")[0] != r2_id.split(" ")[0]:
-                raise Exception("Some reads were lost -- read ids don't match up:\n1:"+r1_line+"\n2:"+r2_line)
+                if r1_id.split(" ")[0] != r2_id.split(" ")[0]:
+                    raise Exception("Some reads were lost -- read ids don't match up:\n1:"+r1_line+"\n2:"+r2_line)
 
-            this_key = r1_umi + " " + r1_line_els[alignment_ind] + " " + r2_line_els[alignment_ind]
-            #if this is a duplicate, skip it
-            if this_key in seen_reads:
-                dups_seen += 1
-                ff.write(r1_line + "\t" + r2_line + "\tduplicate\t"+seen_reads[this_key]+"\n")
-                continue
+                this_key = r1_umi + " " + r1_line_els[alignment_ind] + " " + r2_line_els[alignment_ind]
+                #if this is a duplicate, skip it
+                if this_key in seen_reads:
+                    dups_seen += 1
+                    ff.write(r1_line + "\t" + r2_line + "\tduplicate\t"+seen_reads[this_key]+"\n")
+                    continue
 
-            #if not a duplicate:
-            seen_reads[this_key] = r1_id
-            ff.write(r1_line + "\t" + r2_line + "\tnot_duplicate\tNA\n")
+                #if not a duplicate:
+                seen_reads[this_key] = r1_id
+                ff.write(r1_line + "\t" + r2_line + "\tnot_duplicate\tNA\n")
 
-            r1_seen_custom_targets[r1_line_els[annotation_ind]] += 1
 
-            #parse out cut positions and record them
-            r1_cut_points = r1_line_els[cut_point_ind]
-            r2_cut_points = r2_line_els[cut_point_ind]
-            if r1_line_els[classification_ind] != 'Linear':
-                for cut_point in r1_cut_points.split("~"):
-                    (cut_chr,cut_pos) = cut_point.split(":")
-                    if cut_chr != "*":
-                        if cut_chr not in cut_points_by_chr:
-                            cut_points_by_chr[cut_chr] = []
-                        if int(cut_pos) not in cut_points_by_chr[cut_chr]:
-                            cut_points_by_chr[cut_chr].append(int(cut_pos))
-            if r2_line_els[classification_ind] != 'Linear':
-                for cut_point in r2_cut_points.split("~"):
-                    (cut_chr,cut_pos) = cut_point.split(":")
-                    if cut_chr != "*":
-                        if cut_chr not in cut_points_by_chr:
-                            cut_points_by_chr[cut_chr] = []
-                        if int(cut_pos) not in cut_points_by_chr[cut_chr]:
-                            cut_points_by_chr[cut_chr].append(int(cut_pos))
+                #parse out cut positions and record them
+                r1_cut_points = r1_line_els[cut_point_ind]
+                r2_cut_points = r2_line_els[cut_point_ind]
+                if r1_line_els[classification_ind] != 'Linear':
+                    for cut_point in r1_cut_points.split("~"):
+                        (cut_chr,cut_pos) = cut_point.split(":")
+                        if cut_chr != "*":
+                            if cut_chr not in cut_points_by_chr:
+                                cut_points_by_chr[cut_chr] = defaultdict(int)
+                            cut_points_by_chr[cut_chr][int(cut_pos)] += 1
+                if r2_line_els[classification_ind] != 'Linear':
+                    for cut_point in r2_cut_points.split("~"):
+                        (cut_chr,cut_pos) = cut_point.split(":")
+                        if cut_chr != "*":
+                            if cut_chr not in cut_points_by_chr:
+                                cut_points_by_chr[cut_chr] = defaultdict(int)
+                            cut_points_by_chr[cut_chr][int(cut_pos)] += 1
+        #end paired end pre-processing of cut sites
 
     #now that we've aggregated all cut sites, find likely cut positions and record assignments to those positions in final_cut_point_lookup
     #cut sites are input by user
@@ -1817,62 +1939,84 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             known_cut_points_by_chr[cut_chr] = []
         known_cut_points_by_chr[cut_chr].append(int(cut_pos))
 
+    #the counts in this file include only reads that weren't marked as duplicates, and reads that weren't Linear
+    #each non-duplicate read could contribute at least 2 cut points (perhaps more?), for a total of at least 2*(non-duplicated,non-linear)
     with open(root+'.seen_cut_points','w') as fout:
         for cut_chr in cut_points_by_chr:
-            these_cut_points = sorted(cut_points_by_chr[cut_chr])
+            these_cut_points = sorted(cut_points_by_chr[cut_chr].keys())
             for cut_point in these_cut_points:
-                fout.write(cut_chr + ':' + str(cut_point)+"\n")
+                fout.write(cut_chr + ':' + str(cut_point)+"\t"+str(cut_points_by_chr[cut_chr][cut_point])+"\n")
 
-
-    final_cut_points_by_chr = {} #dict of final cut points by chromozome
+    final_cut_points_by_chr = {} #dict of final cut points by chromosome, contains count of reads with that cut point
     final_cut_point_lookup = {} #dict from old(fuzzy/imprecise) position to new
     r1_translocation_cut_counts = {} #dict of counts for translocations between cut1 and cut2 e.g. r1_translcoation_cut_counts[cut1][cut2] = 5
     r1_translocation_cut_counts['*'] = defaultdict(int)
     r2_translocation_cut_counts = {}
     r2_translocation_cut_counts['*'] = defaultdict(int)
 
-    observed_cut_points = defaultdict(int) # hash of cut point -> count
     for cut_chr in cut_points_by_chr:
         these_cut_points = sorted(cut_points_by_chr[cut_chr])
         last_seen_point = these_cut_points[0]
         curr_points = [last_seen_point]
         for i in range(1,len(these_cut_points)+1):
-            #if this point is within cut_merge_dist, merge!
-            if i == len(these_cut_points) or abs(these_cut_points[i] - these_cut_points[i-1]) > cut_merge_dist:
-                this_mean = int(sum(curr_points)/float(len(curr_points)))
-                this_pos = this_mean
+            #if next point is beyond cut_merge_dist, merge and reset!
+            #do weighted sum
+            this_sum = 0
+            this_tot = 0
+            for curr_point in curr_points:
+                this_sum += curr_point*cut_points_by_chr[cut_chr][curr_point]
+                this_tot += cut_points_by_chr[cut_chr][curr_point]
+            this_weighted_mean = this_sum/float(this_tot)
+            #this_mean = int(sum(curr_points)/float(len(curr_points)))
+            if i == len(these_cut_points) or abs(these_cut_points[i] - this_weighted_mean) > cut_merge_dist:
+                this_pos = int(this_weighted_mean)
                 min_dist = cut_merge_dist
                 if cut_chr in known_cut_points_by_chr:
                     for known_cut_point in known_cut_points_by_chr[cut_chr]:
-                        this_dist = abs(known_cut_point - this_mean)
+                        this_dist = abs(known_cut_point - this_weighted_mean)
                         if this_dist <= min_dist:
                             this_pos = known_cut_point
                             min_dist = this_dist
-                observed_cut_points[cut_chr+":"+str(this_pos)] += len(curr_points)
-                if cut_chr not in final_cut_points_by_chr:
-                    final_cut_points_by_chr[cut_chr] = {}
-                final_cut_points_by_chr[cut_chr][this_pos] = 1
 
                 #initialize defaultdict for this final_cut_point
                 r1_translocation_cut_counts[cut_chr+':'+str(this_pos)] = defaultdict(int)
                 r2_translocation_cut_counts[cut_chr+':'+str(this_pos)] = defaultdict(int)
 
+                read_counts_at_curr_point = 0
                 #add this assignment to the lookup
                 for curr_point in curr_points:
                     final_cut_point_lookup[cut_chr+":"+str(curr_point)] = cut_chr+":"+str(this_pos)
+                    read_counts_at_curr_point += cut_points_by_chr[cut_chr][curr_point]
 
+                if cut_chr not in final_cut_points_by_chr:
+                    final_cut_points_by_chr[cut_chr] = {}
+                final_cut_points_by_chr[cut_chr][this_pos] = read_counts_at_curr_point
+
+                #reset current points
                 curr_points = []
 
             if i < len(these_cut_points):
                 curr_points.append(these_cut_points[i])
 
     with open(root + ".final_cut_points.txt",'w') as fout:
-        for chrom in sorted(final_cut_points_by_chr.keys(),reverse=True):
+        fout.write('chr\tpos\tcount\tannotation\n')
+        for chrom in sorted(final_cut_points_by_chr.keys()):
             for pos in sorted(final_cut_points_by_chr[chrom]):
-                fout.write("%s\t%d\n"%(chrom,pos))
+                this_anno='Novel'
+                this_str = chrom+":"+str(pos)
+                if this_str in cut_annotations:
+                    this_anno = cut_annotations[this_str]
+                fout.write("%s\t%d\t%d\t%s\n"%(chrom,pos,final_cut_points_by_chr[chrom][pos],this_anno))
+
     with open(root+".final_cut_points_lookup.txt",'w') as fout:
-        for key in sorted(final_cut_point_lookup.keys()):
-            fout.write("%s\t%s\n"%(key,final_cut_point_lookup[key]))
+        fout.write('discovered cut point\tfinal mapped cut point\tcount\tannotation\n');
+        for key in sorted(final_cut_point_lookup.keys(),key=lambda k: (k.split(":")[0],int(k.split(":")[1]))):
+            (chrom,pos)=key.split(":")
+            this_anno='Novel'
+            this_final = final_cut_point_lookup[key]
+            if this_final in cut_annotations:
+                this_anno = cut_annotations[this_final]
+            fout.write("%s\t%s\t%d\t%s\n"%(key,final_cut_point_lookup[key],cut_points_by_chr[chrom][int(pos)],this_anno))
 
 
     final_total_count = 0
@@ -1931,19 +2075,23 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     r2_alignment_ind = alignment_ind + ind_offset
     r2_cut_point_ind = cut_point_ind + ind_offset
     duplicate_ind = 12
+    duplicate_na_str = "NA\tNA\tNA\tNA" #string for duplicates if paired
     with open(final_file_tmp,'r') as fin, open(final_file,'w') as fout:
-        fout.write("\t".join(['r1_id','r1_source','r1_classification','r1_annotation','r1_alignment','r1_cut_point','r2_id','r2_source','r2_classification','r2_annotation','r2_alignment','r2_cut_point','read_duplicate_status','read_duplicate_of','r1_final_cut_points','r1_final_cut_keys','r2_final_cut_points','r2_final_cut_keys'])+"\n")
+        if sorted_r2_file is None:
+            #single end
+            fout.write("\t".join(['id','source','classification','annotation','alignment','cut_point','read_duplicate_status','read_duplicate_of','final_cut_points','final_cut_keys'])+"\n")
+            duplicate_ind = 6
+            duplicate_na_str = "NA\tNA"
+        else:
+            #paired end
+            fout.write("\t".join(['r1_id','r1_source','r1_classification','r1_annotation','r1_alignment','r1_cut_point','r2_id','r2_source','r2_classification','r2_annotation','r2_alignment','r2_cut_point','read_duplicate_status','read_duplicate_of','r1_final_cut_points','r1_final_cut_keys','r2_final_cut_points','r2_final_cut_keys'])+"\n")
         for line in fin:
             line = line.strip()
             final_total_count += 1
             line_els = line.split("\t")
-            if line_els[duplicate_ind] == "duplicate":
+            if dedup_based_on_aln_pos and line_els[duplicate_ind] == "duplicate":
                 final_duplicate_count += 1
-                r1_cut_points_str = "NA"
-                r1_cut_keys_str = "NA"
-                r2_cut_points_str = "NA"
-                r2_cut_keys_str = "NA"
-                fout.write("%s\t%s\t%s\t%s\t%s\n"%(line,r1_cut_points_str,r1_cut_keys_str,r2_cut_points_str,r2_cut_keys_str))
+                fout.write("%s\t%s\n"%(line,duplicate_na_str))
                 continue
             r1_classification = line_els[r1_classification_ind]
             r1_cut_points = line_els[r1_cut_point_ind]
@@ -1952,6 +2100,8 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
             r1_associated_cut_points = []
             r1_cut_keys = []
+            r1_print_str = ""
+            r2_print_str = ""
 
             if r1_classification == 'Linear':
                 (r1_chr,r1_range) = r1_alignment.split(":")
@@ -2038,108 +2188,111 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     elif r1_source == 'custom targets':
                         r1_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
 
-            #now do R2
-            r2_classification = line_els[r2_classification_ind]
-            r2_cut_points = line_els[r2_cut_point_ind]
-            r2_alignment = line_els[r2_alignment_ind]
-            r2_source = line_els[r2_source_ind]
-            #alignment for window is only chr:pos (Linear reads have a chr:pos-end format, so we fix that with this variable)
-
-            r2_associated_cut_points = []
-            r2_cut_keys = []
-
-            if r2_classification == 'Linear':
-                (r2_chr,r2_range) = r2_alignment.split(":")
-                (r2_start,r2_stop) = r2_range.split("-")
-                #check to see if this read overlaps with any known cutpoints
-                if r2_chr in final_cut_points_by_chr:
-                    for cut_point in final_cut_points_by_chr[r2_chr]:
-                        if cut_point > int(r2_start) and cut_point < int(r2_stop):
-                            key = r2_chr+":"+str(cut_point)
-                            r2_associated_cut_points.append(key)
-                            r2_uncut_counts[key] += 1
-                            if r2_source == 'genome':
-                                r2_uncut_genome_counts[key] += 1
-                            elif r2_source == 'fragmented':
-                                r2_uncut_frag_counts[key] += 1
-                            elif r2_source == 'custom targets':
-                                r2_uncut_custom_aln_counts[key] += 1
-                            r2_translocation_cut_counts[key][key] += 1
-
-                            r2_cut_key = r2_classification + " " + key
-                            r2_read_ids_for_crispresso[line_els[r2_id_ind]].append(r2_cut_key)
-                            r2_cut_counts_for_crispresso[r2_cut_key] += 1
-                            r2_cut_keys.append(r2_cut_key)
-            else:
-                #if it's not Linear, we've already annotated the cut points
-                #if we only have one cut point, it's a chimeric cut
-                cut_1 = r2_cut_points.split("~")[0]
-                cut_2 = cut_1
-                if '~' in r2_cut_points:
-                    cut_1,cut_2 = r2_cut_points.split("~")
-
-                if "*" not in cut_1:
-                    cut_1 = final_cut_point_lookup[cut_1]
-                    r2_associated_cut_points.append(cut_1)
-                    r2_cut_counts[cut_1] += 1
-                    if r2_source == 'fragmented':
-                        r2_cut_frag_counts[cut_1] += 1
-                    elif r2_source == 'custom targets':
-                        r2_cut_custom_aln_counts[cut_1] += 1
-                else:
-                    cut_1 = "*"
-
-                if "*" not in cut_2:
-                    cut_2 = final_cut_point_lookup[cut_2]
-                    r2_associated_cut_points.append(cut_2)
-                    r2_cut_counts[cut_2] += 1
-                    if r2_source == 'fragmented':
-                        r2_cut_frag_counts[cut_2] += 1
-                    elif r2_source == 'custom targets':
-                        r2_cut_custom_aln_counts[cut_2] += 1
-                else:
-                    cut_2 = "*"
-
-
-                r2_translocation_cut_counts[cut_1][cut_2] += 1
-                r2_translocation_cut_counts[cut_2][cut_1] += 1
-
-                #also keep track of read ids covering each cut for analysis by CRISPResso
-                this_anno = line_els[r2_annotation_ind]
-                #add strand and direction information from anno column to newly-identified funal cuts
-                r2_cut_key = "%s %s%s~%s%s"%(r2_classification,this_anno[0:2],cut_1,cut_2,this_anno[-2:])
-                r2_read_ids_for_crispresso[line_els[r2_id_ind]].append(r2_cut_key)
-                r2_cut_counts_for_crispresso[r2_cut_key] += 1
-                r2_cut_keys.append(r2_cut_key)
-
-
-            #make window alignment assignments
-            for r2_aln_pos in r2_alignment.split("~"):
-                if '*' not in r2_aln_pos:
-                    (aln_chr,aln_range) = r2_aln_pos.split(":")
-                    aln_pos = aln_range.split("-")[0]
-                    aln_pos_window = int(aln_pos)/genome_map_resolution
-                    if aln_chr not in r2_aln_pos_counts_by_chr:
-                        r2_aln_pos_counts_by_chr[aln_chr] = defaultdict(int)
-                        r2_aln_pos_genome_counts_by_chr[aln_chr] = defaultdict(int)
-                        r2_aln_pos_custom_aln_counts_by_chr[aln_chr] = defaultdict(int)
-                        r2_aln_pos_frag_counts_by_chr[aln_chr] = defaultdict(int)
-                    #assign each read to neighboring windows
-                    r2_aln_pos_counts_by_chr[aln_chr][aln_pos_window] += 1
-                    if r2_source == 'genome':
-                        r2_aln_pos_genome_counts_by_chr[aln_chr][aln_pos_window] += 1
-                    elif r2_source == 'fragmented':
-                        r2_aln_pos_frag_counts_by_chr[aln_chr][aln_pos_window] += 1
-                    elif r2_source == 'custom targets':
-                        r2_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
-            #finished r2
-
             r1_cut_points_str = ",".join(r1_associated_cut_points) if r1_associated_cut_points else "NA"
             r1_cut_keys_str = ",".join(r1_cut_keys) if r1_cut_keys else "NA"
-            r2_cut_points_str = ",".join(r2_associated_cut_points) if r2_associated_cut_points else "NA"
-            r2_cut_keys_str = ",".join(r2_cut_keys) if r2_cut_keys else "NA"
+            r1_print_str = r1_cut_points_str+"\t"+r1_cut_keys_str
 
-            fout.write("%s\t%s\t%s\t%s\t%s\n"%(line,r1_cut_points_str,r1_cut_keys_str,r2_cut_points_str,r2_cut_keys_str))
+            #now do R2
+            if sorted_r2_file is not None:
+                r2_classification = line_els[r2_classification_ind]
+                r2_cut_points = line_els[r2_cut_point_ind]
+                r2_alignment = line_els[r2_alignment_ind]
+                r2_source = line_els[r2_source_ind]
+                #alignment for window is only chr:pos (Linear reads have a chr:pos-end format, so we fix that with this variable)
+
+                r2_associated_cut_points = []
+                r2_cut_keys = []
+
+                if r2_classification == 'Linear':
+                    (r2_chr,r2_range) = r2_alignment.split(":")
+                    (r2_start,r2_stop) = r2_range.split("-")
+                    #check to see if this read overlaps with any known cutpoints
+                    if r2_chr in final_cut_points_by_chr:
+                        for cut_point in final_cut_points_by_chr[r2_chr]:
+                            if cut_point > int(r2_start) and cut_point < int(r2_stop):
+                                key = r2_chr+":"+str(cut_point)
+                                r2_associated_cut_points.append(key)
+                                r2_uncut_counts[key] += 1
+                                if r2_source == 'genome':
+                                    r2_uncut_genome_counts[key] += 1
+                                elif r2_source == 'fragmented':
+                                    r2_uncut_frag_counts[key] += 1
+                                elif r2_source == 'custom targets':
+                                    r2_uncut_custom_aln_counts[key] += 1
+                                r2_translocation_cut_counts[key][key] += 1
+
+                                r2_cut_key = r2_classification + " " + key
+                                r2_read_ids_for_crispresso[line_els[r2_id_ind]].append(r2_cut_key)
+                                r2_cut_counts_for_crispresso[r2_cut_key] += 1
+                                r2_cut_keys.append(r2_cut_key)
+                else:
+                    #if it's not Linear, we've already annotated the cut points
+                    #if we only have one cut point, it's a chimeric cut
+                    cut_1 = r2_cut_points.split("~")[0]
+                    cut_2 = cut_1
+                    if '~' in r2_cut_points:
+                        cut_1,cut_2 = r2_cut_points.split("~")
+
+                    if "*" not in cut_1:
+                        cut_1 = final_cut_point_lookup[cut_1]
+                        r2_associated_cut_points.append(cut_1)
+                        r2_cut_counts[cut_1] += 1
+                        if r2_source == 'fragmented':
+                            r2_cut_frag_counts[cut_1] += 1
+                        elif r2_source == 'custom targets':
+                            r2_cut_custom_aln_counts[cut_1] += 1
+                    else:
+                        cut_1 = "*"
+
+                    if "*" not in cut_2:
+                        cut_2 = final_cut_point_lookup[cut_2]
+                        r2_associated_cut_points.append(cut_2)
+                        r2_cut_counts[cut_2] += 1
+                        if r2_source == 'fragmented':
+                            r2_cut_frag_counts[cut_2] += 1
+                        elif r2_source == 'custom targets':
+                            r2_cut_custom_aln_counts[cut_2] += 1
+                    else:
+                        cut_2 = "*"
+
+
+                    r2_translocation_cut_counts[cut_1][cut_2] += 1
+                    r2_translocation_cut_counts[cut_2][cut_1] += 1
+
+                    #also keep track of read ids covering each cut for analysis by CRISPResso
+                    this_anno = line_els[r2_annotation_ind]
+                    #add strand and direction information from anno column to newly-identified funal cuts
+                    r2_cut_key = "%s %s%s~%s%s"%(r2_classification,this_anno[0:2],cut_1,cut_2,this_anno[-2:])
+                    r2_read_ids_for_crispresso[line_els[r2_id_ind]].append(r2_cut_key)
+                    r2_cut_counts_for_crispresso[r2_cut_key] += 1
+                    r2_cut_keys.append(r2_cut_key)
+
+
+                #make window alignment assignments
+                for r2_aln_pos in r2_alignment.split("~"):
+                    if '*' not in r2_aln_pos:
+                        (aln_chr,aln_range) = r2_aln_pos.split(":")
+                        aln_pos = aln_range.split("-")[0]
+                        aln_pos_window = int(aln_pos)/genome_map_resolution
+                        if aln_chr not in r2_aln_pos_counts_by_chr:
+                            r2_aln_pos_counts_by_chr[aln_chr] = defaultdict(int)
+                            r2_aln_pos_genome_counts_by_chr[aln_chr] = defaultdict(int)
+                            r2_aln_pos_custom_aln_counts_by_chr[aln_chr] = defaultdict(int)
+                            r2_aln_pos_frag_counts_by_chr[aln_chr] = defaultdict(int)
+                        #assign each read to neighboring windows
+                        r2_aln_pos_counts_by_chr[aln_chr][aln_pos_window] += 1
+                        if r2_source == 'genome':
+                            r2_aln_pos_genome_counts_by_chr[aln_chr][aln_pos_window] += 1
+                        elif r2_source == 'fragmented':
+                            r2_aln_pos_frag_counts_by_chr[aln_chr][aln_pos_window] += 1
+                        elif r2_source == 'custom targets':
+                            r2_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
+                r2_cut_points_str = ",".join(r2_associated_cut_points) if r2_associated_cut_points else "NA"
+                r2_cut_keys_str = ",".join(r2_cut_keys) if r2_cut_keys else "NA"
+                r2_print_str = "\t"+r2_cut_points_str+"\t"+r2_cut_keys_str
+            #finished r2
+
+            fout.write(line+"\t"+r1_print_str+r2_print_str+"\n")
 
     logging.info('Deduplicated %d/%d reads (kept %d)'%(final_duplicate_count,final_total_count,final_total_count-final_duplicate_count))
 
@@ -2147,41 +2300,82 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     final_observed_cuts_count = 0
     r1_cut_report = root + ".r1_cut_report.txt"
     r2_cut_report = root + ".r2_cut_report.txt"
-    with open (r1_cut_report,'w') as r1_cut_out, open(r2_cut_report,'w') as r2_cut_out:
-        r1_cut_out.write('chr\tstart\tcut_tot\tuncut_tot\tuncut_genome\tcut_custom\tuncut_custom\tcut_frags\tuncut_frags\n')
-        r2_cut_out.write('chr\tstart\tcut_tot\tuncut_tot\tuncut_genome\tcut_custom\tuncut_custom\tcut_frags\tuncut_frags\n')
-        for chrom in sorted(final_cut_points_by_chr.keys()):
-            if chrom == "*":
-                continue
-            for pos in sorted(final_cut_points_by_chr[chrom]):
-                final_observed_cuts_count += 1
-                cut_key = chrom + ":" + str(pos)
-                known_str = 'Novel'
-                if chrom in known_cut_points_by_chr and pos in known_cut_points_by_chr[chrom]:
-                    known_str = 'Known'
-                r1_cut_out.write("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n"%(chrom,pos,
-                    r1_cut_counts[cut_key],
-                    r1_uncut_counts[cut_key],
-                    r1_uncut_genome_counts[cut_key],
-                    r1_cut_custom_aln_counts[cut_key],
-                    r1_uncut_custom_aln_counts[cut_key],
-                    r1_cut_frag_counts[cut_key],
-                    r1_uncut_frag_counts[cut_key],
-                    known_str))
-                r2_cut_out.write("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n"%(chrom,pos,
-                    r2_cut_counts[cut_key],
-                    r2_uncut_counts[cut_key],
-                    r2_uncut_genome_counts[cut_key],
-                    r2_cut_custom_aln_counts[cut_key],
-                    r2_uncut_custom_aln_counts[cut_key],
-                    r2_cut_frag_counts[cut_key],
-                    r2_uncut_frag_counts[cut_key],
-                    known_str))
+    if sorted_r2_file is None:
+        #single-end cut report
+        r2_cut_report = None
+        with open (r1_cut_report,'w') as r1_cut_out:
+            r1_cut_out.write('chr\tstart\tcut_tot\tuncut_tot\tuncut_genome\tcut_custom\tuncut_custom\tcut_frags\tuncut_frags\tcut_provided_as_input\n')
+            for chrom in sorted(final_cut_points_by_chr.keys()):
+                if chrom == "*":
+                    continue
+                for pos in sorted(final_cut_points_by_chr[chrom]):
+                    final_observed_cuts_count += 1
+                    cut_key = chrom + ":" + str(pos)
+                    cut_annotation = 'Novel'
+                    if cut_key in cut_annotations:
+                        cut_annotation = cut_annotations[cut_key]
+                    r1_cut_out.write("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n"%(chrom,pos,
+                        r1_cut_counts[cut_key],
+                        r1_uncut_counts[cut_key],
+                        r1_uncut_genome_counts[cut_key],
+                        r1_cut_custom_aln_counts[cut_key],
+                        r1_uncut_custom_aln_counts[cut_key],
+                        r1_cut_frag_counts[cut_key],
+                        r1_uncut_frag_counts[cut_key],
+                        cut_annotation))
 
-    logging.info('Wrote cut reports ' + r1_cut_report + ' ' + r2_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
+        logging.info('Wrote cut report ' + r1_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
+    else:
+        #paired cut report
+        with open (r1_cut_report,'w') as r1_cut_out, open(r2_cut_report,'w') as r2_cut_out:
+            r1_cut_out.write('chr\tstart\tcut_tot\tuncut_tot\tuncut_genome\tcut_custom\tuncut_custom\tcut_frags\tuncut_frags\tcut_provided_as_input\n')
+            r2_cut_out.write('chr\tstart\tcut_tot\tuncut_tot\tuncut_genome\tcut_custom\tuncut_custom\tcut_frags\tuncut_frags\tcut_provided_as_input\n')
+            for chrom in sorted(final_cut_points_by_chr.keys()):
+                if chrom == "*":
+                    continue
+                for pos in sorted(final_cut_points_by_chr[chrom]):
+                    final_observed_cuts_count += 1
+                    cut_key = chrom + ":" + str(pos)
+                    cut_annotation = 'Novel'
+                    if cut_key in cut_annotations:
+                        cut_annotation = cut_annotations[cut_key]
+                    r1_cut_out.write("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n"%(chrom,pos,
+                        r1_cut_counts[cut_key],
+                        r1_uncut_counts[cut_key],
+                        r1_uncut_genome_counts[cut_key],
+                        r1_cut_custom_aln_counts[cut_key],
+                        r1_uncut_custom_aln_counts[cut_key],
+                        r1_cut_frag_counts[cut_key],
+                        r1_uncut_frag_counts[cut_key],
+                        cut_annotation))
+                    r2_cut_out.write("%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n"%(chrom,pos,
+                        r2_cut_counts[cut_key],
+                        r2_uncut_counts[cut_key],
+                        r2_uncut_genome_counts[cut_key],
+                        r2_cut_custom_aln_counts[cut_key],
+                        r2_uncut_custom_aln_counts[cut_key],
+                        r2_cut_frag_counts[cut_key],
+                        r2_uncut_frag_counts[cut_key],
+                        cut_annotation))
+
+        logging.info('Wrote cut reports ' + r1_cut_report + ' ' + r2_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
 
     #r1 translocations
     tx_keys = sorted(r1_translocation_cut_counts.keys())
+    tx_list_report = root + ".r1_translocation_list.txt"
+    with open (tx_list_report,'w') as fout:
+        fout.write('cut_1\tcut_1_anno\tcut_1\tcut_2_anno\tcount\n')
+        for tx_key_1 in tx_keys:
+            cut_1_annotation = 'Novel'
+            if tx_key_1 in cut_annotations:
+                cut_1_annotation = cut_annotations[tx_key_1]
+            for tx_key_2 in sorted(r1_translocation_cut_counts[tx_key_1].keys()):
+                cut_2_annotation = 'Novel'
+                if tx_key_2 in cut_annotations:
+                    cut_2_annotation = cut_annotations[tx_key_2]
+                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,r1_translocation_cut_counts[tx_key_1][tx_key_2]))
+    logging.info('Wrote r1 translocation list ' + tx_list_report)
+
     tx_report = root + ".r1_translocation_table.txt"
     with open (tx_report,'w') as fout:
         fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
@@ -2190,13 +2384,28 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     logging.info('Wrote r1 translocation table ' + tx_report)
 
     #r2 translocations
-    tx_keys = sorted(r2_translocation_cut_counts.keys())
-    tx_report = root + ".r2_translocation_table.txt"
-    with open (tx_report,'w') as fout:
-        fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
-        for tx_key in tx_keys:
-            fout.write(tx_key+"\t"+"\t".join([str(r2_translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
-    logging.info('Wrote r2 translocation table ' + tx_report)
+    if sorted_r2_file is not None:
+        tx_keys = sorted(r2_translocation_cut_counts.keys())
+        tx_list_report = root + ".r2_translocation_list.txt"
+        with open (tx_list_report,'w') as fout:
+            fout.write('cut_1\tcut_1_anno\tcut_1\tcut_2_anno\tcount\n')
+            for tx_key_1 in tx_keys:
+                cut_1_annotation = 'Novel'
+                if tx_key_1 in cut_annotations:
+                    cut_1_annotation = cut_annotations[tx_key_1]
+                for tx_key_2 in sorted(r2_translocation_cut_counts[tx_key_1].keys()):
+                    cut_2_annotation = 'Novel'
+                    if tx_key_2 in cut_annotations:
+                        cut_2_annotation = cut_annotations[tx_key_2]
+                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,r2_translocation_cut_counts[tx_key_1][tx_key_2]))
+        logging.info('Wrote r2 translocation list ' + tx_list_report)
+
+        tx_report = root + ".r2_translocation_table.txt"
+        with open (tx_report,'w') as fout:
+            fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
+            for tx_key in tx_keys:
+                fout.write(tx_key+"\t"+"\t".join([str(r2_translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
+        logging.info('Wrote r2 translocation table ' + tx_report)
 
     #r1 alignment report
     align_report = root + ".r1_align_report.txt"
@@ -2204,8 +2413,6 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         fout.write('chr\tstart\tread_tot\tread_genome\tread_custom\tread_frags\n')
         for chrom in sorted(r1_aln_pos_counts_by_chr.keys()):
             for pos in sorted(r1_aln_pos_counts_by_chr[chrom].keys()):
-
-                #divide counts by two because we counted each read in two windows above
                 fout.write("%s\t%d\t%d\t%d\t%d\t%d\n"%(chrom,pos*genome_map_resolution,
                     r1_aln_pos_counts_by_chr[chrom][pos],
                     r1_aln_pos_genome_counts_by_chr[chrom][pos],
@@ -2213,18 +2420,17 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     r1_aln_pos_frag_counts_by_chr[chrom][pos]))
 
     #r2 alignment report
-    align_report = root + ".r2_align_report.txt"
-    with open (align_report,'w') as fout:
-        fout.write('chr\tstart\tread_tot\tread_genome\tread_custom\tread_frags\n')
-        for chrom in sorted(r2_aln_pos_counts_by_chr.keys()):
-            for pos in sorted(r2_aln_pos_counts_by_chr[chrom].keys()):
-
-                #divide counts by two because we counted each read in two windows above
-                fout.write("%s\t%d\t%d\t%d\t%d\t%d\n"%(chrom,pos*genome_map_resolution,
-                    r2_aln_pos_counts_by_chr[chrom][pos],
-                    r2_aln_pos_genome_counts_by_chr[chrom][pos],
-                    r2_aln_pos_custom_aln_counts_by_chr[chrom][pos],
-                    r2_aln_pos_frag_counts_by_chr[chrom][pos]))
+    if sorted_r2_file is not None:
+        align_report = root + ".r2_align_report.txt"
+        with open (align_report,'w') as fout:
+            fout.write('chr\tstart\tread_tot\tread_genome\tread_custom\tread_frags\n')
+            for chrom in sorted(r2_aln_pos_counts_by_chr.keys()):
+                for pos in sorted(r2_aln_pos_counts_by_chr[chrom].keys()):
+                    fout.write("%s\t%d\t%d\t%d\t%d\t%d\n"%(chrom,pos*genome_map_resolution,
+                        r2_aln_pos_counts_by_chr[chrom][pos],
+                        r2_aln_pos_genome_counts_by_chr[chrom][pos],
+                        r2_aln_pos_custom_aln_counts_by_chr[chrom][pos],
+                        r2_aln_pos_frag_counts_by_chr[chrom][pos]))
 
     with open(info_file,'w') as fout:
         fout.write("\t".join(['total_reads_processed','duplicate_reads_discarded','unique_cuts_observed_count'])+"\n")
@@ -2272,7 +2478,8 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     returns:
         r1_assignments_file: file of location assignments for each r1 read
-        r2_assignments_file: file of location assignments for each r2 read
+        r2_assignments_file: file of location assignments for each r2 read (None if single-end)
+        linear_count: number of reads that were identified as linear (for some reason they didn't map using global mapping, but they map to a linear piece of DNA)
         translocation_count: number of reads that were identified as translocations
         large_deletion_count: number of reads that were identified as large deletion
         unidentified_count: number of reads that couldn't be identified as translocations
@@ -2284,10 +2491,11 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         with open (info_file,'r') as fin:
             head_line = fin.readline()
             line_els = fin.readline().strip().split("\t")
-            if len(line_els) == 6:
-                (r1_assignments_file_str,r2_assignments_file_str,translocation_count_str,large_deletion_count_str,unidentified_count_str,frags_mapped_count_str) = line_els
+            if len(line_els) == 7:
+                (r1_assignments_file_str,r2_assignments_file_str,linear_count_str,translocation_count_str,large_deletion_count_str,unidentified_count_str,frags_mapped_count_str) = line_els
                 r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
                 r2_assignments_file = None if r2_assignments_file_str == "None" else r2_assignments_file_str
+                linear_count = int(linear_count_str)
                 translocation_count  = int(translocation_count_str)
                 large_deletion_count  = int(large_deletion_count_str)
                 unidentified_count  = int(unidentified_count_str)
@@ -2299,9 +2507,8 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     frags_plot_obj = PlotObject.from_json(frags_plot_obj_str)
 
                 if frags_mapped_count > 0:
-                    logging.info('Using previously-processed fragment analysis for ' + str(frags_mapped_count) + ' mapped fragments')
-                    logging.info("Found %d translocations, %d large deletions, and %d unidentified reads"%(translocation_count,large_deletion_count,unidentified_count))
-                    return (r1_assignments_file,r2_assignments_file,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
+                    logging.info('Using previously-processed fragment analysis for %d mapped fragments (%d linear reads, %d translocations, %d large deletions, and %d unidentified reads)'%(frags_mapped_count,linear_count,translocation_count,large_deletion_count,unidentified_count))
+                    return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
                 else:
                     logging.info('Could not recover previously-analyzed fragments. Reanalyzing.')
 
@@ -2315,7 +2522,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     read_files_to_frag = [unmapped_reads_fastq_r1]
     if unmapped_reads_fastq_r2 is not None:
         read_files_to_frag.append(unmapped_reads_fastq_r2)
-    unmapped_frag_file = root + ".unmapped.fastq"
+    unmapped_frag_file = root + ".unmapped.fq"
     with open(unmapped_frag_file,"w") as unmapped_fastq:
         for (read_idx,unmapped_reads_fastq) in enumerate(read_files_to_frag):
             with open(unmapped_reads_fastq,'r') as unmapped_reads:
@@ -2632,7 +2839,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         #if right read is to the right of the cut (forward alignment of the read to the genome)
         right_anno = "%s:%s+%s"%(right_chr,right_cut_pos,right_strand)
         #if right read is to the left of the cut
-        if right_read_end > right_cut_pos:
+        if right_read_end < right_cut_pos:
             right_anno = "%s:%s-%s"%(right_chr,right_cut_pos,right_strand)
 
         curr_annotation = left_anno+"_"+right_anno
@@ -2659,6 +2866,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         curr_cuts = left_chr + ":" + str(left_cut_pos) + "~" + right_chr + ":" + str(right_cut_pos)
 
         return outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut_pos,left_read_start,right_chr,right_cut_pos,right_read_end
+        ### end of helper function
 
     frag_meta_file = root + ".meta.txt"
 
@@ -2678,6 +2886,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
             curr_id_vals = {} # keep track of where each frag maps to (this is a hash but it's like an array, so we can check for uninitialized values)
             curr_id_aln_pos = {} # keep track of the location where each frag aligns - curr_id_vals keeps track of where a read having a fragment in that position would align.
             translocations = defaultdict(int) # hash of all translocation locations
+            linear_count = 0
             translocation_count = 0
             large_deletion_count = 0
             unidentified_count = 0
@@ -2754,15 +2963,20 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     curr_classification = "Unidentified"
                 else:
                     key = left_chr + " " + str(left_cut) + " " + right_chr + " " + str(right_cut)
-                    translocations[key] += 1
 
                     #can't be linear otherwise it would have mapped in genomic alignment previuosly
                     if left_chr == right_chr:
-                        large_deletion_count += 1
-                        curr_classification = "Large deletion"
+                        if left_pos == right_pos:
+                            linear_count += 1
+                            curr_classification = "Linear"
+                        else:
+                            large_deletion_count += 1
+                            curr_classification = "Large deletion"
+                            translocations[key] += 1
                     else:
                         translocation_count += 1
                         curr_classification = "Translocation"
+                        translocations[key] += 1
 
                 chroms_per_frag_read_count[curr_chr_count] += 1
 
@@ -2772,7 +2986,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
             #done with last one
 
-    logging.info("Found %d translocations, %d large deletions, and %d unidentified reads"%(translocation_count,large_deletion_count,unidentified_count))
+    logging.info("Found %d linear reads, %d translocations, %d large deletions, and %d unidentified reads"%(linear_count,translocation_count,large_deletion_count,unidentified_count))
 
     frags_aligned_chrs_root = root + ".chrs"
     keys = sorted(frags_mapped_chrs.keys())
@@ -2837,13 +3051,17 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                 line += "\t"+str(val)
             fout.write(line+"\n")
 
+    if unmapped_reads_fastq_r2 is None:
+        os.remove(r2_assignments_file)
+        r2_assignments_file = None
+
     with open(info_file,'w') as fout:
-        fout.write("\t".join(['r1_assignments_file','r2_assignments_file','translocation_count','large_deletion_count','unidentified_count','read_total'])+"\n")
-        fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,translocation_count,large_deletion_count,unidentified_count,frags_mapped_count]])+"\n")
+        fout.write("\t".join(['r1_assignments_file','r2_assignments_file','linear_count','translocation_count','large_deletion_count','unidentified_count','read_total'])+"\n")
+        fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_mapped_count]])+"\n")
         frags_plot_obj_str = frags_plot_obj.to_json()
         fout.write(frags_plot_obj_str+"\n")
 
-    return (r1_assignments_file,r2_assignments_file,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
+    return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
 
 def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_cutoff,crispresso_min_aln_score,samtools_command,crispresso_command):
     """
@@ -2865,9 +3083,8 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         crispresso_command: location of crispresso to run
 
     returns:
-        crispresso_infos: metadata about each crispresso run
-            tuple of: name, chr, start, end, readCount, amplicon
-        crispresso_commands: list of crispresso commands to run
+        crispresso_infos: dict containing metadata about each crispresso run
+            #dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
     """
     logging.info('Preparing reads for analysis by CRISPResso2')
 
@@ -2882,10 +3099,10 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             chroms.append(line_chrom)
 
     crispresso_infos = [] #information about each crispresso_name
-    crispresso_commands = []
 
-    if not os.path.isdir(root+'.CRISPResso_data'):
-        os.mkdir(root+'.CRISPResso_data')
+    data_dir = root+'_data'
+    if not os.path.isdir(data_dir):
+        os.mkdir(data_dir)
 
     total_read_count = 0
     printed_read_count = 0
@@ -2930,7 +3147,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             cut_name = cut_names[this_cut]
 
             printed_read_count += 1
-            reads_file = os.path.join(root + ".CRISPResso_data",cut_name+".fastq")
+            reads_file = os.path.join(data_dir,cut_name+".fq")
             if reads_file not in filehandles:
                 fh = open(reads_file,'w')
                 filehandles[reads_file] = fh
@@ -2939,7 +3156,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             printed_cuts[this_cut] += 1
 
 
-    amp_half_length = av_read_length/2
+    amp_half_length = av_read_length/1.5
     for i,cut in enumerate(printed_cuts):
         cut_els = cut.split(" ")
         cut_type = " ".join(cut_els[0:-1]) #Large deltion is two words..
@@ -2962,6 +3179,8 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             right_pos = int(right_pos)
             right_strand = cut_loc[-1]
             right_direction = cut_loc[-2]
+
+            cut_loc = cut_loc[2:-2]
 
             if left_direction == "-":
                 left_amp_end = left_pos
@@ -3002,37 +3221,48 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
                     right_amp_seq = reverse(right_amp_seq)
                 else:
                     right_amp_seq = reverse_complement(right_amp_seq)
+
             else:
                 raise Exception('Got unexpected cut direction: ' + right_direction + ' from cut ' + cut)
 
+#            print('left amp: ' +left_amp_seq + ' right: ' + right_amp_seq)
+#            asdf()
             amp_seq = left_amp_seq + right_amp_seq
 
-        crispresso_infos.append((cut_names[cut],amp_seq,cut))
+        reads_file = os.path.join(data_dir,cut_name+".fq")
+        output_folder = os.path.join(data_dir,'CRISPResso_on_'+cut_names[cut])
+        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,amp_seq,reads_file,reads_file)
 
-        reads_file = root + ".CRISPResso_data/"+cut_name+".fastq"
-        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,root + '.CRISPResso_runs',cut_name,crispresso_min_aln_score,amp_seq,reads_file,reads_file)
-        crispresso_commands.append(crispresso_cmd)
+        crispresso_infos.append({
+                "cut":cut,
+                "name":cut_names[cut],
+                "type": cut_type,
+                "cut_loc": cut_loc,
+                "amp_seq": amp_seq,
+                "output_folder":output_folder,
+                "reads_file": reads_file,
+                "printed_read_count": printed_cuts[cut],
+                "command": crispresso_cmd
+                })
 
-    return (crispresso_infos,crispresso_commands)
+    return (crispresso_infos)
 
-def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands,n_processes,skip_failed=True):
+def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,skip_failed=True):
     """
     Runs CRISPResso2 commands and aggregates output
 
     params:
         root: root for written files
         crispresso_infos: array of metadata information for CRISPResso
-            tuple of: name, chr, start, end, readCount, amplicon
-        crispresso_commands: array of commands to run CRISPResso
+            dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
         n_processes: number of processes to run CRISPResso commands on
         skip_failed: if true, failed CRISPResso runs are skipped. Otherwise, if one fails, the program will fail.
 
     returns:
         crispresso_infos: array of metadata information for CRISPResso
-        crispresso_commands: array of commands to run CRISPResso
 
     """
-    logging.info('Running and analyzing ' + str(len(crispresso_commands)) + ' alignments using CRISPResso2')
+    logging.info('Running and analyzing ' + str(len(crispresso_infos)) + ' alignments using CRISPResso2')
 
 
     # getting rid of pickle in crispresso... so I'm leaving this import here in the meantime
@@ -3046,19 +3276,29 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands,n_pro
             import cPickle as cp #python 2.7
     # end nasty pickle part
 
+    crispresso_commands = []
+    for crispresso_info in crispresso_infos:
+        crispresso_commands.append(crispresso_info['command'])
+
 
     CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'CRISPRlungo run',skip_failed)
 
     crispresso_results = {}
     crispresso_results['run_names'] = []
     crispresso_results['run_sub_htmls'] = {}
-    crispresso_command_file = root + '.CRISPResso.commands.txt'
-    crispresso_info_file = root + '.CRISPResso.info.txt'
+    crispresso_command_file = root + '.commands.txt'
+    crispresso_info_file = root + '.summary.txt'
     with open(crispresso_info_file,'w') as crispresso_info_file, open(crispresso_command_file,'w') as crispresso_command_file:
-        crispresso_info_file.write('name\tchr\tstart\tend\treadCount\tamplicon\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\treads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\treads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\n')
-        for idx,command in enumerate(crispresso_commands):
-            crispresso_command_file.write(command)
-            name = crispresso_infos[idx][0]
+        crispresso_info_file.write('name\tcut_annotation\tcut_type\tcut_location\treference\treads_printed\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\treads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\treads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\tamplicon_sequence\n')
+        for crispresso_info in crispresso_infos:
+            crispresso_command_file.write(crispresso_info['command'])
+            name = crispresso_info['name']
+            cut = crispresso_info['cut']
+            cut_type = crispresso_info['type']
+            cut_loc = crispresso_info['cut_loc']
+            cut_amp_seq = crispresso_info['amp_seq']
+            n_printed = crispresso_info['printed_read_count']
+            ref_name = "NA"
             n_total = "NA"
             n_aligned = "NA"
             n_unmod = "NA"
@@ -3079,9 +3319,12 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands,n_pro
             unmod_pct = "NA"
             mod_pct = "NA"
 
-            run_file = os.path.join(root + '.CRISPResso_runs','CRISPResso_on_'+name,'CRISPResso2_info.pickle')
-            if os.path.isfile(run_file):
-                run_data = cp.load(open(run_file,'rb'))
+            try:
+                run_data = CRISPRessoShared.load_crispresso_info(crispresso_info['output_folder'])
+
+            except:
+                logging.debug('Could not load CRISPResso run information from ' + crispresso_info['name'] + ' at ' + crispresso_info['output_folder'])
+            else:
                 report_filename = run_data['report_filename']
                 report_file_loc = os.path.join(root+'.CRISPResso_runs',report_filename)
                 if os.path.isfile(report_file_loc):
@@ -3111,8 +3354,9 @@ def run_and_aggregate_crispresso(root,crispresso_infos,crispresso_commands,n_pro
                 if n_aligned > 0:
                     unmod_pct = 100*n_unmod/float(n_aligned)
                     mod_pct = 100*n_mod/float(n_aligned)
-            new_vals = [n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution]
-            crispresso_info_file.write("\t".join([str(x) for x in crispresso_infos[idx]])+"\t"+"\t".join([str(x) for x in new_vals])+"\n")
+        for crispresso_info in crispresso_infos:
+            new_vals = [name,cut,cut_type,cut_loc,ref_name,n_printed,n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution,cut_amp_seq]
+            crispresso_info_file.write("\t".join([str(x) for x in new_vals])+"\n")
         return crispresso_results
 
 class PlotObject:
@@ -3245,7 +3489,5 @@ body {
         with open(report_file,'w') as fo:
             fo.write(html_str)
         logging.info('Wrote ' + report_file)
-
-
 
 main()
