@@ -32,7 +32,7 @@ root (root file path to write output at)
 
 crispresso2_min_count (min number to run crispresso2, e.g. 10)
 
-bowtie2_threads	(number of threads to run bowtie2 with)
+n_processes (the number of processes to spawn for parallelization)
 
 #program defaults
 bowtie2_command: command to run bowtie2 (Default: bowtie2)
