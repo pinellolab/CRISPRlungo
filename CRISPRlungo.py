@@ -79,6 +79,7 @@ def main():
     (custom_index_fasta,target_names,target_info) = make_artificial_targets(
             root = settings['root']+'.customTargets',
             cuts=cut_sites,
+            cut_annotations=cut_annotations,
             genome=settings['genome'],
             target_length=target_length,
             target_padding=target_padding,
@@ -634,7 +635,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     logging.info('Wrote cut sites to ' + cut_log)
     return casoffinder_cut_sites
 
-def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer_chr ="",primer_loc=-1,primer_seq=None,add_non_primer_cut_targets=False,samtools_command='samtools',bowtie2_command='bowtie2',bowtie2_threads=1):
+def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,target_padding,primer_chr ="",primer_loc=-1,primer_seq=None,add_non_primer_cut_targets=False,samtools_command='samtools',bowtie2_command='bowtie2',bowtie2_threads=1):
     """
     Generates fasta sequences surrounding cuts for alignment and bowtie2 index
     At each cut point, sequence of length target_length is generated
@@ -643,6 +644,7 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
 
     params:
         cuts: array of cut locations
+        cut_annotations: dict of cut_site->annotation for description of cut (e.g. either On-target, Off-target, Known, Casoffinder, etc)
         genome: location of fasta genome
         target_length: how long the query fragment should be (on one side of the cut) (not including padding). If the primer_seq is given, targets with primer_seq may be sorter than read_length.
         taget_padding: sequence (bp) padding around target (no padding for primer_seq).
@@ -653,7 +655,6 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
         samtools_command: location of samtools to run
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
-    returns:
 
     returns:
         custom_index_fasta: fasta of artificial targets
@@ -663,8 +664,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
             target_info[target_name]['class']: class of targets (corresponding to targets)
             target_info[target_name]['cut1_chr']: cut information for cut 1
             target_info[target_name]['cut1_site']
+            target_info[target_name]['cut1_anno']
             target_info[target_name]['cut2_chr']: cut information for cut 2
             target_info[target_name]['cut2_site']
+            target_info[target_name]['cut2_anno']
             target_info[target_name]['query_pos']: genomic start of query (bp)
             target_info[target_name]['query_start']: bp after which query starts (in case of padding)
             target_info[target_name]['query_end']
@@ -691,7 +694,7 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                         head_line_els = head_line.split("\t")
                         for line in fin:
                             read_target_count += 1
-                            (target_name,target_cut_str,target_class,cut1_chr,cut1_site_str,cut2_chr,cut2_site_str,query_pos,query_start,query_end,target_cut_idx,sequence) = line.strip().split("\t")
+                            (target_name,target_cut_str,target_class,cut1_chr,cut1_site_str,cut1_anno,cut2_chr,cut2_site_str,cut2_anno,query_pos,query_start,query_end,target_cut_idx,sequence) = line.strip().split("\t")
 
                             cut1_site = int(cut1_site_str)
                             cut2_site = int(cut2_site_str)
@@ -702,8 +705,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                                 'class':target_class,
                                 'cut1_chr':cut1_chr,
                                 'cut1_site':cut1_site,
+                                'cut1_anno':cut1_anno,
                                 'cut2_chr':cut2_chr,
                                 'cut2_site':cut2_site,
+                                'cut2_anno':cut2_anno,
                                 'query_pos':query_pos,
                                 'query_start':query_start,
                                 'query_end':query_end,
@@ -732,8 +737,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                 'class': 'Primed',
                 'cut1_chr':'Primer',
                 'cut1_site':0,
+                'cut1_anno':'Primer',
                 'cut2_chr':'Primer',
                 'cut2_site':0,
+                'cut2_anno':'Primer',
                 'query_pos':0,
                 'query_start':0,
                 'query_end':len(primer_seq)*2,
@@ -750,8 +757,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                 'class': 'Primed',
                 'cut1_chr':'Primer',
                 'cut1_site':0,
+                'cut1_anno':'Primer',
                 'cut2_chr':'Primer',
                 'cut2_site':0,
+                'cut2_anno':'Primer',
                 'query_pos':0,
                 'query_start':0,
                 'query_end':len(primer_seq)*2,
@@ -787,8 +796,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'class': 'Primed',
                     'cut1_chr':'Primer',
                     'cut1_site':0,
+                    'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
@@ -804,8 +815,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'class': 'Primed',
                     'cut1_chr':'Primer',
                     'cut1_site':0,
+                    'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
@@ -821,8 +834,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'class': 'Primed',
                     'cut1_chr':'Primer',
                     'cut1_site':0,
+                    'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
@@ -838,8 +853,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                     'class': 'Primed',
                     'cut1_chr':'Primer',
                     'cut1_site':0,
+                    'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
+                    'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
                     'query_start':0,
                     'query_end':len(primer_seq)+target_length,
@@ -884,8 +901,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                         'class': 'Linear',
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cut],
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
@@ -902,8 +921,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                         'class': 'Chimera',
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cut],
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
@@ -920,8 +941,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                         'class': 'Chimera',
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cut],
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
@@ -938,8 +961,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                         'class': 'Chimera',
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cut],
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
@@ -955,8 +980,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                         'class': 'Chimera',
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cut],
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
+                        'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
                         'query_start':target_padding,
                         'query_end':target_padding + target_length*2,
@@ -997,8 +1024,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': LARB,
                             'cut1_chr':chr_A,
                             'cut1_site':site_A,
+                            'cut1_anno':cut_annotations[cuts[i]],
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1017,8 +1046,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': LARBc,
                             'cut1_chr':chr_A,
                             'cut1_site':site_A,
+                            'cut1_anno':cut_annotations[cuts[i]],
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1038,8 +1069,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': LBRA,
                             'cut1_chr':chr_B,
                             'cut1_site':site_B,
+                            'cut1_anno':cut_annotations[cuts[j]],
                             'cut2_chr':chr_A,
                             'cut2_site':site_A,
+                            'cut2_anno':cut_annotations[cuts[i]],
                             'query_pos':cut_start_B,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1058,8 +1091,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': LBRAc,
                             'cut1_chr':chr_B,
                             'cut1_site':site_B,
+                            'cut1_anno':cut_annotations[cuts[j]],
                             'cut2_chr':chr_A,
                             'cut2_site':site_A,
+                            'cut2_anno':cut_annotations[cuts[i]],
                             'query_pos':cut_start_B,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1079,8 +1114,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': LALB,
                             'cut1_chr':chr_A,
                             'cut1_site':site_A,
+                            'cut1_anno':cut_annotations[cuts[i]],
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1099,8 +1136,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': LALBc,
                             'cut1_chr':chr_A,
                             'cut1_site':site_A,
+                            'cut1_anno':cut_annotations[cuts[i]],
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1120,8 +1159,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': RARB,
                             'cut1_chr':chr_A,
                             'cut1_site':site_A,
+                            'cut1_anno':cut_annotations[cuts[i]],
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1140,8 +1181,10 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
                             'sequence': RARBc,
                             'cut1_chr':chr_A,
                             'cut1_site':site_A,
+                            'cut1_anno':cut_annotations[cuts[i]],
                             'cut2_chr':chr_B,
                             'cut2_site':site_B,
+                            'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
                             'query_start':target_padding,
                             'query_end':target_padding + target_length*2,
@@ -1166,9 +1209,9 @@ def make_artificial_targets(root,cuts,genome,target_length,target_padding,primer
 
     target_list_file = root+".txt"
     with open (target_list_file,'w') as fout:
-        fout.write('\t'.join(['target_name','target_cut_str','target_class','cut1_chr','cut1_site','cut2_chr','cut2_site','query_pos','query_start','query_end','target_cut_idx','sequence'])+"\n")
+        fout.write('\t'.join(['target_name','target_cut_str','target_class','cut1_chr','cut1_site','cut1_anno','cut2_chr','cut2_site','cut2_anno','query_pos','query_start','query_end','target_cut_idx','sequence'])+"\n")
         for target_name in target_names:
-            fout.write(target_name+'\t'+'\t'.join([str(target_info[target_name][x]) for x in ['target_cut_str','class','cut1_chr','cut1_site','cut2_chr','cut2_site','query_pos','query_start','query_end','target_cut_idx','sequence']])+"\n")
+            fout.write(target_name+'\t'+'\t'.join([str(target_info[target_name][x]) for x in ['target_cut_str','class','cut1_chr','cut1_site','cut1_anno','cut2_chr','cut2_site','cut2_anno','query_pos','query_start','query_end','target_cut_idx','sequence']])+"\n")
 
 
     #write info file for restarting
