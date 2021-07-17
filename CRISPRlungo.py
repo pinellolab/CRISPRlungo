@@ -140,6 +140,13 @@ def main():
     if genome_r2_assignments is not None:
         r2_assignment_files.append(genome_r2_assignments)
 
+    if genome_tlen_plot_object is not None:
+        genome_tlen_plot_object.order = 1
+        summary_plot_objects.append(genome_tlen_plot_object)
+    if genome_chr_aln_plot_obj is not None:
+        genome_chr_aln_plot_obj.order = 5
+        summary_plot_objects.append(genome_chr_aln_plot_obj)
+
     custom_unmapped_r1 = None
     custom_unmapped_r2 = None
 
@@ -161,6 +168,11 @@ def main():
                     )
         r1_assignment_files.append(custom_r1_assignments)
         custom_aligned_count += custom_r1_aligned_count
+
+        if custom_r1_chr_aln_plot_obj is not None:
+            custom_r1_chr_aln_plot_obj.order = 10
+            summary_plot_objects.append(custom_r1_chr_aln_plot_obj)
+
         #if input is paired, align second reads to the custom targets as welll
         if genome_unmapped_r2 is not None:
             (custom_r2_assignments,none_file,custom_unmapped_r2, none_file2, custom_r2_aligned_count, custom_r2_mapped_bam_file,custom_r2_chr_aln_plot_obj,none_custom_tlen_plot_object
@@ -180,6 +192,10 @@ def main():
             r2_assignment_files.append(custom_r2_assignments)
             custom_aligned_count += custom_r2_aligned_count
 
+            if custom_r2_chr_aln_plot_obj is not None:
+                custom_r2_chr_aln_plot_obj.order = 11
+                summary_plot_objects.append(custom_r2_chr_aln_plot_obj)
+
     #chop reads
     (frag_r1_assignments,frag_r2_assignments,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj
         ) = chop_reads(
@@ -197,17 +213,35 @@ def main():
     if frag_r2_assignments is not None:
         r2_assignment_files.append(frag_r2_assignments)
 
-    final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso = make_final_read_assignments(
-            root = settings['root']+'.final',
-            r1_assignment_files = r1_assignment_files,
-            r2_assignment_files = r2_assignment_files,
-            cut_sites = cut_sites,
-            cut_annotations = cut_annotations,
-            target_info = target_info,
-            cut_merge_dist=20,
-            genome_map_resolution=1000000,
-            dedup_based_on_aln_pos=settings['dedup_input_based_on_aln_pos_and_UMI']
-            )
+    if frags_plot_obj is not None:
+        frags_plot_obj.order = 16
+        summary_plot_objects.append(frags_plot_obj)
+
+    (final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj
+        ) = make_final_read_assignments(
+                root = settings['root']+'.final',
+                r1_assignment_files = r1_assignment_files,
+                r2_assignment_files = r2_assignment_files,
+                cut_sites = cut_sites,
+                cut_annotations = cut_annotations,
+                target_info = target_info,
+                cut_merge_dist=20,
+                genome_map_resolution=1000000,
+                dedup_based_on_aln_pos=settings['dedup_input_based_on_aln_pos_and_UMI']
+                )
+
+    deduplication_plot_obj.order=20
+    summary_plot_objects.append(deduplication_plot_obj)
+    r1_source_plot_obj.order=25
+    summary_plot_objects.append(r1_source_plot_obj)
+    r1_classification_plot_obj.order=26
+    summary_plot_objects.append(r1_classification_plot_obj)
+    if r2_source_plot_obj is not None:
+        r2_source_plot_obj.order=27
+        summary_plot_objects.append(r2_source_plot_obj)
+    if r2_classification_plot_obj is not None:
+        r2_classification_plot_obj.order=28
+        summary_plot_objects.append(r2_classification_plot_obj)
 
     crispresso_infos = [] #meta info about the crispresso runs
             #dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
@@ -1550,7 +1584,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     mapped_tlens = defaultdict(int) # observed fragment lengths
     mapped_chrs = {} #stores the counts aligning to chrs or to templates
     aligned_locs = {} # aligned reads will not be chopped, but keep track of where they aligned for CRISPResso output
-    aligned_chr_counts = {}
+    aligned_chr_counts = defaultdict(int)
 
     unmapped_fastq_r1_file = root + '.unmapped.fq'
     unmapped_fastq_r2_file = None
@@ -1618,8 +1652,6 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
             aligned_locs[line_chr][line_start] = 0
 
         aligned_locs[line_chr][line_start] += 1
-        if line_chr not in aligned_chr_counts:
-            aligned_chr_counts[line_chr] = 0
         aligned_chr_counts[line_chr] += 1
 
         curr_classification = 'Linear'
@@ -1675,11 +1707,15 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(chr_aln_plot_root+".png",pad_inches=1,bbox_inches='tight')
 
+    plot_label = 'Bar plot showing alignment location of reads aligned to ' + reference_name
+    if len(keys) == 0:
+        plot_label = '(No reads aligned to ' + reference_name + ')'
+
     chr_aln_plot_obj = PlotObject(
             plot_name = chr_aln_plot_root,
             plot_title = reference_name.capitalize() + ' Alignment Summary',
-            plot_label = 'Bar plot showing alignment location of reads aligned to ' + reference_name,
-            plot_datas = [(reference_name.capitalize() + 'Alignment Summary',chr_aln_plot_root + ".txt")]
+            plot_label = plot_label,
+            plot_datas = [(reference_name.capitalize() + ' Alignment Summary',chr_aln_plot_root + ".txt")]
             )
 
     tlen_plot_obj = None
@@ -1750,6 +1786,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         r1_cut_counts_for_crispresso: dict of cutID=>count how many times each cut was seen -- when we iterate through the reads (fastq) in the next step, we check to see that the cut was seen above a threshold before printing those reads. The count is stored in this dict.
         r2_read_ids_for_crispresso: dict of readID=>cut assignment
         r2_cut_points_for_crispresso
+        deduplication_plot_obj: plot showing how many reads were deuplicated
+        r1_source_plot_obj: plot for R1 sources (genome/custom/frags)
+        r1_classification_plot_obj: plot for R1 assignments (linear, translocation, etc)
+        r2_source_plot_obj: plot for R2 sources (genome/custom/frags)
+        r2_classification_plot_obj: plot for R2 assignments (linear, translocation, etc)
     """
 
     final_file = root + '.final_assignments'
@@ -1766,6 +1807,30 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 previous_total_read_count = int(previous_total_read_count_str)
                 final_duplicate_count = int(final_duplicate_count_str)
                 final_observed_cuts_count = int(final_observed_cuts_count_str)
+
+            #load plots
+            deduplication_plot_obj_str = fin.readline().strip()
+            deduplication_plot_obj = None
+            if deduplication_plot_obj_str != "" and deduplication_plot_obj_str != "None":
+                deduplication_plot_obj = PlotObject.from_json(deduplication_plot_obj_str)
+            r1_source_plot_obj_str = fin.readline().strip()
+            r1_source_plot_obj = None
+            if r1_source_plot_obj_str != "" and r1_source_plot_obj_str != "None":
+                r1_source_plot_obj = PlotObject.from_json(r1_source_plot_obj_str)
+            r1_classification_plot_obj_str = fin.readline().strip()
+            r1_classification_plot_obj = None
+            if r1_classification_plot_obj_str != "" and r1_classification_plot_obj_str != "None":
+                r1_classification_plot_obj = PlotObject.from_json(r1_classification_plot_obj_str)
+
+            r2_source_plot_obj_str = fin.readline().strip()
+            r2_source_plot_obj = None
+            if r2_source_plot_obj_str != "" and r2_source_plot_obj_str != "None":
+                r2_source_plot_obj = PlotObject.from_json(r2_source_plot_obj_str)
+            r2_classification_plot_obj_str = fin.readline().strip()
+            r2_classification_plot_obj = None
+            if r2_classification_plot_obj_str != "" and r2_classification_plot_obj_str != "None":
+                r2_classification_plot_obj = PlotObject.from_json(r2_classification_plot_obj_str)
+
 
         if previous_total_read_count > 0:
             #read final assignments from file
@@ -1813,7 +1878,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
                 if previous_total_read_count == read_total_read_count:
                     logging.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' reads')
-                    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso
+                    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj
                 else:
                     logging.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
 
@@ -2021,6 +2086,10 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
     final_total_count = 0
     final_duplicate_count = 0
+    final_r1_source_count = defaultdict(int)
+    final_r1_classification_count = defaultdict(int)
+    final_r2_source_count = defaultdict(int)
+    final_r2_classification_count = defaultdict(int)
 
 
     #keep track of alignments to genome
@@ -2097,6 +2166,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             r1_cut_points = line_els[r1_cut_point_ind]
             r1_alignment = line_els[r1_alignment_ind]
             r1_source = line_els[r1_source_ind]
+
+            final_r1_source_count[r1_source] += 1
+            final_r1_classification_count[r1_classification] += 1
 
             r1_associated_cut_points = []
             r1_cut_keys = []
@@ -2199,6 +2271,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 r2_alignment = line_els[r2_alignment_ind]
                 r2_source = line_els[r2_source_ind]
                 #alignment for window is only chr:pos (Linear reads have a chr:pos-end format, so we fix that with this variable)
+
+                final_r2_source_count[r2_source] += 1
+                final_r2_classification_count[r2_classification] += 1
 
                 r2_associated_cut_points = []
                 r2_cut_keys = []
@@ -2419,6 +2494,74 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     r1_aln_pos_custom_aln_counts_by_chr[chrom][pos],
                     r1_aln_pos_frag_counts_by_chr[chrom][pos]))
 
+
+    #deduplication plot
+    #labels = sorted(final_r1_source_count.keys())
+    labels = ['Not duplicate','Duplicate']
+    values = [total_reads_processed-dups_seen,dups_seen]
+    deduplication_plot_obj_root = root + ".deduplication"
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
+    ax.set_title('Duplicate read counts')
+    plt.savefig(deduplication_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(deduplication_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+    deduplication_plot_obj = PlotObject(
+            plot_name = deduplication_plot_obj_root,
+            plot_title = 'Duplicate read counts',
+            plot_label = 'Number of reads that were counted as deduplication based on alignment and UMI',
+            plot_datas = [('Read assignments',final_file)]
+            )
+
+    #sources plot
+    #labels = sorted(final_r1_source_count.keys())
+    labels = ['genome','custom targets','fragmented']
+    values = [final_r1_source_count[x] for x in labels]
+    labels = [x.capitalize() for x in labels]
+    r1_source_plot_obj_root = root + ".r1_sources"
+    with open(r1_source_plot_obj_root+".txt",'w') as summary:
+        summary.write("\t".join(labels)+"\n")
+        summary.write("\t".join([str(x) for x in values])+"\n")
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
+    ax.set_title('Read alignment')
+    plt.savefig(r1_source_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(r1_source_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
+    r1_source_plot_obj = PlotObject(
+            plot_name = r1_source_plot_obj_root,
+            plot_title = 'R1 Read Alignments',
+            plot_label = 'Method used to determine the status of each read<br>'+plot_count_str,
+            plot_datas = [('R1 alignment sources',r1_source_plot_obj_root + ".txt"),('Read assignments',final_file)]
+            )
+
+    #assignment plot
+    labels = ['Linear','Large deletion','Translocation','Unidentified']
+    values = [final_r1_classification_count[x] for x in labels]
+    r1_classification_plot_obj_root = root + ".r1_classifications"
+    with open(r1_classification_plot_obj_root+".txt",'w') as summary:
+        summary.write("\t".join(labels)+"\n")
+        summary.write("\t".join([str(x) for x in values])+"\n")
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
+    ax.set_title('Read alignment')
+    plt.savefig(r1_classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(r1_classification_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
+    r1_classification_plot_obj = PlotObject(
+            plot_name = r1_classification_plot_obj_root,
+            plot_title = 'R1 Read Classification',
+            plot_label = 'R1 Read classification<br>'+plot_count_str,
+            plot_datas = [('R1 alignment classifications',r1_classification_plot_obj_root + ".txt"),('Read assignments',final_file)]
+            )
+
+    r2_source_plot_obj = None #source of alignment for each read (genome/custom/frags)
+    r2_classification_plot_obj = None #classification of each read
     #r2 alignment report
     if sorted_r2_file is not None:
         align_report = root + ".r2_align_report.txt"
@@ -2432,11 +2575,77 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         r2_aln_pos_custom_aln_counts_by_chr[chrom][pos],
                         r2_aln_pos_frag_counts_by_chr[chrom][pos]))
 
+        #sources plot
+        #labels = sorted(final_r2_source_count.keys())
+        labels = ['genome','custom targets','fragmented']
+        values = [final_r2_source_count[x] for x in labels]
+        labels = [x.capitalize() for x in labels]
+        r2_source_plot_obj_root = root + ".r2_sources"
+        with open(r2_source_plot_obj_root+".txt",'w') as summary:
+            summary.write("\t".join(labels)+"\n")
+            summary.write("\t".join([str(x) for x in values])+"\n")
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
+        ax.set_title('Read alignment')
+        plt.savefig(r2_source_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(r2_source_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
+        r2_source_plot_obj = PlotObject(
+                plot_name = r2_source_plot_obj_root,
+                plot_title = 'R2 Read Alignments',
+                plot_label = 'Method used to determine the status of each read<br>'+plot_count_str,
+                plot_datas = [('R2 alignment sources',r2_source_plot_obj_root + ".txt"),('Read assignments',final_file)]
+                )
+
+        #assignment plot
+        labels = ['Linear','Large deletion','Translocation','Unidentified']
+        values = [final_r2_classification_count[x] for x in labels]
+        r2_classification_plot_obj_root = root + ".r2_classifications"
+        with open(r2_classification_plot_obj_root+".txt",'w') as summary:
+            summary.write("\t".join(labels)+"\n")
+            summary.write("\t".join([str(x) for x in values])+"\n")
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
+        ax.set_title('Read alignment')
+        plt.savefig(r2_classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(r2_classification_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
+        r2_classification_plot_obj = PlotObject(
+                plot_name = r2_classification_plot_obj_root,
+                plot_title = 'R2 Read Classification',
+                plot_label = 'R2 Read classification<br>'+plot_count_str,
+                plot_datas = [('R2 alignment classifications',r2_classification_plot_obj_root + ".txt"),('Read assignments',final_file)]
+                )
+
     with open(info_file,'w') as fout:
         fout.write("\t".join(['total_reads_processed','duplicate_reads_discarded','unique_cuts_observed_count'])+"\n")
         fout.write("\t".join(str(x) for x in [final_total_count,final_duplicate_count,final_observed_cuts_count])+"\n")
 
-    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso
+        deduplication_plot_obj_str = deduplication_plot_obj.to_json()
+        fout.write(deduplication_plot_obj_str+"\n")
+
+        r1_source_plot_obj_str = r1_source_plot_obj.to_json()
+        fout.write(r1_source_plot_obj_str+"\n")
+
+        r1_classification_plot_obj_str = r1_classification_plot_obj.to_json()
+        fout.write(r1_classification_plot_obj_str+"\n")
+
+        r2_source_plot_obj_str = "None"
+        if r2_source_plot_obj is not None:
+            r2_source_plot_obj_str = r2_source_plot_obj.to_json()
+        fout.write(r2_source_plot_obj_str+"\n")
+
+        r2_classification_plot_obj_str = "None"
+        if r2_classification_plot_obj is not None:
+            r2_classification_plot_obj_str = r2_classification_plot_obj.to_json()
+        fout.write(r2_classification_plot_obj_str+"\n")
+
+
+    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj
 
 
 def read_command_output(command):
