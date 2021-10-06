@@ -2692,7 +2692,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         with open(source_classification_file,'w') as summary:
             summary.write("\t"+"\t".join(source_labels)+"\n")
             for source_label in source_labels:
-                summary.write(source_label + "\t".join([str(final_source_classification_counts[(source_label,classification_label)]) for classification_label in classification_labels]) + "\n")
+                summary.write(source_label + "\t" + "\t".join([str(final_source_classification_counts[(source_label,classification_label)]) for classification_label in classification_labels]) + "\n")
 
 
         #sources plot
