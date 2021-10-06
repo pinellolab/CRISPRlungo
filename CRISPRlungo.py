@@ -130,7 +130,7 @@ def main():
                 fastq_r2 = reads_to_align_r2,
                 reads_name = 'reads',
                 bowtie2_reference = settings['bowtie2_genome'],
-                reference_name = 'genome',
+                reference_name = 'Genome',
                 target_info = target_info,
                 bowtie2_command = settings['bowtie2_command'],
                 bowtie2_threads = settings['n_processes'],
@@ -160,7 +160,7 @@ def main():
                     fastq_r2 = None,
                     reads_name = 'unaligned R1 reads',
                     bowtie2_reference=custom_index_fasta,
-                    reference_name='custom targets',
+                    reference_name='Custom targets',
                     target_info = target_info,
                     arm_min_seen_bases = settings['arm_min_seen_bases'],
                     arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
@@ -185,7 +185,7 @@ def main():
                         fastq_r2 = None,
                         reads_name = 'unaligned R2 reads',
                         bowtie2_reference=custom_index_fasta,
-                        reference_name='custom targets',
+                        reference_name='Custom targets',
                         target_info = target_info,
                         arm_min_seen_bases = settings['arm_min_seen_bases'],
                         arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
@@ -2085,6 +2085,12 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     r2_translocation_cut_counts = {}
     r2_translocation_cut_counts['*'] = defaultdict(int)
 
+    r1_fragment_translocation_cut_counts = {} #dict of counts for translocations as in r1_translocation_cut_counts except the keys have a the watson/crick and direction annotation (e.g. w-chr2:60455)
+    r1_fragment_translocation_cut_counts['u+*'] = defaultdict(int)
+    r2_fragment_translocation_cut_counts = {}
+    r2_fragment_translocation_cut_counts['u+*'] = defaultdict(int)
+
+
     for cut_chr in cut_points_by_chr:
         these_cut_points = sorted(cut_points_by_chr[cut_chr])
         last_seen_point = these_cut_points[0]
@@ -2112,6 +2118,14 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 #initialize defaultdict for this final_cut_point
                 r1_translocation_cut_counts[cut_chr+':'+str(this_pos)] = defaultdict(int)
                 r2_translocation_cut_counts[cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r1_fragment_translocation_cut_counts['w-'+cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r1_fragment_translocation_cut_counts['c-'+cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r1_fragment_translocation_cut_counts['w+'+cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r1_fragment_translocation_cut_counts['c+'+cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r2_fragment_translocation_cut_counts['w-'+cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r2_fragment_translocation_cut_counts['c-'+cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r2_fragment_translocation_cut_counts['w+'+cut_chr+':'+str(this_pos)] = defaultdict(int)
+                r2_fragment_translocation_cut_counts['c+'+cut_chr+':'+str(this_pos)] = defaultdict(int)
 
                 read_counts_at_curr_point = 0
                 #add this assignment to the lookup
@@ -2152,10 +2166,12 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
     final_total_count = 0
     final_duplicate_count = 0
-    final_r1_source_count = defaultdict(int)
-    final_r1_classification_count = defaultdict(int)
-    final_r2_source_count = defaultdict(int)
-    final_r2_classification_count = defaultdict(int)
+    r1_final_source_counts= defaultdict(int) # source is Genome, Custom targets or Fragmented
+    r1_final_classification_counts = defaultdict(int) # classification is Linear Chimera Translocation or Unidentified
+    r1_final_source_classification_counts = defaultdict(int)
+    r2_final_source_counts = defaultdict(int)
+    r2_final_classification_counts = defaultdict(int)
+    r2_final_source_classification_counts = defaultdict(int)
 
 
     #keep track of alignments to genome
@@ -2233,8 +2249,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             r1_alignment = line_els[r1_alignment_ind]
             r1_source = line_els[r1_source_ind]
 
-            final_r1_source_count[r1_source] += 1
-            final_r1_classification_count[r1_classification] += 1
+            r1_final_source_counts[r1_source] += 1
+            r1_final_classification_counts[r1_classification] += 1
+            r1_final_source_classification_counts[(r1_source,r1_classification)] += 1
 
             r1_associated_cut_points = []
             r1_cut_keys = []
@@ -2251,19 +2268,23 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                             key = r1_chr+":"+str(cut_point)
                             r1_associated_cut_points.append(key)
                             r1_uncut_counts[key] += 1
-                            if r1_source == 'genome':
+                            if r1_source == 'Genome':
                                 r1_uncut_genome_counts[key] += 1
-                            elif r1_source == 'fragmented':
+                            elif r1_source == 'Fragmented':
                                 r1_uncut_frag_counts[key] += 1
-                            elif r1_source == 'custom targets':
+                            elif r1_source == 'Custom targets':
                                 r1_uncut_custom_aln_counts[key] += 1
                             r1_translocation_cut_counts[key][key] += 1
+                            key1 = 'w-' + key
+                            key2 = key + '+w'
+                            r1_fragment_translocation_cut_counts[key1][key2]
 
                             #could have multiple cut point overlaps here
                             r1_cut_key = r1_classification + " " + key
                             r1_read_ids_for_crispresso[line_els[r1_id_ind]].append(r1_cut_key)
                             r1_cut_counts_for_crispresso[r1_cut_key] += 1
                             r1_cut_keys.append(r1_cut_key)
+
             else:
                 #if it's not Linear, we've already annotated the cut points
                 #if we only have one cut point, it's a chimeric cut
@@ -2275,9 +2296,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     cut_1 = final_cut_point_lookup[cut_1]
                     r1_associated_cut_points.append(cut_1)
                     r1_cut_counts[cut_1] += 1
-                    if r1_source == 'fragmented':
+                    if r1_source == 'Fragmented':
                         r1_cut_frag_counts[cut_1] += 1
-                    elif r1_source == 'custom targets':
+                    elif r1_source == 'Custom targets':
                         r1_cut_custom_aln_counts[cut_1] += 1
                 else:
                     cut_1 = "*"
@@ -2286,24 +2307,30 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     cut_2 = final_cut_point_lookup[cut_2]
                     r1_associated_cut_points.append(cut_2)
                     r1_cut_counts[cut_2] += 1
-                    if r1_source == 'fragmented':
+                    if r1_source == 'Fragmented':
                         r1_cut_frag_counts[cut_2] += 1
-                    elif r1_source == 'custom targets':
+                    elif r1_source == 'Custom targets':
                         r1_cut_custom_aln_counts[cut_2] += 1
                 else:
                     cut_2 = "*"
 
 
                 r1_translocation_cut_counts[cut_1][cut_2] += 1
-                r1_translocation_cut_counts[cut_2][cut_1] += 1
 
                 #also keep track of read ids covering each cut for analysis by CRISPResso
                 this_anno = line_els[r1_annotation_ind]
+
                 #add strand and direction information from anno column to newly-identified funal cuts
-                r1_cut_key = "%s %s%s~%s%s"%(r1_classification,this_anno[0:2],cut_1,cut_2,this_anno[-2:])
+                frag_key_1 = this_anno[0:2]+cut_1
+                frag_key_2 = cut_2+this_anno[-2:]
+
+                r1_cut_key = "%s %s~%s"%(r1_classification,frag_key_1,frag_key_2)
                 r1_read_ids_for_crispresso[line_els[r1_id_ind]].append(r1_cut_key)
                 r1_cut_counts_for_crispresso[r1_cut_key] += 1
                 r1_cut_keys.append(r1_cut_key)
+
+
+                r1_fragment_translocation_cut_counts[frag_key_1][frag_key_2] += 1
 
 
             #make window alignment assignments
@@ -2319,11 +2346,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         r1_aln_pos_frag_counts_by_chr[aln_chr] = defaultdict(int)
                     #assign each read to neighboring windows
                     r1_aln_pos_counts_by_chr[aln_chr][aln_pos_window] += 1
-                    if r1_source == 'genome':
+                    if r1_source == 'Genome':
                         r1_aln_pos_genome_counts_by_chr[aln_chr][aln_pos_window] += 1
-                    elif r1_source == 'fragmented':
+                    elif r1_source == 'Fragmented':
                         r1_aln_pos_frag_counts_by_chr[aln_chr][aln_pos_window] += 1
-                    elif r1_source == 'custom targets':
+                    elif r1_source == 'Custom targets':
                         r1_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
 
             r1_cut_points_str = ",".join(r1_associated_cut_points) if r1_associated_cut_points else "NA"
@@ -2338,8 +2365,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 r2_source = line_els[r2_source_ind]
                 #alignment for window is only chr:pos (Linear reads have a chr:pos-end format, so we fix that with this variable)
 
-                final_r2_source_count[r2_source] += 1
-                final_r2_classification_count[r2_classification] += 1
+                r2_final_source_counts[r2_source] += 1
+                r2_final_classification_counts[r2_classification] += 1
+                r2_final_source_classification_counts[(r2_source,r2_classification)] += 1
 
                 r2_associated_cut_points = []
                 r2_cut_keys = []
@@ -2354,13 +2382,16 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                                 key = r2_chr+":"+str(cut_point)
                                 r2_associated_cut_points.append(key)
                                 r2_uncut_counts[key] += 1
-                                if r2_source == 'genome':
+                                if r2_source == 'Genome':
                                     r2_uncut_genome_counts[key] += 1
-                                elif r2_source == 'fragmented':
+                                elif r2_source == 'Fragmented':
                                     r2_uncut_frag_counts[key] += 1
-                                elif r2_source == 'custom targets':
+                                elif r2_source == 'Custom targets':
                                     r2_uncut_custom_aln_counts[key] += 1
                                 r2_translocation_cut_counts[key][key] += 1
+                                key1 = 'w-' + key
+                                key2 = key + '+w'
+                                r2_fragment_translocation_cut_counts[key1][key2]
 
                                 r2_cut_key = r2_classification + " " + key
                                 r2_read_ids_for_crispresso[line_els[r2_id_ind]].append(r2_cut_key)
@@ -2378,9 +2409,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         cut_1 = final_cut_point_lookup[cut_1]
                         r2_associated_cut_points.append(cut_1)
                         r2_cut_counts[cut_1] += 1
-                        if r2_source == 'fragmented':
+                        if r2_source == 'Fragmented':
                             r2_cut_frag_counts[cut_1] += 1
-                        elif r2_source == 'custom targets':
+                        elif r2_source == 'Custom targets':
                             r2_cut_custom_aln_counts[cut_1] += 1
                     else:
                         cut_1 = "*"
@@ -2389,24 +2420,28 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         cut_2 = final_cut_point_lookup[cut_2]
                         r2_associated_cut_points.append(cut_2)
                         r2_cut_counts[cut_2] += 1
-                        if r2_source == 'fragmented':
+                        if r2_source == 'Fragmented':
                             r2_cut_frag_counts[cut_2] += 1
-                        elif r2_source == 'custom targets':
+                        elif r2_source == 'Custom targets':
                             r2_cut_custom_aln_counts[cut_2] += 1
                     else:
                         cut_2 = "*"
 
 
                     r2_translocation_cut_counts[cut_1][cut_2] += 1
-                    r2_translocation_cut_counts[cut_2][cut_1] += 1
 
                     #also keep track of read ids covering each cut for analysis by CRISPResso
                     this_anno = line_els[r2_annotation_ind]
                     #add strand and direction information from anno column to newly-identified funal cuts
-                    r2_cut_key = "%s %s%s~%s%s"%(r2_classification,this_anno[0:2],cut_1,cut_2,this_anno[-2:])
+                    frag_key_1 = this_anno[0:2]+cut_1
+                    frag_key_2 = cut_2+this_anno[-2:]
+
+                    r2_cut_key = "%s %s~%s"%(r2_classification,frag_key_1,frag_key_2)
                     r2_read_ids_for_crispresso[line_els[r2_id_ind]].append(r2_cut_key)
                     r2_cut_counts_for_crispresso[r2_cut_key] += 1
                     r2_cut_keys.append(r2_cut_key)
+
+                    r2_fragment_translocation_cut_counts[frag_key_1][frag_key_2] += 1
 
 
                 #make window alignment assignments
@@ -2422,11 +2457,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                             r2_aln_pos_frag_counts_by_chr[aln_chr] = defaultdict(int)
                         #assign each read to neighboring windows
                         r2_aln_pos_counts_by_chr[aln_chr][aln_pos_window] += 1
-                        if r2_source == 'genome':
+                        if r2_source == 'Genome':
                             r2_aln_pos_genome_counts_by_chr[aln_chr][aln_pos_window] += 1
-                        elif r2_source == 'fragmented':
+                        elif r2_source == 'Fragmented':
                             r2_aln_pos_frag_counts_by_chr[aln_chr][aln_pos_window] += 1
-                        elif r2_source == 'custom targets':
+                        elif r2_source == 'Custom targets':
                             r2_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
                 r2_cut_points_str = ",".join(r2_associated_cut_points) if r2_associated_cut_points else "NA"
                 r2_cut_keys_str = ",".join(r2_cut_keys) if r2_cut_keys else "NA"
@@ -2501,104 +2536,105 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
         logging.info('Wrote cut reports ' + r1_cut_report + ' ' + r2_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
 
-    #r1 translocations
-    tx_keys = sorted(r1_translocation_cut_counts.keys())
-    tx_list_report = root + ".r1_translocation_list.txt"
-    with open (tx_list_report,'w') as fout:
-        fout.write('cut_1\tcut_1_anno\tcut_1\tcut_2_anno\tcount\n')
-        for tx_key_1 in tx_keys:
-            cut_1_annotation = 'Novel'
-            if tx_key_1 in cut_annotations:
-                cut_1_annotation = cut_annotations[tx_key_1]
-            for tx_key_2 in sorted(r1_translocation_cut_counts[tx_key_1].keys()):
-                cut_2_annotation = 'Novel'
-                if tx_key_2 in cut_annotations:
-                    cut_2_annotation = cut_annotations[tx_key_2]
-                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,r1_translocation_cut_counts[tx_key_1][tx_key_2]))
-    logging.info('Wrote r1 translocation list ' + tx_list_report)
-
-    tx_report = root + ".r1_translocation_table.txt"
-    with open (tx_report,'w') as fout:
-        fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
-        for tx_key in tx_keys:
-            fout.write(tx_key+"\t"+"\t".join([str(r1_translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
-    logging.info('Wrote r1 translocation table ' + tx_report)
-
-    tx_ontarget_report = root + ".r1_ontarget_translocation_table.txt"
-    on_targets = sorted([x for x in cut_annotations if cut_annotations[cut] == 'On-target'])
-    if len(on_targets) > 0:
-        on_to_off_target_set = set()
-        for on_target in on_targets:
-            for tx_key_2 in r1_translocation_cut_counts[on_target].keys():
-                on_to_off_target_set.add(tx_key_2)
-        #put on-targets first
-        for on_target in on_targets:
-            on_to_off_target_set.discard(on_target)
-        on_to_off_target_list = on_targets + sorted(list(on_to_off_target_set))
-
-        with open (tx_ontarget_report,'w') as fout:
-            fout.write('Translocations\t'+"\t".join(on_to_off_target_list)+"\n")
-            for tx_key in on_targets:
-                fout.write(tx_key+"\t"+"\t".join([str(r1_translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
-        logging.info('Wrote r1 on-target translocation table ' + tx_ontarget_report)
-
-    #r2 translocations
-    if sorted_r2_file is not None:
-        tx_keys = sorted(r2_translocation_cut_counts.keys())
-        tx_list_report = root + ".r2_translocation_list.txt"
+    def write_translocation_reports(read_num,translocation_cut_counts,fragment_translocation_cut_counts):
+        tx_keys = sorted(translocation_cut_counts.keys())
+        tx_list_report = root + "." + read_num + "_translocation_list.txt"
         with open (tx_list_report,'w') as fout:
-            fout.write('cut_1\tcut_1_anno\tcut_1\tcut_2_anno\tcount\n')
+            fout.write('cut_1\tcut_1_anno\tcut_2\tcut_2_anno\tcount\n')
             for tx_key_1 in tx_keys:
                 cut_1_annotation = 'Novel'
                 if tx_key_1 in cut_annotations:
                     cut_1_annotation = cut_annotations[tx_key_1]
-                for tx_key_2 in sorted(r2_translocation_cut_counts[tx_key_1].keys()):
+                for tx_key_2 in sorted(translocation_cut_counts[tx_key_1].keys()):
                     cut_2_annotation = 'Novel'
                     if tx_key_2 in cut_annotations:
                         cut_2_annotation = cut_annotations[tx_key_2]
-                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,r2_translocation_cut_counts[tx_key_1][tx_key_2]))
-        logging.info('Wrote r2 translocation list ' + tx_list_report)
+                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,translocation_cut_counts[tx_key_1][tx_key_2]))
+        logging.info('Wrote ' + read_num + ' translocation list ' + tx_list_report)
 
-        tx_report = root + ".r2_translocation_table.txt"
+        tx_report = root + "." + read_num + "_translocation_table.txt"
         with open (tx_report,'w') as fout:
             fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
             for tx_key in tx_keys:
-                fout.write(tx_key+"\t"+"\t".join([str(r2_translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
-        logging.info('Wrote r2 translocation table ' + tx_report)
+                fout.write(tx_key+"\t"+"\t".join([str(translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
+        logging.info('Wrote ' + read_num + ' translocation table ' + tx_report)
 
-    tx_ontarget_report = root + ".r2_ontarget_translocation_table.txt"
-    on_targets = sorted([x for x in cut_annotations if cut_annotations[cut] == 'On-target'])
-    if len(on_targets) > 0:
-        on_to_off_target_set = set()
-        for on_target in on_targets:
-            for tx_key_2 in r2_translocation_cut_counts[on_target].keys():
-                on_to_off_target_set.add(tx_key_2)
-        #put on-targets first
-        for on_target in on_targets:
-            on_to_off_target_set.discard(on_target)
-        on_to_off_target_list = on_targets + sorted(list(on_to_off_target_set))
+        tx_ontarget_report = root + '.' + read_num + "_ontarget_translocation_table.txt"
+        on_targets = sorted([x for x in cut_annotations if cut_annotations[x] == 'On-target'])
+        if len(on_targets) > 0:
+            on_to_off_target_set = set()
+            for on_target in on_targets:
+                if on_target in translocation_cut_counts:
+                    for tx_key_2 in translocation_cut_counts[on_target].keys():
+                        on_to_off_target_set.add(tx_key_2)
+            #put on-targets first
+            for on_target in on_targets:
+                on_to_off_target_set.discard(on_target)
+            on_to_off_target_list = on_targets + sorted(list(on_to_off_target_set))
 
-        with open (tx_ontarget_report,'w') as fout:
-            fout.write('Translocations\t'+"\t".join(on_to_off_target_list)+"\n")
-            for tx_key in on_targets:
-                fout.write(tx_key+"\t"+"\t".join([str(r2_translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
-        logging.info('Wrote r2 on-target translocation table ' + tx_ontarget_report)
+            with open (tx_ontarget_report,'w') as fout:
+                fout.write('Translocations\t'+"\t".join(on_to_off_target_list)+"\n")
+                for tx_key in on_targets:
+                    fout.write(tx_key+"\t"+"\t".join([str(translocation_cut_counts[tx_key][x]) if tx_key in translocation_cut_counts else str(0) for x in on_to_off_target_list])+"\n")
+            logging.info('Wrote ' + read_num + ' on-target translocation table ' + tx_ontarget_report)
 
-    #r1 alignment report
-    align_report = root + ".r1_align_report.txt"
-    with open (align_report,'w') as fout:
-        fout.write('chr\tstart\tread_tot\tread_genome\tread_custom\tread_frags\n')
-        for chrom in sorted(r1_aln_pos_counts_by_chr.keys()):
-            for pos in sorted(r1_aln_pos_counts_by_chr[chrom].keys()):
-                fout.write("%s\t%d\t%d\t%d\t%d\t%d\n"%(chrom,pos*genome_map_resolution,
-                    r1_aln_pos_counts_by_chr[chrom][pos],
-                    r1_aln_pos_genome_counts_by_chr[chrom][pos],
-                    r1_aln_pos_custom_aln_counts_by_chr[chrom][pos],
-                    r1_aln_pos_frag_counts_by_chr[chrom][pos]))
+        # fragment translocations
+        tx1_keys = sorted(fragment_translocation_cut_counts.keys())
+        tx2_keys = defaultdict(int)
+        tx_list_report = root + '.' + read_num + "_fragment_translocation_list.txt"
+        with open (tx_list_report,'w') as fout:
+            fout.write('fragment_1\tfragment_1_anno\tfragment_2\tfragment_2_anno\tcount\n')
+            for tx_key_1 in tx1_keys:
+                cut_1 = tx_key_1[2:]
+                cut_1_annotation = 'Novel'
+                if cut_1 in cut_annotations:
+                    cut_1_annotation = cut_annotations[cut_1]
+                for tx_key_2 in sorted(fragment_translocation_cut_counts[tx_key_1].keys()):
+                    cut_2 = tx_key_2[:-2]
+                    cut_2_annotation = 'Novel'
+                    if cut_2 in cut_annotations:
+                        cut_2_annotation = cut_annotations[cut_2]
+                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,fragment_translocation_cut_counts[tx_key_1][tx_key_2]))
+                    tx2_keys[tx_key_2] += 1
+        logging.info('Wrote ' + read_num + ' fragment translocation list ' + tx_list_report)
 
+        tx_report = root + "." + read_num + "_fragment_translocation_table.txt"
+        tx2_keys_to_report = sorted(tx2_keys)
+        with open (tx_report,'w') as fout:
+            fout.write('Translocations\t'+"\t".join(tx2_keys_to_report)+"\n")
+            for tx_key in tx1_keys:
+                fout.write(tx_key+"\t"+"\t".join([str(fragment_translocation_cut_counts[tx_key][x]) if tx_key in fragment_translocation_cut_counts else str(0) for x in tx2_keys_to_report])+"\n")
+        logging.info('Wrote ' + read_num + ' fragment translocation table ' + tx_report)
+
+        tx_ontarget_report = root + "." + read_num + "_ontarget_fragment_translocation_table.txt"
+        on_targets = sorted([x for x in cut_annotations if cut_annotations[x] == 'On-target'])
+        on_targets_1_to_report = defaultdict(int)
+        on_targets_2_to_report = defaultdict(int)
+        if len(on_targets) > 0:
+            on_to_off_target_set = set()
+            for on_target in on_targets:
+                for prefix in ['w-','w+','c-','c+']:
+                    tx_key_1 = prefix+on_target
+                    if tx_key_1 in fragment_translocation_cut_counts:
+                        on_targets_1_to_report[tx_key_1] += 1
+                        for tx_key_2 in fragment_translocation_cut_counts[tx_key_1].keys():
+                            on_targets_2_to_report[tx_key_2] += 1
+
+            on_targets_1_list = sorted(on_targets_1_to_report)
+            on_targets_2_list = sorted(on_targets_2_to_report)
+            with open (tx_ontarget_report,'w') as fout:
+                fout.write('Translocations\t'+"\t".join(on_targets_2_list)+"\n")
+                for tx_key in on_targets_1_to_report:
+                    fout.write(tx_key+"\t"+"\t".join([str(fragment_translocation_cut_counts[tx_key][x]) if tx_key in fragment_translocation_cut_counts else str(0) for x in on_targets_2_list])+"\n")
+            logging.info('Wrote ' + read_num + ' on-target fragment translocation table ' + tx_ontarget_report)
+
+    #r1 translocations
+    write_translocation_reports('r1',r1_translocation_cut_counts,r1_fragment_translocation_cut_counts)
+    #r2 translocations
+    if sorted_r2_file is not None:
+        write_translocation_reports('r2',r2_translocation_cut_counts,r2_fragment_translocation_cut_counts)
 
     #deduplication plot
-    #labels = sorted(final_r1_source_count.keys())
     labels = ['Not duplicate','Duplicate']
     values = [total_reads_processed-dups_seen,dups_seen]
     deduplication_plot_obj_root = root + ".deduplication"
@@ -2616,112 +2652,107 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             plot_datas = [('Read assignments',final_file)]
             )
 
-    #sources plot
-    #labels = sorted(final_r1_source_count.keys())
-    labels = ['genome','custom targets','fragmented']
-    values = [final_r1_source_count[x] for x in labels]
-    labels = [x.capitalize() for x in labels]
-    r1_source_plot_obj_root = root + ".r1_sources"
-    with open(r1_source_plot_obj_root+".txt",'w') as summary:
-        summary.write("\t".join(labels)+"\n")
-        summary.write("\t".join([str(x) for x in values])+"\n")
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
-    ax.set_title('Read alignment')
-    plt.savefig(r1_source_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(r1_source_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+    def write_aln_reports_and_make_plots(read_num,aln_pos_counts_by_chr,aln_pos_genome_counts_by_chr,aln_pos_custom_aln_counts_by_chr,aln_pos_frag_counts_by_chr,final_file,final_source_counts,final_classification_counts,final_source_classification_counts):
+        """
+        Create reports and plots for alignment, source, and classification of reads
 
-    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
-    r1_source_plot_obj = PlotObject(
-            plot_name = r1_source_plot_obj_root,
-            plot_title = 'R1 Read Alignments',
-            plot_label = 'Method used to determine the status of each read<br>'+plot_count_str,
-            plot_datas = [('R1 alignment sources',r1_source_plot_obj_root + ".txt"),('Read assignments',final_file)]
-            )
+        params:
+            read_num: either 'r1' or 'r2' depending on reads to process
+            aln_pos_counts_by_chr: dict of chr->count of reads
+            aln_pos_genome_counts_by_chr: dict of chr->count of reads aligned to genome
+            aln_pos_custom_aln_counts_by_chr: dict of chr->count of reads aligned via alignment to custom targets
+            aln_pos_frag_counts_by_chr: dict of chr->count of reads aligned via fragmentation
+            final_file: final read assignment filename
+            final_source_counts: dict of source->count where source is Genome, Custom targets, or Fragmented
+            final_classification_counts: dict of classification->count where classification is Linear, Chimera, Translocation, Unidentified
+            final_source_classification_counts: dict of [classification][source]->count
 
-    #assignment plot
-    labels = ['Linear','Large deletion','Translocation','Unidentified']
-    values = [final_r1_classification_count[x] for x in labels]
-    r1_classification_plot_obj_root = root + ".r1_classifications"
-    with open(r1_classification_plot_obj_root+".txt",'w') as summary:
-        summary.write("\t".join(labels)+"\n")
-        summary.write("\t".join([str(x) for x in values])+"\n")
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
-    ax.set_title('Read alignment')
-    plt.savefig(r1_classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(r1_classification_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+        returns:
+            classification_plot_obj: plot_obj showing classification of reads
+            source_plot_obj: plot_obj showing source of reads
+        """
+        read_num_capitalized = read_num.capitalize()
 
-    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
-    r1_classification_plot_obj = PlotObject(
-            plot_name = r1_classification_plot_obj_root,
-            plot_title = 'R1 Read Classification',
-            plot_label = 'R1 Read classification<br>'+plot_count_str,
-            plot_datas = [('R1 alignment classifications',r1_classification_plot_obj_root + ".txt"),('Read assignments',final_file)]
-            )
+        #alignment report
+        align_report = root + "." + read_num + "_align_report.txt"
+        with open (align_report,'w') as fout:
+            fout.write('chr\tstart\tread_tot\tread_genome\tread_custom\tread_frags\n')
+            for chrom in sorted(aln_pos_counts_by_chr.keys()):
+                for pos in sorted(aln_pos_counts_by_chr[chrom].keys()):
+                    fout.write("%s\t%d\t%d\t%d\t%d\t%d\n"%(chrom,pos*genome_map_resolution,
+                        aln_pos_counts_by_chr[chrom][pos],
+                        aln_pos_genome_counts_by_chr[chrom][pos],
+                        aln_pos_custom_aln_counts_by_chr[chrom][pos],
+                        aln_pos_frag_counts_by_chr[chrom][pos]))
+
+        source_labels = ['Genome','Custom targets','Fragmented']
+        classification_labels = ['Linear','Chimera','Large deletion','Translocation','Unidentified']
+
+        source_classification_file = root + "." + read_num + "_source_classification.txt"
+        with open(source_classification_file,'w') as summary:
+            summary.write("\t"+"\t".join(source_labels)+"\n")
+            for source_label in source_labels:
+                summary.write(source_label + "\t".join([str(final_source_classification_counts[(source_label,classification_label)]) for classification_label in classification_labels]) + "\n")
+
+
+        #sources plot
+        values = [final_source_counts[x] for x in source_labels]
+        source_plot_obj_root = root + "." + read_num + "_sources"
+        with open(source_plot_obj_root+".txt",'w') as summary:
+            summary.write("\t".join(source_labels)+"\n")
+            summary.write("\t".join([str(x) for x in values])+"\n")
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.pie(values,labels=[source_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(source_labels))],autopct="%1.2f%%")
+        ax.set_title('Read alignment')
+        plt.savefig(source_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(source_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(source_labels,values)])
+        source_plot_obj = PlotObject(
+                plot_name = source_plot_obj_root,
+                plot_title = read_num_capitalized + ' Read Alignments',
+                plot_label = 'Method used to determine the status of each read<br>'+plot_count_str,
+                plot_datas = [
+                    (read_num_capitalized + ' alignment sources',source_plot_obj_root + ".txt"),('Read assignments',final_file),
+                    (read_num_capitalized + ' alignment sources by classification',source_classification_file),
+                    ('Read assignments',final_file)
+                    ]
+                )
+
+        #assignment plot
+        values = [final_classification_counts[x] for x in classification_labels]
+        classification_plot_obj_root = root + "." + read_num + "_classifications"
+        with open(classification_plot_obj_root+".txt",'w') as summary:
+            summary.write("\t".join(classification_labels)+"\n")
+            summary.write("\t".join([str(x) for x in values])+"\n")
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.pie(values,labels=[classification_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(classification_labels))],autopct="%1.2f%%")
+        ax.set_title('Read alignment')
+        plt.savefig(classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(classification_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(classification_labels,values)])
+        classification_plot_obj = PlotObject(
+                plot_name = classification_plot_obj_root,
+                plot_title = read_num_capitalized + ' Read Classification',
+                plot_label = read_num_capitalized + ' Read classification<br>'+plot_count_str,
+                plot_datas = [
+                    (read_num_capitalized + ' alignment classifications',classification_plot_obj_root + ".txt"),
+                    (read_num_capitalized + ' alignment sources by classification',source_classification_file),
+                    ('Read assignments',final_file)
+                    ]
+                )
+        return(source_plot_obj,classification_plot_obj)
+
+    r1_source_plot_obj,r1_classification_plot_obj = write_aln_reports_and_make_plots('r1',r1_aln_pos_counts_by_chr,r1_aln_pos_genome_counts_by_chr,r1_aln_pos_custom_aln_counts_by_chr,r1_aln_pos_frag_counts_by_chr,final_file,r1_final_source_counts,r1_final_classification_counts,r1_final_source_classification_counts)
 
     r2_source_plot_obj = None #source of alignment for each read (genome/custom/frags)
     r2_classification_plot_obj = None #classification of each read
     #r2 alignment report
     if sorted_r2_file is not None:
-        align_report = root + ".r2_align_report.txt"
-        with open (align_report,'w') as fout:
-            fout.write('chr\tstart\tread_tot\tread_genome\tread_custom\tread_frags\n')
-            for chrom in sorted(r2_aln_pos_counts_by_chr.keys()):
-                for pos in sorted(r2_aln_pos_counts_by_chr[chrom].keys()):
-                    fout.write("%s\t%d\t%d\t%d\t%d\t%d\n"%(chrom,pos*genome_map_resolution,
-                        r2_aln_pos_counts_by_chr[chrom][pos],
-                        r2_aln_pos_genome_counts_by_chr[chrom][pos],
-                        r2_aln_pos_custom_aln_counts_by_chr[chrom][pos],
-                        r2_aln_pos_frag_counts_by_chr[chrom][pos]))
-
-        #sources plot
-        #labels = sorted(final_r2_source_count.keys())
-        labels = ['genome','custom targets','fragmented']
-        values = [final_r2_source_count[x] for x in labels]
-        labels = [x.capitalize() for x in labels]
-        r2_source_plot_obj_root = root + ".r2_sources"
-        with open(r2_source_plot_obj_root+".txt",'w') as summary:
-            summary.write("\t".join(labels)+"\n")
-            summary.write("\t".join([str(x) for x in values])+"\n")
-        fig = plt.figure(figsize=(12,12))
-        ax = plt.subplot(111)
-        ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
-        ax.set_title('Read alignment')
-        plt.savefig(r2_source_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-        plt.savefig(r2_source_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
-
-        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
-        r2_source_plot_obj = PlotObject(
-                plot_name = r2_source_plot_obj_root,
-                plot_title = 'R2 Read Alignments',
-                plot_label = 'Method used to determine the status of each read<br>'+plot_count_str,
-                plot_datas = [('R2 alignment sources',r2_source_plot_obj_root + ".txt"),('Read assignments',final_file)]
-                )
-
-        #assignment plot
-        labels = ['Linear','Large deletion','Translocation','Unidentified']
-        values = [final_r2_classification_count[x] for x in labels]
-        r2_classification_plot_obj_root = root + ".r2_classifications"
-        with open(r2_classification_plot_obj_root+".txt",'w') as summary:
-            summary.write("\t".join(labels)+"\n")
-            summary.write("\t".join([str(x) for x in values])+"\n")
-        fig = plt.figure(figsize=(12,12))
-        ax = plt.subplot(111)
-        ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
-        ax.set_title('Read alignment')
-        plt.savefig(r2_classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-        plt.savefig(r2_classification_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
-
-        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
-        r2_classification_plot_obj = PlotObject(
-                plot_name = r2_classification_plot_obj_root,
-                plot_title = 'R2 Read Classification',
-                plot_label = 'R2 Read classification<br>'+plot_count_str,
-                plot_datas = [('R2 alignment classifications',r2_classification_plot_obj_root + ".txt"),('Read assignments',final_file)]
-                )
+        r2_source_plot_obj,r2_classification_plot_obj = write_aln_reports_and_make_plots('r2',r2_aln_pos_counts_by_chr,r2_aln_pos_genome_counts_by_chr,r2_aln_pos_custom_aln_counts_by_chr,r2_aln_pos_frag_counts_by_chr,final_file,r2_final_source_counts,r2_final_classification_counts,r2_final_source_classification_counts)
 
     with open(info_file,'w') as fout:
         fout.write("\t".join(['total_reads_processed','duplicate_reads_discarded','unique_cuts_observed_count'])+"\n")
@@ -3245,9 +3276,9 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
                     chroms_per_frag_read_count[curr_chr_count] += 1
                     if int(curr_idx) == 1:
-                        af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
+                        af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'Fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
                     else:
-                        af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
+                        af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'Fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
 
                     curr_id_chrs = {}
                     curr_id_vals = {}
@@ -3292,9 +3323,9 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                 chroms_per_frag_read_count[curr_chr_count] += 1
 
                 if int(curr_idx) == 1:
-                    af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
+                    af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'Fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
                 else:
-                    af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
+                    af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'Fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
             #done with last one
 
     logging.info("Found %d linear reads, %d translocations, %d large deletions, and %d unidentified reads"%(linear_count,translocation_count,large_deletion_count,unidentified_count))
