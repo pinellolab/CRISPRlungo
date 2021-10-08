@@ -416,7 +416,7 @@ def parse_settings(args):
     #how many bp are required to be aligned to each arm of artificial targets
     settings['arm_min_seen_bases'] = int(settings['arm_min_seen_bases']) if 'arm_min_seen_bases' in settings else 5
     #how many bp are required to match on each arm of artificial targets
-    settings['arm_min_matched_start_bases'] = int(settings['arm_min_matched_start_bases']) if 'arm_min_matched_start_bases' in settings else 3
+    settings['arm_min_matched_start_bases'] = int(settings['arm_min_matched_start_bases']) if 'arm_min_matched_start_bases' in settings else 5
 
 
     #boolean for whether to run crispresso on highly-aligned genomic locations (if false, crispresso will only be run at cut sites and artificial targets)
@@ -678,8 +678,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
             target_info[target_name]['cut2_site']
             target_info[target_name]['cut2_anno']
             target_info[target_name]['query_pos']: genomic start of query (bp)
-            target_info[target_name]['query_start']: bp after which query starts (in case of padding)
-            target_info[target_name]['query_end']
             target_info[target_name]['target_cut_idx']: bp of cut in target
             target_info[target_name]['target_cut_str']: string designating the cut site, as well as the direction each side of the read comes off of the cut site e.g. w-chr1:50_chr2:60+c means that the left part of the read started on the left side (designated by the -) watson-strand of chr1:50, and the right part of the read started at chr2:60 and extended right on the crick-strand (complement of reference)
     """
@@ -703,7 +701,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                         head_line_els = head_line.split("\t")
                         for line in fin:
                             read_target_count += 1
-                            (target_name,target_cut_str,target_class,cut1_chr,cut1_site_str,cut1_anno,cut2_chr,cut2_site_str,cut2_anno,query_pos,query_start,query_end,target_cut_idx,sequence) = line.strip().split("\t")
+                            (target_name,target_cut_str,target_class,cut1_chr,cut1_site_str,cut1_anno,cut2_chr,cut2_site_str,cut2_anno,query_pos,target_cut_idx,sequence) = line.strip().split("\t")
 
                             cut1_site = int(cut1_site_str)
                             cut2_site = int(cut2_site_str)
@@ -719,8 +717,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                                 'cut2_site':int(cut2_site),
                                 'cut2_anno':cut2_anno,
                                 'query_pos':int(query_pos),
-                                'query_start':int(query_start),
-                                'query_end':int(query_end),
                                 'target_cut_idx':int(target_cut_idx),
                                 'target_cut_str':target_cut_str
                                 }
@@ -745,16 +741,14 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                 'sequence': LALA,
                 'class': 'Primed',
                 'cut1_chr':'Primer',
-                'cut1_site':0,
+                'cut1_site':len(primer_seq),
                 'cut1_anno':'Primer',
                 'cut2_chr':'Primer',
-                'cut2_site':0,
+                'cut2_site':len(primer_seq),
                 'cut2_anno':'Primer',
                 'query_pos':0,
-                'query_start':0,
-                'query_end':len(primer_seq)*2,
                 'target_cut_idx':len(primer_seq),
-                'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer',0,'Primer',0)
+                'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer',len(primer_seq),'Primer',len(primer_seq))
                 }
 
 
@@ -765,16 +759,14 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                 'sequence': LALAc,
                 'class': 'Primed',
                 'cut1_chr':'Primer',
-                'cut1_site':0,
+                'cut1_site':len(primer_seq),
                 'cut1_anno':'Primer',
                 'cut2_chr':'Primer',
-                'cut2_site':0,
+                'cut2_site':len(primer_seq),
                 'cut2_anno':'Primer',
                 'query_pos':0,
-                'query_start':0,
-                'query_end':len(primer_seq)*2,
                 'target_cut_idx':len(primer_seq),
-                'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer',0,'Primer',0)
+                'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer',len(primer_seq),'Primer',len(primer_seq))
                 }
 
         for j,cut in enumerate(cuts):
@@ -804,16 +796,14 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                     'sequence': LARB,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':0,
+                    'cut1_site':len(primer_seq),
                     'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
-                    'query_start':0,
-                    'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s+w"%('Primer',0,chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s+w"%('Primer',len(primer_seq),chr_B,site_B)
                     }
 
             LARBc = left_bit_A + complement(right_bit_B)
@@ -823,16 +813,14 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                     'sequence': LARBc,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':0,
+                    'cut1_site':len(primer_seq),
                     'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
-                    'query_start':0,
-                    'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s+c"%('Primer',0,chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s+c"%('Primer',len(primer_seq),chr_B,site_B)
                     }
 
             LALB = left_bit_A + reverse(left_bit_B)
@@ -842,16 +830,14 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                     'sequence': LALB,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':0,
+                    'cut1_site':len(primer_seq),
                     'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
-                    'query_start':0,
-                    'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer',0,chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s-w"%('Primer',len(primer_seq),chr_B,site_B)
                     }
 
             LALBc = left_bit_A + reverse_complement(left_bit_B)
@@ -861,16 +847,14 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                     'sequence': LALBc,
                     'class': 'Primed',
                     'cut1_chr':'Primer',
-                    'cut1_site':0,
+                    'cut1_site':len(primer_seq),
                     'cut1_anno':'Primer',
                     'cut2_chr':chr_B,
                     'cut2_site':site_B,
                     'cut2_anno':cut_annotations[cut],
                     'query_pos':0,
-                    'query_start':0,
-                    'query_end':len(primer_seq)+target_length,
                     'target_cut_idx':len(primer_seq),
-                    'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer',0,chr_B,site_B)
+                    'target_cut_str':"w-%s:%s~%s:%s-c"%('Primer',len(primer_seq),chr_B,site_B)
                     }
 
 
@@ -915,8 +899,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                         'cut2_site':site_A,
                         'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
-                        'query_start':target_padding,
-                        'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length,
                         'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_A,site_A,chr_A,site_A)
                         }
@@ -935,8 +917,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                         'cut2_site':site_A,
                         'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
-                        'query_start':target_padding,
-                        'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length,
                         'target_cut_str':"w-%s:%s~%s:%s-w"%(chr_A,site_A,chr_A,site_A)
                         }
@@ -955,8 +935,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                         'cut2_site':site_A,
                         'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
-                        'query_start':target_padding,
-                        'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length,
                         'target_cut_str':"w-%s:%s~%s:%s-c"%(chr_A,site_A,chr_A,site_A)
                         }
@@ -975,8 +953,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                         'cut2_site':site_A,
                         'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
-                        'query_start':target_padding,
-                        'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length,
                         'target_cut_str':"w+%s:%s~%s:%s+w"%(chr_A,site_A,chr_A,site_A)
                         }
@@ -994,8 +970,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                         'cut2_site':site_A,
                         'cut2_anno':cut_annotations[cut],
                         'query_pos':cut_start_A,
-                        'query_start':target_padding,
-                        'query_end':target_padding + target_length*2,
                         'target_cut_idx':target_padding + target_length,
                         'target_cut_str':"w+%s:%s~%s:%s+c"%(chr_A,site_A,chr_A,site_A)
                         }
@@ -1038,8 +1012,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_B,
                             'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
                             }
@@ -1060,8 +1032,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_B,
                             'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"w-%s:%s~%s:%s+c"%(chr_A,site_A,chr_B,site_B)
                             }
@@ -1083,8 +1053,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_A,
                             'cut2_anno':cut_annotations[cuts[i]],
                             'query_pos':cut_start_B,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_B,site_B,chr_A,site_A)
                             }
@@ -1105,8 +1073,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_A,
                             'cut2_anno':cut_annotations[cuts[i]],
                             'query_pos':cut_start_B,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"w-%s:%s~%s:%s+c"%(chr_B,site_B,chr_A,site_A)
                             }
@@ -1128,8 +1094,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_B,
                             'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"w-%s:%s~%s:%s-w"%(chr_A,site_A,chr_B,site_B)
                             }
@@ -1150,8 +1114,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_B,
                             'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"w-%s:%s~%s:%s-c"%(chr_A,site_A,chr_B,site_B)
                             }
@@ -1173,8 +1135,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_B,
                             'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"w+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
                             }
@@ -1195,8 +1155,6 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'cut2_site':site_B,
                             'cut2_anno':cut_annotations[cuts[j]],
                             'query_pos':cut_start_A,
-                            'query_start':target_padding,
-                            'query_end':target_padding + target_length*2,
                             'target_cut_idx':target_padding + target_length,
                             'target_cut_str':"c+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
                             }
@@ -1218,9 +1176,9 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
 
     target_list_file = root+".txt"
     with open (target_list_file,'w') as fout:
-        fout.write('\t'.join(['target_name','target_cut_str','target_class','cut1_chr','cut1_site','cut1_anno','cut2_chr','cut2_site','cut2_anno','query_pos','query_start','query_end','target_cut_idx','sequence'])+"\n")
+        fout.write('\t'.join(['target_name','target_cut_str','target_class','cut1_chr','cut1_site','cut1_anno','cut2_chr','cut2_site','cut2_anno','query_pos','target_cut_idx','sequence'])+"\n")
         for target_name in target_names:
-            fout.write(target_name+'\t'+'\t'.join([str(target_info[target_name][x]) for x in ['target_cut_str','class','cut1_chr','cut1_site','cut1_anno','cut2_chr','cut2_site','cut2_anno','query_pos','query_start','query_end','target_cut_idx','sequence']])+"\n")
+            fout.write(target_name+'\t'+'\t'.join([str(target_info[target_name][x]) for x in ['target_cut_str','class','cut1_chr','cut1_site','cut1_anno','cut2_chr','cut2_site','cut2_anno','query_pos','target_cut_idx','sequence']])+"\n")
 
 
     #write info file for restarting
@@ -1578,6 +1536,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 unmapped_fastq_r1_file = None if unmapped_fastq_r1_file_str == "None" else unmapped_fastq_r1_file_str
                 unmapped_fastq_r2_file = None if unmapped_fastq_r2_file_str == "None" else unmapped_fastq_r2_file_str
                 read_count  = int(read_count_str)
+                aligned_count  = int(aligned_count_str)
                 mapped_bam_file = None if mapped_bam_file == "None" else mapped_bam_file_str
 
                 chr_aln_plot_obj_str = fin.readline().strip()
@@ -1593,7 +1552,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                     r1_aln_count = r1_count-unmapped_r1_count
                     r2_aln_count = r2_count-unmapped_r2_count
                     logging.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 reads (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reference_name))
-                    return r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file, unmapped_fastq_r2_file, read_count, mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj
+                    return r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file, unmapped_fastq_r2_file, aligned_count, mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj
                 else:
                     logging.info('Could not recover previously-analyzed alignments. Reanalyzing.')
 
@@ -1679,10 +1638,31 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
         read_id = line_els[0]
 
+
+        is_bad_alignment = False
         line_unmapped = int(line_els[1]) & 0x4
+
+        left_matches = 0
+        right_matches = 0
+        mez_val = ""
+        for line_el in line_els:
+            if line_el.startswith('MD:Z'):
+                mez_val = line_el[5:]
+                left_matches,right_matches = getLeftRightMismatchesMDZ(mez_val)
+                break
+
         seq = line_els[9]
-        if line_unmapped:
+
+        if line_unmapped or \
+                left_matches < arm_min_matched_start_bases or \
+                right_matches < arm_min_matched_start_bases:
+
             qual = line_els[10]
+
+            is_rc = int(line_els[1]) & 0x10
+            if is_rc:
+                seq = reverse_complement(seq)
+
             if read_is_r1:
                 uf1.write("@%s\n%s\n+\n%s\n"%(read_id,seq,qual))
                 unmapped_r1_count += 1
@@ -1693,22 +1673,23 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
         line_chr = line_els[2]
         line_mapq = line_els[5]
-        line_start = int(line_els[3])-1
+        line_start = int(line_els[3])
         curr_classification = 'Linear'
-        curr_position = "%s:%s-%s"%(line_chr,line_start,line_start+len(seq))
+        curr_position = "%s:%s-%s"%(line_chr,line_start,line_start+(len(seq)-1))
         curr_annotation = ''
         curr_cut = 'NA'
         if line_chr in target_info: #if this aligned to a custom chromosome
-            curr_classification = target_info[line_chr]['class']
-            curr_annotation = target_info[line_chr]['target_cut_str']
-            custom_start = target_info[line_chr]['query_pos'] + line_start
-            custom_end = custom_start + len(seq) #linear -- if not we'll change it below
-            curr_position = '%s:%s-%s'%(target_info[line_chr]['cut1_chr'],custom_start,custom_end)
-            (left_seen_bases_count, left_all_match_count, left_start_match_count, right_seen_bases_count, right_all_match_count, right_start_match_count) = getMatchLeftRightOfCut(target_info[line_chr]['sequence'],line,target_info[line_chr]['target_cut_idx'])
+            (left_read_bases_count, left_ref_bases_count, left_all_match_count, left_start_match_count, right_read_bases_count, right_ref_bases_count, right_all_match_count, right_start_match_count) = getMatchLeftRightOfCut(target_info[line_chr]['sequence'],line,target_info[line_chr]['target_cut_idx'])
 
             #if read doesn't sufficiently align to both parts of the artificial target, print it to unmapped and continue
-            if left_seen_bases_count < arm_min_seen_bases or right_seen_bases_count < arm_min_seen_bases or left_start_match_count < arm_min_matched_start_bases or right_start_match_count < arm_min_matched_start_bases:
+            if left_read_bases_count < arm_min_seen_bases or right_read_bases_count < arm_min_seen_bases or left_start_match_count < arm_min_matched_start_bases or right_start_match_count < arm_min_matched_start_bases:
+
                 qual = line_els[10]
+
+                is_rc = int(line_els[1]) & 0x10
+                if is_rc:
+                    seq = reverse_complement(seq)
+
                 if read_is_r1:
                     uf1.write("@%s\n%s\n+\n%s\n"%(read_id,seq,qual))
                     unmapped_r1_count += 1
@@ -1717,17 +1698,40 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                     unmapped_r2_count += 1
                 continue
 
+            curr_classification = target_info[line_chr]['class']
+            curr_annotation = target_info[line_chr]['target_cut_str'] + ' ' + line_chr
+            custom_start = target_info[line_chr]['query_pos'] + line_start - 1
+            custom_end = custom_start + len(seq) #linear -- if not we'll change it below
+            curr_position = '%s:%s-%s'%(target_info[line_chr]['cut1_chr'],custom_start,custom_end)
+
             #if custom ref is not linear, set cuts and genome aln locations
             if curr_classification != 'Linear':
 
                 cut1 =  target_info[line_chr]['cut1_chr'] + ":" +  str(target_info[line_chr]['cut1_site'])
                 cut2 =  target_info[line_chr]['cut2_chr'] + ":" +  str(target_info[line_chr]['cut2_site'])
                 curr_cut = cut1 + "~" + cut2
-                if cut1 == cut2: #cut1 could == cut2 if it's a chimeric read
-                    curr_cut = cut1
+
+
+                left_dir = target_info[line_chr]['target_cut_str'][1:2]
+                if left_dir == '-': #arm extends left in genome space after cut
+                    left_arm_end = target_info[line_chr]['cut1_site']
+                    left_arm_start = left_arm_end - left_ref_bases_count
+                else: #arm extends right in genome space after cut
+                    left_arm_start = target_info[line_chr]['cut1_site']
+                    left_arm_end = left_arm_start + left_ref_bases_count
+
+                right_dir = target_info[line_chr]['target_cut_str'][-2:-1]
+                if right_dir == '+': #arm extends right in genome space after cut
+                    right_arm_start = target_info[line_chr]['cut2_site']
+                    right_arm_end = right_arm_start + right_ref_bases_count
                 else:
-                    curr_position = '%s:%s-%s'%(target_info[line_chr]['cut1_chr'],custom_start,custom_end)
-                    curr_position += "~"+ target_info[line_chr]['cut2_chr'] + ":" +  str(target_info[line_chr]['cut2_site'])
+                    right_arm_end = target_info[line_chr]['cut2_site']
+                    right_arm_start = right_arm_end - right_ref_bases_count 
+
+                curr_position = '%s:%s-%s~%s:%s-%s'%(
+                        target_info[line_chr]['cut1_chr'],left_arm_start,left_arm_end -1,
+                        target_info[line_chr]['cut2_chr'],right_arm_start,right_arm_end - 1
+                        )
 
         if read_is_r1:
             af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(read_id,reference_name,curr_classification,curr_annotation,curr_position,curr_cut))
@@ -1759,7 +1763,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
     chr_aln_plot_root = root + ".chrs"
     keys = sorted(aligned_chr_counts.keys())
-    vals = [str(aligned_chr_counts[key]) for key in keys]
+    vals = [aligned_chr_counts[key] for key in keys]
     with open(chr_aln_plot_root+".txt","w") as chrs:
         chrs.write('chr\tnumReads\n')
         for key in sorted(aligned_chr_counts.keys()):
@@ -1768,6 +1772,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
     ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_ylim(0,max(vals)+0.5)
     ax.set_ylabel('Number of Reads')
     ax.set_title('Location of reads aligned to the '+reference_name)
     plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -1797,6 +1802,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         ax.bar(keys,vals)
+        ax.set_ylim(0,max(vals)+0.5)
         ax.set_ylabel('Number of Reads')
         ax.set_title('Insert size')
         plt.savefig(tlen_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -2167,7 +2173,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     final_total_count = 0
     final_duplicate_count = 0
     r1_final_source_counts= defaultdict(int) # source is Genome, Custom targets or Fragmented
-    r1_final_classification_counts = defaultdict(int) # classification is Linear Chimera Translocation or Unidentified
+    r1_final_classification_counts = defaultdict(int) # classification is Primed Linear Chimera Translocation or Unidentified
     r1_final_source_classification_counts = defaultdict(int)
     r2_final_source_counts = defaultdict(int)
     r2_final_classification_counts = defaultdict(int)
@@ -2277,7 +2283,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                             r1_translocation_cut_counts[key][key] += 1
                             key1 = 'w-' + key
                             key2 = key + '+w'
-                            r1_fragment_translocation_cut_counts[key1][key2]
+                            r1_fragment_translocation_cut_counts[key1][key2] += 1
 
                             #could have multiple cut point overlaps here
                             r1_cut_key = r1_classification + " " + key
@@ -2318,9 +2324,10 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 r1_translocation_cut_counts[cut_1][cut_2] += 1
 
                 #also keep track of read ids covering each cut for analysis by CRISPResso
-                this_anno = line_els[r1_annotation_ind]
+                #this_anno has cut stradn information as well as artificial target name
+                this_anno = line_els[r1_annotation_ind].split(" ")[0]
 
-                #add strand and direction information from anno column to newly-identified funal cuts
+                #add strand and direction information from anno column to newly-identified final cuts
                 frag_key_1 = this_anno[0:2]+cut_1
                 frag_key_2 = cut_2+this_anno[-2:]
 
@@ -2391,7 +2398,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                                 r2_translocation_cut_counts[key][key] += 1
                                 key1 = 'w-' + key
                                 key2 = key + '+w'
-                                r2_fragment_translocation_cut_counts[key1][key2]
+                                r2_fragment_translocation_cut_counts[key1][key2] += 1
 
                                 r2_cut_key = r2_classification + " " + key
                                 r2_read_ids_for_crispresso[line_els[r2_id_ind]].append(r2_cut_key)
@@ -2431,7 +2438,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     r2_translocation_cut_counts[cut_1][cut_2] += 1
 
                     #also keep track of read ids covering each cut for analysis by CRISPResso
-                    this_anno = line_els[r2_annotation_ind]
+                    this_anno = line_els[r2_annotation_ind].split(" ")[0]
                     #add strand and direction information from anno column to newly-identified funal cuts
                     frag_key_1 = this_anno[0:2]+cut_1
                     frag_key_2 = cut_2+this_anno[-2:]
@@ -2664,7 +2671,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             aln_pos_frag_counts_by_chr: dict of chr->count of reads aligned via fragmentation
             final_file: final read assignment filename
             final_source_counts: dict of source->count where source is Genome, Custom targets, or Fragmented
-            final_classification_counts: dict of classification->count where classification is Linear, Chimera, Translocation, Unidentified
+            final_classification_counts: dict of classification->count where classification is Primed, Linear, Chimera, Translocation, Unidentified
             final_source_classification_counts: dict of [classification][source]->count
 
         returns:
@@ -2686,11 +2693,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         aln_pos_frag_counts_by_chr[chrom][pos]))
 
         source_labels = ['Genome','Custom targets','Fragmented']
-        classification_labels = ['Linear','Chimera','Large deletion','Translocation','Unidentified']
+        classification_labels = ['Primed','Linear','Chimera','Large deletion','Translocation','Unidentified']
 
         source_classification_file = root + "." + read_num + "_source_classification.txt"
         with open(source_classification_file,'w') as summary:
-            summary.write("\t"+"\t".join(source_labels)+"\n")
+            summary.write("\t"+"\t".join(classification_labels)+"\n")
             for source_label in source_labels:
                 summary.write(source_label + "\t" + "\t".join([str(final_source_classification_counts[(source_label,classification_label)]) for classification_label in classification_labels]) + "\n")
 
@@ -2864,7 +2871,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     read_files_to_frag = [unmapped_reads_fastq_r1]
     if unmapped_reads_fastq_r2 is not None:
         read_files_to_frag.append(unmapped_reads_fastq_r2)
-    unmapped_frag_file = root + ".unmapped.fq"
+    unmapped_frag_file = root + ".to_map.fq"
     with open(unmapped_frag_file,"w") as unmapped_fastq:
         for (read_idx,unmapped_reads_fastq) in enumerate(read_files_to_frag):
             with open(unmapped_reads_fastq,'r') as unmapped_reads:
@@ -2917,7 +2924,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     frags_per_unaligned_read_root = root + ".fragsPerUnalignedRead"
     keys = sorted(frags_per_read.keys())
-    vals = [str(frags_per_read[key]) for key in keys]
+    vals = [frags_per_read[key] for key in keys]
     with open(frags_per_unaligned_read_root + ".txt","w") as frags:
         frags.write('numFragments\tnumReads\n')
         for key in keys:
@@ -2926,6 +2933,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
     ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_ylim(0,max(vals)+0.5)
     ax.set_xlabel('Number of fragments')
     ax.set_ylabel('Number of Reads')
     ax.set_title('Number of fragments per unaligned read')
@@ -3189,19 +3197,6 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
         outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,right_chr,right_cut_pos,right_read_end,right_pos,min_i,"\t".join(val_list))
 
-#        #sort so we don't count mix up chr1>chr2 with chr2>chr1 when they are really the same
-        #cut will always have  a 'left' and a 'right' - even if they're reverse complemented
-#        if right_chr < left_chr or (right_chr == left_chr and int(right_pos) < int(left_pos)):
-#            tmp_chr = left_chr
-#            tmp_pos = left_pos
-#            tmp_cut_pos = left_cut_pos
-#            left_chr = right_chr
-#            left_pos = right_pos
-#            left_cut_pos = right_cut_pos
-#            right_chr = tmp_chr
-#            right_pos = tmp_pos
-#            right_cut_pos = tmp_cut_pos
-
         curr_chr_count = len(curr_id_chrs.keys())
 
         curr_loc = "%s:%s-%s~%s:%s-%s"%(left_chr,left_pos,left_cut_pos,right_chr,right_cut_pos,right_pos)
@@ -3332,7 +3327,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     frags_aligned_chrs_root = root + ".chrs"
     keys = sorted(frags_mapped_chrs.keys())
-    vals = [str(frags_mapped_chrs[key]) for key in keys]
+    vals = [frags_mapped_chrs[key] for key in keys]
     with open(frags_aligned_chrs_root+".txt","w") as fout:
         fout.write("chr\tnumReads\n")
         for key in keys:
@@ -3340,6 +3335,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
     ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_ylim(0,max(vals)+0.5)
     ax.set_ylabel('Number of Reads')
     ax.set_title('Location of fragments from unaligned reads')
 
@@ -3348,7 +3344,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     frag_chroms_per_read_root = root + ".alignedChromsPerRead"
     keys = sorted(chroms_per_frag_read_count.keys())
-    vals = [str(chroms_per_frag_read_count[key]) for key in keys]
+    vals = [chroms_per_frag_read_count[key] for key in keys]
     with open(frag_chroms_per_read_root+".txt","w") as fout:
         fout.write("numChroms\tnumReads\n")
         for key in keys:
@@ -3357,6 +3353,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
     ax.bar(range(len(keys)),vals,tick_label=keys)
+    ax.set_ylim(0,max(vals)+0.5)
     ax.set_xlabel('Number of Chromosomes')
     ax.set_ylabel('Number of Reads')
     ax.set_title('Number of different chromosomes aligned by a fragmented single read')
@@ -3702,6 +3699,54 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,skip_failed=T
         return crispresso_results
 
 
+def getLeftRightMismatchesMDZ(mdz_str):
+    """
+    Gets the number of mismates on the left and right of an alignment from the MD:Z string
+
+    From the Samtool spec:
+
+    The MD string consists of the following items, concatenated without additional delimiter characters:
+      [0-9]+, indicating a run of reference bases that are identical to the corresponding SEQ bases;
+      [A-Z], identifying a single reference base that differs from the SEQ base aligned at that position;
+      \^[A-Z]+, identifying a run of reference bases that have been deleted in the alignment.
+
+    params: 
+        mdz_str: MD:Z string from alignment
+
+    returns:
+        left_matches: number of bp that match on the left side of the alignment
+        right_matches
+   """
+    num_set = set([str(x) for x in range(10)])
+    left_matches = 0
+    curr_num_str = ""
+    for str_index in range(len(mdz_str)):
+        if mdz_str[str_index] in num_set:
+            curr_num_str += mdz_str[str_index]
+        else:
+            break
+
+    if curr_num_str == '':
+        left_matches = 0
+    else:
+        left_matches = int(curr_num_str)
+
+    right_matches = 0
+    curr_num_str = ""
+    for str_index in range(len(mdz_str)-1,-1,-1):
+        if mdz_str[str_index] in num_set:
+            curr_num_str = mdz_str[str_index] + curr_num_str
+        else:
+            break
+
+    if curr_num_str == '':
+        right_matches = 0
+    else:
+        right_matches = int(curr_num_str)
+
+    return left_matches,right_matches
+    
+
 def sam2aln(ref_seq,sam_line,include_ref_surrounding_read = True):
     """
     Creates an alignment of nucleotides from a sam line and a reference sequence by parsing the cigar string
@@ -3815,86 +3860,114 @@ def sam2aln(ref_seq,sam_line,include_ref_surrounding_read = True):
 
     return(ref_str,aln_str,clipped_left_bp,clipped_right_bp)
 
-def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos):
+def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos,debug=False):
     """
     Gets the number of mismatches at the beginning and the end of the read specified in the sam line. Left and right are defined by the cut position
 
     params:
         ref_seq: string, reference sequence
         sam_line: tab-sep string, sam line. Expected entries are alignment position (element 4) cigar (element 6), and sequence (element 10)
-        cut_pos: the position of the cut that defines left and right
+        cut_pos: the position of the cut that defines left and right. Technically, this cut happens after this many bases.
+        debug: boolean whether to print debug
 
     returns:
-        left_seen_bases_count: number of bases from this read that were aligned to the left part
+        left_aln_bases_count: number of bases from this read that were aligned to the left part
+        left_ref_bases_count: number of bases from the ref that were aligned to the left part
         left_all_match_count: number of total bases on the left part that matched
         left_start_match_count: number of bases at the beginning of the read that matched exactly
-        right_seen_bases_count
+        right_aln_bases_count
+        right_ref_bases_count
         right_all_match_count
         right_start_match_count
     """
 
     (ref_str,aln_str,clipped_left_bp,clipped_right_bp) = sam2aln(ref_seq,sam_line)
-#    print('ref: ' + ref_str + '\naln: ' + aln_str + '\nclipped: left: ' + str(clipped_left_bp) + ' right: ' + str(clipped_right_bp))
+    ref_str = ref_str.upper()
+    aln_str = aln_str.upper()
 
+    if debug:
+        print('cut pos: ' + str(cut_pos))
+        print('ref: ' + ref_str + '\naln: ' + aln_str + '\nclipped: left: ' + str(clipped_left_bp) + ' right: ' + str(clipped_right_bp))
 
     left_all_match_count = 0
     left_start_match_count = 0
-    left_seen_bases_count = 0
+    left_read_bases_count = 0
+    left_ref_bases_count = 0
 
     seen_read = False
     seen_mismatch = False
-    for i in range(cut_pos):
-        if aln_str[i] != '-':
+    aln_pos = 0 # index in alignment
+    ref_pos = 0 # index of ref sequence (to check against cut_pos)
+    while ref_pos < cut_pos:
+        if ref_str[aln_pos] != '-':
+            ref_pos += 1
+        if aln_str[aln_pos] != '-':
             seen_read = True
-            left_seen_bases_count += 1
+            left_read_bases_count += 1
         if seen_read:
-            if ref_str[i] == aln_str[i]:
+            if ref_str[aln_pos] == aln_str[aln_pos]:
                 left_all_match_count += 1
                 if not seen_mismatch:
                     left_start_match_count += 1
             else:
                 seen_mismatch = True
-#    print('left all match count: ' + str(left_all_match_count))
-#    print('left start match count: ' + str(left_start_match_count))
-#    print('left seen bases count: ' + str(left_seen_bases_count))
+            if ref_str[aln_pos] != '-':
+                left_ref_bases_count += 1
+        aln_pos += 1
+
+    if debug:
+        print('left all match count: ' + str(left_all_match_count))
+        print('left start match count: ' + str(left_start_match_count))
+        print('left read bases count: ' + str(left_read_bases_count))
+        print('left ref bases count: ' + str(left_ref_bases_count))
 
     right_all_match_count = 0
     right_start_match_count = 0
-    right_seen_bases_count = 0
+    right_read_bases_count = 0
+    right_ref_bases_count = 0
 
     seen_read = False
     seen_mismatch = False
-    for i in range(len(ref_str)-1,cut_pos-1,-1):
-        if aln_str[i] != '-':
+    aln_pos = len(aln_str)-1 # index in alignment
+    ref_pos = len(ref_str.replace("-","")) # index of ref sequence (to check against cut_pos)
+    while ref_pos > cut_pos:
+        if ref_str[aln_pos] != '-':
+            ref_pos -= 1
+        if aln_str[aln_pos] != '-':
             seen_read = True
-            right_seen_bases_count += 1
+            right_read_bases_count += 1
         if seen_read:
-            if ref_str[i] == aln_str[i]:
+            if ref_str[aln_pos] == aln_str[aln_pos]:
                 right_all_match_count += 1
                 if not seen_mismatch:
                     right_start_match_count += 1
             else:
                 seen_mismatch = True
-#    print('right all match count: ' + str(right_all_match_count))
-#    print('right start match count: ' + str(right_start_match_count))
-#    print('right seen bases count: ' + str(right_seen_bases_count))
+            if ref_str[aln_pos] != '-':
+                right_ref_bases_count += 1
+        aln_pos -= 1
+
+    if debug:
+        print('right all match count: ' + str(right_all_match_count))
+        print('right start match count: ' + str(right_start_match_count))
+        print('right read bases count: ' + str(right_read_bases_count))
+        print('right ref bases count: ' + str(right_ref_bases_count))
 
     if clipped_left_bp > 0: #if the left side of the read was soft/hard clipped
-        if left_seen_bases_count > 0: #if any part of this read was on the left side
-            left_seen_bases_count += clipped_left_bp
+        if left_read_bases_count > 0: #if any part of this read was on the left side
+            left_read_bases_count += clipped_left_bp
             left_start_match_count = 0
         else: #if this read was actually all on the right side
-            right_seen_bases_count += clipped_left_bp
+            right_read_bases_count += clipped_left_bp
     if clipped_right_bp > 0: #if the right side of the read was soft/hard clipped
-        if right_seen_bases_count > 0: #if any part of this read was on the right side
-            right_seen_bases_count += clipped_right_bp
+        if right_read_bases_count > 0: #if any part of this read was on the right side
+            right_read_bases_count += clipped_right_bp
             right_start_match_count = 0
         else: #if this read was actually all on the left side
-            left_seen_bases_count += clipped_right_bp
+            left_read_bases_count += clipped_right_bp
 
-    return (left_seen_bases_count, left_all_match_count, left_start_match_count,
-        right_seen_bases_count, right_all_match_count, right_start_match_count)
-
+    return (left_read_bases_count, left_ref_bases_count, left_all_match_count, left_start_match_count,
+        right_read_bases_count, right_ref_bases_count, right_all_match_count, right_start_match_count)
 
 
 
