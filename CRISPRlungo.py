@@ -363,6 +363,8 @@ def parse_settings(args):
     ch.setFormatter(log_formatter)
     logging.getLogger().addHandler(ch)
 
+    logging.info('CRISPRlungo v0.0.1')
+
     logging.info('Parsing settings file')
 
     with open(settings_file, 'r') as fin:
