@@ -291,7 +291,8 @@ def main():
     crispresso_results = run_and_aggregate_crispresso(
                 root = settings['root']+".CRISPResso",
                 crispresso_infos = crispresso_infos,
-                n_processes=settings['n_processes']
+                n_processes=settings['n_processes'],
+                min_count_to_run_crispresso=settings['crispresso_min_count']
                 )
 
     labels = ["Input Reads","Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Unidentified"]
@@ -426,6 +427,9 @@ def parse_settings(args):
         settings['run_crispresso_genome_sites'] = True
     else:
         settings['run_crispresso_genome_sites'] = False
+    
+    #min number of reads required to be seen at a site for it to be analyzed by CRISPResso
+    settings['crispresso_min_count'] = int(settings['crispresso_min_count']) if 'crispresso_min_count' in settings else 10
 
     settings['samtools_command'] = settings['samtools_command'] if 'samtools_command' in settings else 'samtools'
     settings['bowtie2_command'] = settings['bowtie2_command'] if 'bowtie2_command' in settings else 'bowtie2'
@@ -1773,8 +1777,11 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
-    ax.bar(range(len(keys)),vals,tick_label=keys)
-    ax.set_ylim(0,max(vals)+0.5)
+    if len(vals) > 0:
+        ax.bar(range(len(keys)),vals,tick_label=keys)
+        ax.set_ylim(0,max(vals)+0.5)
+    else:
+        ax.bar(0)
     ax.set_ylabel('Number of Reads')
     ax.set_title('Location of reads aligned to the '+reference_name)
     plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -2908,7 +2915,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     #write frags that are too short
                     if len(line_seq) <= fragment_size:
                         new_id = "%s.CLR%d.CLID%s.CLO%s.CLF%s"%(this_id,read_idx+1,unmapped_id,0,0)
-                        unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,new_seq,new_qual))
+                        unmapped_fastq.write("%s\n%s\n+\n%s\n"%(new_id,line_seq,line_qual))
                         frag_num += 1
 
                     if frag_num > max_frags:
@@ -2954,6 +2961,8 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     mapped_chopped_sam_file = root + ".mapped.sam"
     chopped_bowtie_log = root + ".mapped.bowtie2Log"
     chopped_aln_command = '%s --sam-no-qname-trunc --reorder --no-hd --threads %d --end-to-end -x %s -U %s -S %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file)
+
+    logging.info('Aligning chopped reads')
 
     logging.debug(chopped_aln_command)
     aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf-8')
@@ -3588,7 +3597,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 
     return (crispresso_infos)
 
-def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,skip_failed=True):
+def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_run_crispresso,skip_failed=True):
     """
     Runs CRISPResso2 commands and aggregates output
 
@@ -3597,6 +3606,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,skip_failed=T
         crispresso_infos: array of metadata information for CRISPResso
             dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
         n_processes: number of processes to run CRISPResso commands on
+        min_count_to_run_crispresso: minimum number of reads assigned to a site to run CRISPResso
         skip_failed: if true, failed CRISPResso runs are skipped. Otherwise, if one fails, the program will fail.
 
     returns:
@@ -3612,14 +3622,15 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,skip_failed=T
         running_python3 = True
 
     if running_python3:
-            import pickle as cp #python 3
+        import pickle as cp #python 3
     else:
-            import cPickle as cp #python 2.7
+        import cPickle as cp #python 2.7
     # end nasty pickle part
 
     crispresso_commands = []
     for crispresso_info in crispresso_infos:
-        crispresso_commands.append(crispresso_info['command'])
+        if crispresso_info['printed_read_count'] > min_count_to_run_crispresso:
+            crispresso_commands.append(crispresso_info['command'])
 
 
     CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'CRISPRlungo run',skip_failed)
