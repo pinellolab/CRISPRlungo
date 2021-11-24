@@ -269,7 +269,7 @@ def main():
         crispresso_infos.append(info)
 
     if settings['fastq_r2'] is not None:
-        logging.info('Preparing R1 reads for analysis')
+        logging.info('Preparing R2 reads for analysis')
         r2_crispresso_infos = prep_crispresso2(
                     root = settings['root']+'.CRISPResso_r2',
                     input_fastq_file = settings['fastq_r2'],
@@ -661,7 +661,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
         cuts: array of cut locations
         cut_annotations: dict of cut_site->annotation for description of cut (e.g. either On-target, Off-target, Known, Casoffinder, etc)
         genome: location of fasta genome
-        target_length: how long the query fragment should be (on one side of the cut) (not including padding). If the primer_seq is given, targets with primer_seq may be sorter than read_length.
+        target_length: how long the query fragment should be (on one side of the cut) (not including padding). If the primer_seq is given, targets with primer_seq may be shorter than read_length.
         taget_padding: sequence (bp) padding around target (no padding for primer_seq).
         primer_chr: chromosome of primer (if any)
         primer_loc: location of primer (if any)
@@ -1968,7 +1968,8 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     sorted_r1_file = root + '.r1.sorted'
     sorted_r2_file = root + '.r2.sorted'
     final_file_tmp = root + '.final_assignments.tmp'
-    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort > ' + sorted_r1_file
+    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort LC_COLLATE=C > ' + sorted_r1_file
+#    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort > ' + sorted_r1_file
     logging.debug('r1 cat command: ' + str(cat_and_sort_cmd))
     cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
 
@@ -1976,7 +1977,8 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     if len(r2_assignment_files) == 0:
         sorted_r2_file = None
     else:
-        cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort > ' + sorted_r2_file
+        #cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort > ' + sorted_r2_file
+        cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort LC_COLLATE=C > ' + sorted_r2_file
         logging.debug('r2 cat command: ' + str(cat_and_sort_cmd))
         cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
 
