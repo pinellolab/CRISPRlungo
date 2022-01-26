@@ -76,21 +76,27 @@ def main():
         target_padding = 0
         target_padding += av_read_length
 
-    (custom_index_fasta,target_names,target_info) = make_artificial_targets(
-            root = settings['root']+'.customTargets',
-            cuts=cut_sites,
-            cut_annotations=cut_annotations,
-            genome=settings['genome'],
-            target_length=target_length,
-            target_padding=target_padding,
-            primer_chr=primer_chr,
-            primer_loc=primer_loc,
-            primer_seq=primer_seq,
-            add_non_primer_cut_targets=settings['add_non_primer_cut_targets'],
-            samtools_command=settings['samtools_command'],
-            bowtie2_command=settings['bowtie2_command'],
-            bowtie2_threads = settings['n_processes']
-            )
+    if len(cut_sites) > 0:
+        (custom_index_fasta,target_names,target_info) = make_artificial_targets(
+                root = settings['root']+'.customTargets',
+                cuts=cut_sites,
+                cut_annotations=cut_annotations,
+                genome=settings['genome'],
+                target_length=target_length,
+                target_padding=target_padding,
+                primer_chr=primer_chr,
+                primer_loc=primer_loc,
+                primer_seq=primer_seq,
+                add_non_primer_cut_targets=settings['add_non_primer_cut_targets'],
+                samtools_command=settings['samtools_command'],
+                bowtie2_command=settings['bowtie2_command'],
+                bowtie2_threads = settings['n_processes']
+                )
+    else:
+        custom_index_fasta = None
+        target_names = []
+        target_info = {}
+
 
     reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
     reads_to_align_r2 = settings['fastq_r2']
@@ -148,8 +154,8 @@ def main():
         genome_chr_aln_plot_obj.order = 5
         summary_plot_objects.append(genome_chr_aln_plot_obj)
 
-    custom_unmapped_r1 = None
-    custom_unmapped_r2 = None
+    custom_unmapped_r1 = genome_unmapped_r1
+    custom_unmapped_r2 = genome_unmapped_r2
 
     if len(target_names) > 0:
         #first, align the unaligned r1s
@@ -1968,7 +1974,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     sorted_r1_file = root + '.r1.sorted'
     sorted_r2_file = root + '.r2.sorted'
     final_file_tmp = root + '.final_assignments.tmp'
-    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort LC_COLLATE=C > ' + sorted_r1_file
+    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | LC_COLLATE=C sort > ' + sorted_r1_file
 #    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort > ' + sorted_r1_file
     logging.debug('r1 cat command: ' + str(cat_and_sort_cmd))
     cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
@@ -1978,7 +1984,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         sorted_r2_file = None
     else:
         #cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort > ' + sorted_r2_file
-        cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort LC_COLLATE=C > ' + sorted_r2_file
+        cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | LC_COLLATE=C sort > ' + sorted_r2_file
         logging.debug('r2 cat command: ' + str(cat_and_sort_cmd))
         cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
 
@@ -2879,7 +2885,9 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     max_frags = 0 #max frags produced for a read
     frags_per_read = {} #number of fragments created per read
 
-    read_files_to_frag = [unmapped_reads_fastq_r1]
+    read_files_to_frag = []
+    if unmapped_reads_fastq_r1 is not None:
+        read_files_to_frag.append(unmapped_reads_fastq_r1)
     if unmapped_reads_fastq_r2 is not None:
         read_files_to_frag.append(unmapped_reads_fastq_r2)
     unmapped_frag_file = root + ".to_map.fq"
@@ -2935,29 +2943,32 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     frags_per_unaligned_read_root = root + ".fragsPerUnalignedRead"
     keys = sorted(frags_per_read.keys())
-    vals = [frags_per_read[key] for key in keys]
-    with open(frags_per_unaligned_read_root + ".txt","w") as frags:
-        frags.write('numFragments\tnumReads\n')
-        for key in keys:
-            frags.write(str(key) + '\t' + str(frags_per_read[key]) + '\n')
+    if len(keys) > 0:
+        vals = [frags_per_read[key] for key in keys]
+        with open(frags_per_unaligned_read_root + ".txt","w") as frags:
+            frags.write('numFragments\tnumReads\n')
+            for key in keys:
+                frags.write(str(key) + '\t' + str(frags_per_read[key]) + '\n')
 
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.bar(range(len(keys)),vals,tick_label=keys)
-    ax.set_ylim(0,max(vals)+0.5)
-    ax.set_xlabel('Number of fragments')
-    ax.set_ylabel('Number of Reads')
-    ax.set_title('Number of fragments per unaligned read')
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.bar(range(len(keys)),vals,tick_label=keys)
+        ax.set_ylim(0,max(vals)+0.5)
+        ax.set_xlabel('Number of fragments')
+        ax.set_ylabel('Number of Reads')
+        ax.set_title('Number of fragments per unaligned read')
 
-    plt.savefig(frags_per_unaligned_read_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(frags_per_unaligned_read_root+".png",pad_inches=1,bbox_inches='tight')
+        plt.savefig(frags_per_unaligned_read_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(frags_per_unaligned_read_root+".png",pad_inches=1,bbox_inches='tight')
 
-    frags_plot_obj = PlotObject(
-            plot_name = frags_per_unaligned_read_root,
-            plot_title = 'Fragments per unaligned read',
-            plot_label = 'Bar plot showing number of fragments produced per unaligned read',
-            plot_datas = [('Fragments per unaligned read',frags_per_unaligned_read_root + ".txt")]
-            )
+        frags_plot_obj = PlotObject(
+                plot_name = frags_per_unaligned_read_root,
+                plot_title = 'Fragments per unaligned read',
+                plot_label = 'Bar plot showing number of fragments produced per unaligned read',
+                plot_datas = [('Fragments per unaligned read',frags_per_unaligned_read_root + ".txt")]
+                )
+    else:
+        frags_plot_obj = None
 
 
     mapped_chopped_sam_file = root + ".mapped.sam"
@@ -3340,39 +3351,41 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     frags_aligned_chrs_root = root + ".chrs"
     keys = sorted(frags_mapped_chrs.keys())
-    vals = [frags_mapped_chrs[key] for key in keys]
-    with open(frags_aligned_chrs_root+".txt","w") as fout:
-        fout.write("chr\tnumReads\n")
-        for key in keys:
-            fout.write(str(key) + '\t' + str(frags_mapped_chrs[key]) + '\n')
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.bar(range(len(keys)),vals,tick_label=keys)
-    ax.set_ylim(0,max(vals)+0.5)
-    ax.set_ylabel('Number of Reads')
-    ax.set_title('Location of fragments from unaligned reads')
+    if len(keys) > 0:
+        vals = [frags_mapped_chrs[key] for key in keys]
+        with open(frags_aligned_chrs_root+".txt","w") as fout:
+            fout.write("chr\tnumReads\n")
+            for key in keys:
+                fout.write(str(key) + '\t' + str(frags_mapped_chrs[key]) + '\n')
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.bar(range(len(keys)),vals,tick_label=keys)
+        ax.set_ylim(0,max(vals)+0.5)
+        ax.set_ylabel('Number of Reads')
+        ax.set_title('Location of fragments from unaligned reads')
 
-    plt.savefig(frags_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(frags_aligned_chrs_root+".png",pad_inches=1,bbox_inches='tight')
+        plt.savefig(frags_aligned_chrs_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(frags_aligned_chrs_root+".png",pad_inches=1,bbox_inches='tight')
 
     frag_chroms_per_read_root = root + ".alignedChromsPerRead"
     keys = sorted(chroms_per_frag_read_count.keys())
-    vals = [chroms_per_frag_read_count[key] for key in keys]
-    with open(frag_chroms_per_read_root+".txt","w") as fout:
-        fout.write("numChroms\tnumReads\n")
-        for key in keys:
-            fout.write(str(key) + '\t' + str(chroms_per_frag_read_count[key]) + '\n')
+    if len(keys) > 0:
+        vals = [chroms_per_frag_read_count[key] for key in keys]
+        with open(frag_chroms_per_read_root+".txt","w") as fout:
+            fout.write("numChroms\tnumReads\n")
+            for key in keys:
+                fout.write(str(key) + '\t' + str(chroms_per_frag_read_count[key]) + '\n')
 
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.bar(range(len(keys)),vals,tick_label=keys)
-    ax.set_ylim(0,max(vals)+0.5)
-    ax.set_xlabel('Number of Chromosomes')
-    ax.set_ylabel('Number of Reads')
-    ax.set_title('Number of different chromosomes aligned by a fragmented single read')
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.bar(range(len(keys)),vals,tick_label=keys)
+        ax.set_ylim(0,max(vals)+0.5)
+        ax.set_xlabel('Number of Chromosomes')
+        ax.set_ylabel('Number of Reads')
+        ax.set_title('Number of different chromosomes aligned by a fragmented single read')
 
-    plt.savefig(frag_chroms_per_read_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(frag_chroms_per_read_root+".png",pad_inches=1,bbox_inches='tight')
+        plt.savefig(frag_chroms_per_read_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(frag_chroms_per_read_root+".png",pad_inches=1,bbox_inches='tight')
 
     # make translocation table
     # dict of count of reads aligning from chrA to chrB
@@ -3410,7 +3423,9 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     with open(info_file,'w') as fout:
         fout.write("\t".join(['r1_assignments_file','r2_assignments_file','linear_count','translocation_count','large_deletion_count','unidentified_count','read_total'])+"\n")
         fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_mapped_count]])+"\n")
-        frags_plot_obj_str = frags_plot_obj.to_json()
+        frags_plot_obj_str = "None"
+        if frags_plot_obj is not None:
+            frags_plot_obj_str = frags_plot_obj.to_json()
         fout.write(frags_plot_obj_str+"\n")
 
     return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
