@@ -112,15 +112,33 @@ def main():
         reads_to_align_r1 = umi_r1
         reads_to_align_r2 = umi_r2
 
+    dedup_input_UMI_count = 0
     if settings['dedup_input_on_UMI']:
-        dedup_r1, dedup_r2 = dedup_file(
-            root = settings['root']+'.dedup',
-            fastq_r1 = reads_to_align_r1,
-            fastq_r2 = reads_to_align_r2,
-            umi_regex = settings['umi_regex']
+        (dedup_r1, dedup_r2, dedup_tot_read_count, dedup_count_with_regex, post_dedup_count, post_dedup_read_count
+                ) = dedup_input_file(
+                        root = settings['root']+'.dedup',
+                        fastq_r1 = reads_to_align_r1,
+                        fastq_r2 = reads_to_align_r2,
+                        umi_regex = settings['umi_regex']
         )
         reads_to_align_r1 = dedup_r1
         reads_to_align_r2 = dedup_r2
+
+    filter_primer_match_count = 0
+    if settings['primer_min_bp_match_pct'] > 0:
+        #filter out reads that don't contain primer sequence
+        (primer_filter_r1, primer_filter_r2, filter_tot_read_count, filter_count_with_primer_match, filter_count_with_primer_post_match, post_primer_filter_count
+                ) = filter_on_primer_seq(
+                        root = settings['root']+'.primer_filter',
+                        fastq_r1 = reads_to_align_r1,
+                        fastq_r2 = reads_to_align_r2,
+                        primer_seq = settings['primer_seq'],
+                        primer_min_bp_match_pct = settings['primer_min_bp_match_pct'],
+                        primer_post_seq = settings['primer_post_seq'],
+                        primer_post_min_bp_match_pct = settings['primer_post_min_bp_match_pct']
+                    )
+        reads_to_align_r1 = primer_filter_r1
+        reads_to_align_r2 = primer_filter_r2
 
     custom_aligned_count = 0 #number of reads aligned to custom targets
 
@@ -136,7 +154,7 @@ def main():
                 fastq_r2 = reads_to_align_r2,
                 reads_name = 'reads',
                 bowtie2_reference = settings['bowtie2_genome'],
-                reference_name = 'Genome',
+                reference_name = 'genome',
                 target_info = target_info,
                 bowtie2_command = settings['bowtie2_command'],
                 bowtie2_threads = settings['n_processes'],
@@ -166,7 +184,7 @@ def main():
                     fastq_r2 = None,
                     reads_name = 'unaligned R1 reads',
                     bowtie2_reference=custom_index_fasta,
-                    reference_name='Custom targets',
+                    reference_name='custom targets',
                     target_info = target_info,
                     arm_min_seen_bases = settings['arm_min_seen_bases'],
                     arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
@@ -191,7 +209,7 @@ def main():
                         fastq_r2 = None,
                         reads_name = 'unaligned R2 reads',
                         bowtie2_reference=custom_index_fasta,
-                        reference_name='Custom targets',
+                        reference_name='custom targets',
                         target_info = target_info,
                         arm_min_seen_bases = settings['arm_min_seen_bases'],
                         arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
@@ -370,7 +388,7 @@ def parse_settings(args):
     ch.setFormatter(log_formatter)
     logging.getLogger().addHandler(ch)
 
-    logging.info('CRISPRlungo v0.0.1')
+    logging.info('CRISPRlungo v0.0.2')
 
     logging.info('Parsing settings file')
 
@@ -421,6 +439,12 @@ def parse_settings(args):
         settings['add_non_primer_cut_targets'] = True
     else:
         settings['add_non_primer_cut_targets'] = False
+
+    #% bases that must match primer sequence exactly
+    settings['primer_min_bp_match_pct'] = int(settings['primer_min_bp_match_pct']) if 'primer_min_bp_match_pct' in settings else 0
+    #bases after the primer sequence (that must be matched)
+    settings['primer_post_seq'] = settings['primer_post_seq'] if 'primer_post_seq' in settings else None
+    settings['primer_post_min_bp_match_pct'] = int(settings['primer_post_min_bp_match_pct']) if 'primer_post_min_bp_match_pct' in settings else 0
 
     #how many bp are required to be aligned to each arm of artificial targets
     settings['arm_min_seen_bases'] = int(settings['arm_min_seen_bases']) if 'arm_min_seen_bases' in settings else 5
@@ -1200,7 +1224,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
     return(custom_index_fasta,target_names,target_info)
 
 
-def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False):
+def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False):
     """
     Deduplicates fastq files based on UMI (UMI is assumed to be the last part of the read ID after the ':'
 
@@ -1221,8 +1245,8 @@ def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,writ
     """
 
     dedup_stats_file = root + ".info"
-    fastq_r1_dedup = "NA"
-    fastq_r2_dedup = "NA"
+    fastq_r1_dedup = None
+    fastq_r2_dedup = None
     tot_read_count = -1
     count_with_regex = -1
     post_dedup_count = -1
@@ -1233,14 +1257,16 @@ def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,writ
             head_line = fin.readline()
             line_els = fin.readline().strip().split("\t")
             if len(line_els) > 3:
-                (fastq_r1_dedup,fastq_r2_dedup,tot_read_count_str,count_with_regex_str,post_dedup_count_str,post_dedup_read_count_str) = line_els
+                (fastq_r1_dedup_str,fastq_r2_dedup_str,tot_read_count_str,count_with_regex_str,post_dedup_count_str,post_dedup_read_count_str) = line_els
+                fastq_r1_dedup = None if fastq_r1_dedup_str == "None" else fastq_r1_dedup_str
+                fastq_r2_dedup = None if fastq_r2_dedup_str == "None" else fastq_r2_dedup_str
                 tot_read_count = int(tot_read_count_str)
                 count_with_regex = int(count_with_regex_str)
                 post_dedup_count = int(post_dedup_count_str)
                 post_dedup_read_count = int(post_dedup_read_count_str)
                 logging.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
     if tot_read_count != -1:
-        return(fastq_r1_dedup,fastq_r2_dedup)
+        return(fastq_r1_dedup,fastq_r2_dedup, tot_read_count, count_with_regex, post_dedup_count, post_dedup_read_count)
 
     #otherwise perform deduplication (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
     logging.info('Deduplicating input fastqs')
@@ -1384,7 +1410,7 @@ def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,writ
         fout.write('UMI\tCount\n')
         for umi in sorted(umi_key_counts):
             fout.write(umi + "\t" + str(umi_key_counts[umi]) + "\n")
-        loggin.info('Wrote UMI counts to ' + root+".umiCounts.txt")
+        logging.info('Wrote UMI counts to ' + root+".umiCounts.txt")
 
 
     logging.info('Wrote %d deduplicated reads'%post_dedup_count)
@@ -1392,7 +1418,7 @@ def dedup_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,writ
         fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count","count_with_regex","post_dedup_count","post_dedup_read_count"])+"\n")
         fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count,count_with_regex,post_dedup_count,post_dedup_read_count]])+"\n")
 
-    return(fastq_r1_dedup,fastq_r2_dedup)
+    return(fastq_r1_dedup,fastq_r2_dedup, tot_read_count, count_with_regex, post_dedup_count, post_dedup_read_count)
 
 def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
     """
@@ -1497,6 +1523,177 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
     #done processing just plotting now
     return(fastq_r1_dedup,fastq_r2_dedup)
 
+def hamming_distance(str1, str2):
+    return sum(c1 != c2 for c1, c2 in zip(str1, str2))
+
+def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_pct=0,primer_post_seq=None,primer_post_min_bp_match_pct=0):
+    """
+    Filters input reads based on whether they contain the primer (and post-primer sequence) with sufficient matching.
+    The primer sequence are the bases that should match the primer. The post-primer sequence is the target sequence immediately following the primer and makes sure that the correct genomic region was amplified.
+
+    params:
+        root: root for written files
+        fastq_r1: R1 reads to filter
+        fastq_r2: R2 reads to filter
+        primer_seq: sequence of primer to check at beginning of R1
+        primer_min_bp_match_pct: min percent of bases that must match primer_seq. If lower than this percent of bases match, the read will be filtered from output files.
+        primer_post_seq: sequence immedately following primer sequence to check at beginning of R1
+        primer_post_min_bp_match_pct: min percent of bases that must match primer_post_seq. If lower than this percent is matched, the read will be filtered from output files.
+
+    returns:
+        fastq_r1_filtered: fastq_r1 file of filtered reads
+        fastq_r2_filtered: fastq_r2 file of filtered reads
+        tot_read_count: number of total reads read
+        count_with_primer_match: number of reads with at least primer_min_bp_match_pct matching the primer
+        count_with_primer_post_match: number of reads with at least primer_post_min_bp_match_pct matching the primer_post sequence
+        count_post_filtering: number of reads post filtering
+    """
+
+    filter_stats_file = root + ".info"
+    fastq_r1_filtered = None
+    fastq_r2_filtered = None
+    tot_read_count = -1
+    count_with_primer_match = -1
+    count_with_primer_post_match = -1
+    count_post_filtering = -1
+    #if already finished, attempt to read in stats
+    if os.path.isfile(filter_stats_file):
+        with open(filter_stats_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().strip().split("\t")
+            if len(line_els) > 3:
+                (fastq_r1_filtered_str,fastq_r2_filtered_str,tot_read_count_str,count_with_primer_match_str,count_with_primer_post_match_str,count_post_filtering_str) = line_els
+                fastq_r1_filtered = None if fastq_r1_filtered_str == "None" else fastq_r1_filtered_str
+                fastq_r2_filtered = None if fastq_r2_filtered_str == "None" else fastq_r2_filtered_str
+                tot_read_count = int(tot_read_count_str)
+                count_with_primer_match = int(count_with_primer_match_str)
+                count_with_primer_post_match = int(count_with_primer_post_match_str)
+                count_post_filtering = int(count_post_filtering_str)
+                logging.info('Using previously-filtered fastqs with %d reads'%count_post_filtering)
+    if tot_read_count != -1:
+        return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering)
+
+    #otherwise perform filtering
+    logging.info('Filtering input fastqs on primer sequence')
+
+    tot_read_count = 0
+    count_with_primer_match = 0
+    count_with_primer_post_match = 0
+    count_post_filtering = 0
+
+    primer_len = len(primer_seq)
+    max_primer_mismatch_count = primer_len - (primer_min_bp_match_pct/float(100) * primer_len)
+
+    primer_post_len = len(primer_post_seq)
+    max_primer_post_mismatch_count = primer_post_len - (primer_post_min_bp_match_pct/float(100) * primer_post_len)
+
+    min_primer_read_len = primer_len + primer_post_len
+
+    if fastq_r1.endswith('.gz'):
+        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
+    else:
+        f1_in = open(fastq_r1,'r')
+
+    fastq_r1_filtered = root + '.r1.gz'
+    f1_out = gzip.open(fastq_r1_filtered, 'wb')
+
+    #r1 only (single end)
+    if fastq_r2 is None:
+        print('r2 only!')
+        while (1):
+            f1_id_line   = f1_in.readline()
+            f1_seq_line  = f1_in.readline().strip()
+            f1_plus_line = f1_in.readline()
+            f1_qual_line = f1_in.readline()
+
+            if not f1_qual_line : break
+            if not f1_plus_line.startswith("+"):
+                raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+            tot_read_count += 1
+
+            read_is_good = True
+
+            this_mismatches = hamming_distance(primer_seq,f1_seq_line[0:primer_len])
+            if this_mismatches > max_primer_mismatch_count:
+                read_is_good = False
+            else:
+                count_with_primer_match += 1
+
+            this_mismatches = hamming_distance(primer_post_seq,f1_seq_line[primer_len:primer_post_len])
+            if this_mismatches > max_primer_post_mismatch_count:
+                read_is_good = False
+            else:
+                count_with_primer_post_match += 1
+
+            if read_is_good:
+                f1_out.write("%s%s\n%s%s"%(f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+                count_post_filtering += 1
+
+    #paired end
+    else:
+        if fastq_r2.endswith('.gz'):
+            f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
+        else:
+            f2_in = open(fastq_r2,'r')
+
+        fastq_r2_filtered = root + '.r2.gz'
+        f2_out = gzip.open(fastq_r2_filtered, 'wb')
+
+        while (1):
+            f1_id_line   = f1_in.readline()
+            f1_seq_line  = f1_in.readline().strip()
+            f1_plus_line = f1_in.readline()
+            f1_qual_line = f1_in.readline()
+
+            if not f1_qual_line : break
+            if not f1_plus_line.startswith("+"):
+                raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+
+            f2_id_line   = f2_in.readline()
+            f2_seq_line  = f2_in.readline().strip()
+            f2_plus_line = f2_in.readline()
+            f2_qual_line = f2_in.readline()
+
+            tot_read_count += 1
+
+            read_is_good = True
+
+            this_mismatches = hamming_distance(primer_seq,f1_seq_line[0:primer_len])
+            if this_mismatches > max_primer_mismatch_count:
+                read_is_good = False
+            else:
+                count_with_primer_match += 1
+
+            this_mismatches = hamming_distance(primer_post_seq,f1_seq_line[primer_len:primer_post_len])
+            if this_mismatches > max_primer_post_mismatch_count:
+                read_is_good = False
+            else:
+                count_with_primer_post_match += 1
+
+            if read_is_good:
+                f1_out.write("%s%s\n%s%s"%(f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+                f2_out.write("%s%s\n%s%s"%(f2_id_line,f2_seq_line,f2_plus_line,f2_qual_line))
+                count_post_filtering += 1
+
+        f2_in.close()
+        f2_out.close()
+
+    f1_out.close()
+    f1_in.close()
+
+    #now iterate through f1/f2/umi files
+    logging.info('Read %d reads'%tot_read_count)
+
+    logging.info('Wrote %d filtered reads'%count_post_filtering)
+
+    with open(filter_stats_file,'w') as fout:
+        fout.write("\t".join(["fastq_r1_filtered","fastq_r2_filtered","tot_read_count","count_with_primer_match","count_with_primer_post_match","count_post_filtering"])+"\n")
+        fout.write("\t".join([str(x) for x in [fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering]])+"\n")
+
+    return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering)
+
+
+
 def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=5,arm_min_matched_start_bases=3,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False):
     """
     Aligns reads to the provided reference (either artificial targets or genome)
@@ -1563,7 +1760,10 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 if read_count > 0:
                     r1_aln_count = r1_count-unmapped_r1_count
                     r2_aln_count = r2_count-unmapped_r2_count
-                    logging.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 reads (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reference_name))
+                    if r2_count > 0:
+                        logging.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 reads (%d reads input) for %s aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reads_name,reference_name))
+                    else:
+                        logging.info('Using previously-processed alignment of %d/%d reads (%d reads input) for %s aligned to %s'%(r1_aln_count,r1_count,read_count,reads_name,reference_name))
                     return r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file, unmapped_fastq_r2_file, aligned_count, mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj
                 else:
                     logging.info('Could not recover previously-analyzed alignments. Reanalyzing.')
@@ -1787,7 +1987,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         ax.bar(range(len(keys)),vals,tick_label=keys)
         ax.set_ylim(0,max(vals)+0.5)
     else:
-        ax.bar(0)
+        ax.bar(0,0)
     ax.set_ylabel('Number of Reads')
     ax.set_title('Location of reads aligned to the '+reference_name)
     plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -1847,7 +2047,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
     r1_aln_count = r1_count-unmapped_r1_count
     r2_aln_count = r2_count-unmapped_r2_count
-    logging.info('Finished analysis of %d/%d R1 and %d/%d R2 reads (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reference_name))
+    logging.info('Finished analysis of %d/%d R1 and %d/%d R2 reads (%d reads input) for %s aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reads_name,reference_name))
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
 
 def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True):
