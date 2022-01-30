@@ -226,7 +226,7 @@ def main():
                 summary_plot_objects.append(custom_r2_chr_aln_plot_obj)
 
     #chop reads
-    (frag_r1_assignments,frag_r2_assignments,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj
+    (frag_r1_assignments,frag_r2_assignments,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_plot_obj
         ) = chop_reads(
                 root = settings['root']+".frags",
                 unmapped_reads_fastq_r1 = custom_unmapped_r1,
@@ -329,8 +329,8 @@ def main():
                 min_count_to_run_crispresso=settings['crispresso_min_count']
                 )
 
-    labels = ["Input Reads","Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Unidentified"]
-    values = [num_reads_input,custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,unidentified_count]
+    labels = ["Input Reads","Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Large Inversions","Chopped Unidentified"]
+    values = [num_reads_input,custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count]
     alignment_summary_root = settings['root']+".alignmentSummary"
     with open(alignment_summary_root+".txt",'w') as summary:
         summary.write("\t".join(labels)+"\n")
@@ -1147,7 +1147,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'target_cut_str':"w-%s:%s~%s:%s-w"%(chr_A,site_A,chr_B,site_B)
                             }
                     if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
+                        target_info[target_name]['class'] = 'Large inversion'
                     else:
                         target_info[target_name]['class'] = 'Translocation'
 
@@ -1167,7 +1167,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'target_cut_str':"w-%s:%s~%s:%s-c"%(chr_A,site_A,chr_B,site_B)
                             }
                     if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
+                        target_info[target_name]['class'] = 'Large inversion'
                     else:
                         target_info[target_name]['class'] = 'Translocation'
 
@@ -1188,7 +1188,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'target_cut_str':"w+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
                             }
                     if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
+                        target_info[target_name]['class'] = 'Large inversion'
                     else:
                         target_info[target_name]['class'] = 'Translocation'
 
@@ -1208,7 +1208,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                             'target_cut_str':"c+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
                             }
                     if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
+                        target_info[target_name]['class'] = 'Large inversion'
                     else:
                         target_info[target_name]['class'] = 'Translocation'
 
@@ -3050,7 +3050,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         aln_pos_frag_counts_by_chr[chrom][pos]))
 
         source_labels = ['Genome','Custom targets','Fragmented']
-        classification_labels = ['Primed','Linear','Chimera','Large deletion','Translocation','Unidentified']
+        classification_labels = ['Primed','Linear','Chimera','Large deletion','Large inversion','Translocation','Unidentified']
 
         #check to make sure labels match
         for k in final_source_counts.keys():
@@ -3304,7 +3304,8 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         r2_assignments_file: file of location assignments for each r2 read (None if single-end)
         linear_count: number of reads that were identified as linear (for some reason they didn't map using global mapping, but they map to a linear piece of DNA)
         translocation_count: number of reads that were identified as translocations
-        large_deletion_count: number of reads that were identified as large deletion
+        large_deletion_count: number of reads that were identified as large deletion (same chr, different orientation(e.g. one extending left, one extending right))
+        large_inversion_count: number of reads that were identified as large inversions (same chr, same orientation (e.g. both reading left))
         unidentified_count: number of reads that couldn't be identified as translocations
         frags_plot_obj: plot object summarizing fragments
     """
@@ -3314,13 +3315,14 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         with open (info_file,'r') as fin:
             head_line = fin.readline()
             line_els = fin.readline().strip().split("\t")
-            if len(line_els) == 7:
-                (r1_assignments_file_str,r2_assignments_file_str,linear_count_str,translocation_count_str,large_deletion_count_str,unidentified_count_str,frags_mapped_count_str) = line_els
+            if len(line_els) == 8:
+                (r1_assignments_file_str,r2_assignments_file_str,linear_count_str,translocation_count_str,large_deletion_count_str,large_inversion_count_str,unidentified_count_str,frags_mapped_count_str) = line_els
                 r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
                 r2_assignments_file = None if r2_assignments_file_str == "None" else r2_assignments_file_str
                 linear_count = int(linear_count_str)
                 translocation_count  = int(translocation_count_str)
                 large_deletion_count  = int(large_deletion_count_str)
+                large_inversion_count  = int(large_inversion_count_str)
                 unidentified_count  = int(unidentified_count_str)
                 frags_mapped_count  = int(frags_mapped_count_str)
 
@@ -3330,8 +3332,8 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     frags_plot_obj = PlotObject.from_json(frags_plot_obj_str)
 
                 if frags_mapped_count > 0:
-                    logging.info('Using previously-processed fragment analysis for %d mapped fragments (%d linear reads, %d translocations, %d large deletions, and %d unidentified reads)'%(frags_mapped_count,linear_count,translocation_count,large_deletion_count,unidentified_count))
-                    return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
+                    logging.info('Using previously-processed fragment analysis for %d mapped fragments (%d linear reads, %d translocations, %d large deletions, %d large inversions, and %d unidentified reads)'%(frags_mapped_count,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count))
+                    return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_plot_obj)
                 else:
                     logging.info('Could not recover previously-analyzed fragments. Reanalyzing.')
 
@@ -3463,6 +3465,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
             left_cut_pos: Base Location where the left part could have resulted from a cut at
             left_read_start: Base location where the left fragment could have started at
             left_pos: Base location where the left part of the read aligned
+            left_orientation: orientation (+ or -) for whether the read extends to the left or the right away from the cut
             right_cut_pos
             right_pos
         """
@@ -3661,27 +3664,31 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         #create annotation for this read
         #if left read is to the left of the cut (forward alignment of read to the genome)
         left_anno = "%s-%s:%s"%(left_strand,left_chr,left_cut_pos)
+        left_orientation = '-'
         #if left read is to the right of the cut
         if left_read_start > left_cut_pos:
             left_anno = "%s+%s:%s"%(left_strand,left_chr,left_cut_pos)
+            left_orientation = '+'
 
         #if right read is to the right of the cut (forward alignment of the read to the genome)
         right_anno = "%s:%s+%s"%(right_chr,right_cut_pos,right_strand)
+        right_orientation = '+'
         #if right read is to the left of the cut
         if right_read_end < right_cut_pos:
             right_anno = "%s:%s-%s"%(right_chr,right_cut_pos,right_strand)
+            right_orientation = '-'
 
         curr_annotation = left_anno+"_"+right_anno
 
 
-        outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,right_chr,right_cut_pos,right_read_end,right_pos,min_i,"\t".join(val_list))
+        outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,left_orientation,right_chr,right_cut_pos,right_read_end,right_pos,right_orientation,min_i,"\t".join(val_list))
 
         curr_chr_count = len(curr_id_chrs.keys())
 
         curr_loc = "%s:%s-%s~%s:%s-%s"%(left_chr,left_pos,left_cut_pos,right_chr,right_cut_pos,right_pos)
         curr_cuts = left_chr + ":" + str(left_cut_pos) + "~" + right_chr + ":" + str(right_cut_pos)
 
-        return outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut_pos,left_read_start,right_chr,right_cut_pos,right_read_end
+        return outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut_pos,left_read_start,left_orientation,right_chr,right_cut_pos,right_read_end,right_orientation
         ### end of helper function
 
     frag_meta_file = root + ".meta.txt"
@@ -3705,6 +3712,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
             linear_count = 0
             translocation_count = 0
             large_deletion_count = 0
+            large_inversion_count = 0
             unidentified_count = 0
             chroms_per_frag_read_count = defaultdict(int) # keep track for all read how many chrs the fragments mapped to
             frags_mapped_count = 0
@@ -3729,7 +3737,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
                 #write results from last id if this line is for a new id
                 if curr_id != next_id and curr_id != "":
-                    (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,right_chr,right_cut,right_pos) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags)
+                    (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,left_orientation,right_chr,right_cut,right_pos,right_orientation) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags)
                     frag_file.write(curr_id+"\t"+outline)
 
                     curr_classification = "NA"
@@ -3742,8 +3750,12 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
                         #can't be linear otherwise it would have mapped in genomic alignment previuosly
                         if left_chr == right_chr:
-                            large_deletion_count += 1
-                            curr_classification = "Large deletion"
+                            if left_orientation == right_orientation:
+                                large_inversion_count += 1
+                                curr_classification = "Large inversion"
+                            else:
+                                large_deletion_count += 1
+                                curr_classification = "Large deletion"
                         else:
                             translocation_count += 1
                             curr_classification = "Translocation"
@@ -3770,7 +3782,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
             #finish last item
             if frags_mapped_count > 0:
-                (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,right_chr,right_cut,right_pos) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags)
+                (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,left_orientation,right_chr,right_cut,right_pos,right_orientation) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags)
                 frag_file.write(curr_id+"\t"+outline)
 
                 curr_classification = "NA"
@@ -3786,8 +3798,12 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                             linear_count += 1
                             curr_classification = "Linear"
                         else:
-                            large_deletion_count += 1
-                            curr_classification = "Large deletion"
+                            if left_orientation == right_orientation:
+                                large_inversion_count += 1
+                                curr_classification = "Large inversion"
+                            else:
+                                large_deletion_count += 1
+                                curr_classification = "Large deletion"
                             translocations[key] += 1
                     else:
                         translocation_count += 1
@@ -3802,7 +3818,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'Fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
             #done with last one
 
-    logging.info("Found %d linear reads, %d translocations, %d large deletions, and %d unidentified reads"%(linear_count,translocation_count,large_deletion_count,unidentified_count))
+    logging.info("Found %d linear reads, %d translocations, %d large deletions, %d large inversions, and %d unidentified reads"%(linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count))
 
     frags_aligned_chrs_root = root + ".chrs"
     keys = sorted(frags_mapped_chrs.keys())
@@ -3876,14 +3892,14 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         r2_assignments_file = None
 
     with open(info_file,'w') as fout:
-        fout.write("\t".join(['r1_assignments_file','r2_assignments_file','linear_count','translocation_count','large_deletion_count','unidentified_count','read_total'])+"\n")
-        fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_mapped_count]])+"\n")
+        fout.write("\t".join(['r1_assignments_file','r2_assignments_file','linear_count','translocation_count','large_deletion_count','large_inversion_count','unidentified_count','read_total'])+"\n")
+        fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_mapped_count]])+"\n")
         frags_plot_obj_str = "None"
         if frags_plot_obj is not None:
             frags_plot_obj_str = frags_plot_obj.to_json()
         fout.write(frags_plot_obj_str+"\n")
 
-    return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,unidentified_count,frags_plot_obj)
+    return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_plot_obj)
 
 def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_cutoff,crispresso_min_aln_score,samtools_command,crispresso_command):
     """
