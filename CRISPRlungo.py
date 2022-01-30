@@ -127,7 +127,7 @@ def main():
     filter_primer_match_count = 0
     if settings['primer_min_bp_match_pct'] > 0:
         #filter out reads that don't contain primer sequence
-        (primer_filter_r1, primer_filter_r2, filter_tot_read_count, filter_count_with_primer_match, filter_count_with_primer_post_match, post_primer_filter_count
+        (primer_filter_r1, primer_filter_r2, filter_tot_read_count, filter_count_with_primer_match, filter_count_with_primer_post_match, post_primer_filter_count, filter_on_primer_plot_obj
                 ) = filter_on_primer_seq(
                         root = settings['root']+'.primer_filter',
                         fastq_r1 = reads_to_align_r1,
@@ -139,6 +139,9 @@ def main():
                     )
         reads_to_align_r1 = primer_filter_r1
         reads_to_align_r2 = primer_filter_r2
+        if filter_on_primer_plot_obj is not None:
+            filter_on_primer_plot_obj.order = 1
+            summary_plot_objects.append(filter_on_primer_plot_obj)
 
     custom_aligned_count = 0 #number of reads aligned to custom targets
 
@@ -166,7 +169,7 @@ def main():
         r2_assignment_files.append(genome_r2_assignments)
 
     if genome_tlen_plot_object is not None:
-        genome_tlen_plot_object.order = 1
+        genome_tlen_plot_object.order = 2
         summary_plot_objects.append(genome_tlen_plot_object)
     if genome_chr_aln_plot_obj is not None:
         genome_chr_aln_plot_obj.order = 5
@@ -1560,6 +1563,7 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
         count_with_primer_match: number of reads with at least primer_min_bp_match_pct matching the primer
         count_with_primer_post_match: number of reads with at least primer_post_min_bp_match_pct matching the primer_post sequence
         count_post_filtering: number of reads post filtering
+        filter_on_primer_plot_obj: plot object showing number of reads filtered
     """
 
     filter_stats_file = root + ".info"
@@ -1582,9 +1586,17 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
                 count_with_primer_match = int(count_with_primer_match_str)
                 count_with_primer_post_match = int(count_with_primer_post_match_str)
                 count_post_filtering = int(count_post_filtering_str)
-                logging.info('Using previously-filtered fastqs with %d reads'%count_post_filtering)
-    if tot_read_count != -1:
-        return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering)
+
+            filter_on_primer_plot_obj_str = fin.readline().strip()
+            filter_on_primer_plot_obj = None
+            if filter_on_primer_plot_obj_str != "" and filter_on_primer_plot_obj_str != "None":
+                filter_on_primer_plot_obj = PlotObject.from_json(filter_on_primer_plot_obj_str)
+
+        if tot_read_count != -1:
+            logging.info('Using previously-filtered fastqs with %d reads'%count_post_filtering)
+            return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering,filter_on_primer_plot_obj)
+        else:
+            logging.info('Could not recover previously-filtered files. Reanalyzing.')
 
     #otherwise perform filtering
     logging.info('Filtering input fastqs on primer sequence')
@@ -1694,16 +1706,48 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     f1_out.close()
     f1_in.close()
 
-    #now iterate through f1/f2/umi files
     logging.info('Read %d reads'%tot_read_count)
-
     logging.info('Wrote %d filtered reads'%count_post_filtering)
+
+    #plot summary
+    filter_labels = ['Discarded','Retained']
+    values = [tot_read_count-count_post_filtering,count_post_filtering]
+    filter_on_primer_plot_obj_root = root + ".filter_on_primer_counts"
+    with open(filter_on_primer_plot_obj_root+".txt",'w') as summary:
+        summary.write("\t".join(filter_labels)+"\n")
+        summary.write("\t".join([str(x) for x in values])+"\n")
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    ax.pie(values,labels=[filter_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(filter_labels))],autopct="%1.2f%%")
+    ax.set_title('Read filtering based on primer presence')
+    plt.savefig(filter_on_primer_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(filter_on_primer_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
+    plot_label = "Reads were filtered to contain primer sequence '" + primer_seq +"' (with "+str(primer_min_bp_match_pct)+"% bases matching)"
+    if primer_post_len > 0:
+        plot_label += " and post-primer sequence '" + primer_post_seq + "' (with "+str(primer_post_min_bp_match_pct)+"% bases matching)"
+
+    filter_on_primer_plot_obj = PlotObject(
+            plot_name = filter_on_primer_plot_obj_root,
+            plot_title = 'Read filtering based on primer presence',
+            plot_label = plot_label + '<br>'+plot_count_str,
+            plot_datas = [
+                ('Primer filter summary',filter_on_primer_plot_obj_root + ".txt")
+                ]
+            )
+
 
     with open(filter_stats_file,'w') as fout:
         fout.write("\t".join(["fastq_r1_filtered","fastq_r2_filtered","tot_read_count","count_with_primer_match","count_with_primer_post_match","count_post_filtering"])+"\n")
         fout.write("\t".join([str(x) for x in [fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering]])+"\n")
 
-    return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering)
+        filter_on_primer_plot_obj_str = "None"
+        if filter_on_primer_plot_obj is not None:
+            filter_on_primer_plot_obj_str = filter_on_primer_plot_obj.to_json()
+        fout.write(filter_on_primer_plot_obj_str+"\n")
+
+    return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering, filter_on_primer_plot_obj)
 
 
 def reverse_complement_cut_str(target_cut_str):
@@ -3331,7 +3375,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                 if frags_plot_obj_str != "" and frags_plot_obj_str != "None":
                     frags_plot_obj = PlotObject.from_json(frags_plot_obj_str)
 
-                if frags_mapped_count > 0:
+                if frags_mapped_count >= 0:
                     logging.info('Using previously-processed fragment analysis for %d mapped fragments (%d linear reads, %d translocations, %d large deletions, %d large inversions, and %d unidentified reads)'%(frags_mapped_count,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count))
                     return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_plot_obj)
                 else:
@@ -3681,7 +3725,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         curr_annotation = left_anno+"_"+right_anno
 
 
-        outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,left_orientation,right_chr,right_cut_pos,right_read_end,right_pos,right_orientation,min_i,"\t".join(val_list))
+        outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,left_orientation,right_chr,right_cut_pos,right_read_end,right_pos,right_orientation,min_i,"\t".join(val_list))
 
         curr_chr_count = len(curr_id_chrs.keys())
 
@@ -3697,7 +3741,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     r2_assignments_file = root + '.assignments_r2.txt'
     frags_mapped_chrs = defaultdict(int)
     with open(frag_meta_file,"w") as frag_file, open(r1_assignments_file,'w') as af1, open(r2_assignments_file,'w') as af2:
-        head = "ID\tcut_annotation\tleft_chr\tleft_cut\tleft_aln_start\tleft_pos\tright_chr\tright_cut\tright_aln_end\tright_pos\tbreak_index"
+        head = "ID\tcut_annotation\tleft_chr\tleft_cut\tleft_aln_start\tleft_pos\tleft_orientation\tright_chr\tright_cut\tright_aln_end\tright_pos\tright_orientation\tbreak_index"
         for i in range(max_frags):
             head += "\t"+str(i)
         frag_file.write(head+"\n")
