@@ -154,7 +154,7 @@ def main():
                 fastq_r2 = reads_to_align_r2,
                 reads_name = 'reads',
                 bowtie2_reference = settings['bowtie2_genome'],
-                reference_name = 'genome',
+                reference_name = 'Genome',
                 target_info = target_info,
                 bowtie2_command = settings['bowtie2_command'],
                 bowtie2_threads = settings['n_processes'],
@@ -182,9 +182,9 @@ def main():
                     root = settings['root']+'.r1.customTargetAlignment',
                     fastq_r1 = genome_unmapped_r1,
                     fastq_r2 = None,
-                    reads_name = 'unaligned R1 reads',
+                    reads_name = 'genome-unaligned R1 reads',
                     bowtie2_reference=custom_index_fasta,
-                    reference_name='custom targets',
+                    reference_name='Custom targets',
                     target_info = target_info,
                     arm_min_seen_bases = settings['arm_min_seen_bases'],
                     arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
@@ -207,9 +207,9 @@ def main():
                         root = settings['root']+'.r2.customTargetAlignment',
                         fastq_r1 = genome_unmapped_r2,
                         fastq_r2 = None,
-                        reads_name = 'unaligned R2 reads',
+                        reads_name = 'genome-unaligned R2 reads',
                         bowtie2_reference=custom_index_fasta,
-                        reference_name='custom targets',
+                        reference_name='Custom targets',
                         target_info = target_info,
                         arm_min_seen_bases = settings['arm_min_seen_bases'],
                         arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
@@ -246,7 +246,7 @@ def main():
         frags_plot_obj.order = 16
         summary_plot_objects.append(frags_plot_obj)
 
-    (final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj
+    (final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
         ) = make_final_read_assignments(
                 root = settings['root']+'.final',
                 r1_assignment_files = r1_assignment_files,
@@ -254,6 +254,7 @@ def main():
                 cut_sites = cut_sites,
                 cut_annotations = cut_annotations,
                 target_info = target_info,
+                r1_r2_support_max_distance=settings['r1_r2_support_max_distance'],
                 cut_merge_dist=20,
                 genome_map_resolution=1000000,
                 dedup_based_on_aln_pos=settings['dedup_input_based_on_aln_pos_and_UMI']
@@ -271,6 +272,15 @@ def main():
     if r2_classification_plot_obj is not None:
         r2_classification_plot_obj.order=28
         summary_plot_objects.append(r2_classification_plot_obj)
+    if r1_r2_support_plot_obj is not None:
+        r1_r2_support_plot_obj.order=29
+        summary_plot_objects.append(r1_r2_support_plot_obj)
+    if r1_r2_support_dist_plot_obj is not None:
+        r1_r2_support_dist_plot_obj.order=30
+        summary_plot_objects.append(r1_r2_support_dist_plot_obj)
+    if r1_r2_no_support_dist_plot_obj is not None:
+        r1_r2_no_support_dist_plot_obj.order=31
+        summary_plot_objects.append(r1_r2_no_support_dist_plot_obj)
 
     crispresso_infos = [] #meta info about the crispresso runs
             #dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
@@ -336,7 +346,7 @@ def main():
     summary_plot_objects.append(
             PlotObject(plot_name = plot_name,
                     plot_title = 'Alignment Summary',
-                    plot_label = 'Pie chart showing distribution of reads. Total reads in input: ' + str(num_reads_input),
+                    plot_label = 'Pie chart showing final assignment of reads. Total reads in input: ' + str(num_reads_input),
                     plot_datas = [('Alignment summary',alignment_summary_root + ".txt")]
                     ))
 
@@ -447,9 +457,9 @@ def parse_settings(args):
     settings['primer_post_min_bp_match_pct'] = int(settings['primer_post_min_bp_match_pct']) if 'primer_post_min_bp_match_pct' in settings else 0
 
     #how many bp are required to be aligned to each arm of artificial targets
-    settings['arm_min_seen_bases'] = int(settings['arm_min_seen_bases']) if 'arm_min_seen_bases' in settings else 5
+    settings['arm_min_seen_bases'] = int(settings['arm_min_seen_bases']) if 'arm_min_seen_bases' in settings else 15
     #how many bp are required to match on each arm of artificial targets
-    settings['arm_min_matched_start_bases'] = int(settings['arm_min_matched_start_bases']) if 'arm_min_matched_start_bases' in settings else 5
+    settings['arm_min_matched_start_bases'] = int(settings['arm_min_matched_start_bases']) if 'arm_min_matched_start_bases' in settings else 10
 
 
     #boolean for whether to run crispresso on highly-aligned genomic locations (if false, crispresso will only be run at cut sites and artificial targets)
@@ -470,6 +480,9 @@ def parse_settings(args):
     settings['umi_regex'] = settings['umi_regex'] if 'umi_regex' in settings else 'NNWNNWNNN'
     settings['dedup_input_on_UMI'] = (settings['dedup_input_on_UMI'] == 'True') if 'dedup_input_on_UMI' in settings else False
     settings['dedup_input_based_on_aln_pos_and_UMI'] = (settings['dedup_input_based_on_aln_pos_and_UMI'] == 'True') if 'dedup_input_based_on_aln_pos_and_UMI' in settings else True
+
+    #max ditance (bp) between R1 and R2 for R2 to 'support' R1
+    settings['r1_r2_support_max_distance'] = int(settings['r1_r2_support_max_distance']) if 'r1_r2_support_max_distance' in settings else 10000
 
 
     settings['crispresso_min_aln_score'] = int(settings['crispresso_min_aln_score']) if 'crispresso_min_aln_score' in settings else 20
@@ -1693,8 +1706,32 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering)
 
 
+def reverse_complement_cut_str(target_cut_str):
+    """
+    Reverse-complements a cut string of the form 'w-chr1:50~chr2:90+c' to 'w+chr2:90~chr1:50-c'
+    Useful for changing cut if a read aligned to the reverse complement of a target
 
-def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=5,arm_min_matched_start_bases=3,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False):
+    params:
+        target_cut_str: cut string in form 'w-chr1:50~chr2:90+c'
+    returns:
+        rc_target_cut_str: reverse complement target_cut_str
+    """
+    (left_whole,right_whole) = target_cut_str.split("~")
+    left_strand = left_whole[0]
+    left_dir = left_whole[1]
+    left_pos = left_whole[2:]
+
+    right_strand = right_whole[-1]
+    right_dir = right_whole[-2:-1]
+    right_pos = right_whole[0:-2]
+
+    new_left_strand = 'w' if right_strand == 'c' else 'c'
+    new_right_strand = 'w' if left_strand == 'c' else 'c'
+
+    return('%s%s%s~%s%s%s'%(new_left_strand,right_dir,right_pos,left_pos,left_dir,new_right_strand))
+    
+
+def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=10,arm_min_matched_start_bases=5,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False):
     """
     Aligns reads to the provided reference (either artificial targets or genome)
 
@@ -1724,7 +1761,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         tlen_plot_object: plot object showing insert sizes for paired alignments
     """
 
-    logging.info('Aligning %s to %s'%(reads_name,reference_name))
+    logging.info('Aligning %s to %s'%(reads_name,reference_name.lower()))
 
     mapped_bam_file = root + ".bam"
 
@@ -1761,9 +1798,9 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                     r1_aln_count = r1_count-unmapped_r1_count
                     r2_aln_count = r2_count-unmapped_r2_count
                     if r2_count > 0:
-                        logging.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 reads (%d reads input) for %s aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reads_name,reference_name))
+                        logging.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,reads_name,read_count,reference_name.lower()))
                     else:
-                        logging.info('Using previously-processed alignment of %d/%d reads (%d reads input) for %s aligned to %s'%(r1_aln_count,r1_count,read_count,reads_name,reference_name))
+                        logging.info('Using previously-processed alignment of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
                     return r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file, unmapped_fastq_r2_file, aligned_count, mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj
                 else:
                     logging.info('Could not recover previously-analyzed alignments. Reanalyzing.')
@@ -1771,7 +1808,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
     bowtie_log = root + '.bowtie2Log'
     if fastq_r2 is not None: #paired-end reads
-        logging.info('Aligning paired reads to %s using %s'%(reference_name,bowtie2_command))
+        logging.info('Aligning paired reads to %s using %s'%(reference_name.lower(),bowtie2_command))
         aln_command = '{bowtie2_command} --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -1 {fastq_r1} -2 {fastq_r2} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
                 bowtie2_threads=bowtie2_threads,
@@ -1784,10 +1821,10 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
         logging.debug(aln_result)
         with open (bowtie_log,'w') as lout:
-            lout.write('\nAligning paired reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
+            lout.write('\nAligning paired reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name.lower(),aln_command,aln_result))
     #unpaired reads
     else:
-        logging.info('Aligning single-end reads to %s using %s'%(reference_name,bowtie2_command))
+        logging.info('Aligning single-end reads to %s using %s'%(reference_name.lower(),bowtie2_command))
         aln_command = '{bowtie2_command} --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -U {fastq_r1} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
                 bowtie2_threads=bowtie2_threads,
@@ -1799,9 +1836,9 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
         logging.debug(aln_result)
         with open (bowtie_log,'w') as lout:
-            lout.write('\nAligning single-end reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name,aln_command,aln_result))
+            lout.write('\nAligning single-end reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name.lower(),aln_command,aln_result))
 
-    logging.info('Analyzing reads aligned to %s'%(reference_name))
+    logging.info('Analyzing reads aligned to %s'%(reference_name.lower()))
 
     #analyze alignments
     # - if read aligned, store read id and loc in dict r1_assignments
@@ -1864,6 +1901,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 break
 
         seq = line_els[9]
+        is_rc = int(line_els[1]) & 0x10
 
         if line_unmapped or \
                 left_matches < arm_min_matched_start_bases or \
@@ -1871,7 +1909,6 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
             qual = line_els[10]
 
-            is_rc = int(line_els[1]) & 0x10
             if is_rc:
                 seq = reverse_complement(seq)
 
@@ -1886,8 +1923,14 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         line_chr = line_els[2]
         line_mapq = line_els[5]
         line_start = int(line_els[3])
+        line_end = line_start+(len(seq)-1)
+        if is_rc:
+            tmp = line_end
+            line_end = line_start
+            line_start = tmp
+
         curr_classification = 'Linear'
-        curr_position = "%s:%s-%s"%(line_chr,line_start,line_start+(len(seq)-1))
+        curr_position = "%s:%s-%s"%(line_chr,line_start,line_end)
         curr_annotation = ''
         curr_cut = 'NA'
         if line_chr in target_info: #if this aligned to a custom chromosome
@@ -1898,7 +1941,6 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
                 qual = line_els[10]
 
-                is_rc = int(line_els[1]) & 0x10
                 if is_rc:
                     seq = reverse_complement(seq)
 
@@ -1912,17 +1954,13 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
             curr_classification = target_info[line_chr]['class']
             curr_annotation = target_info[line_chr]['target_cut_str'] + ' ' + line_chr
-            custom_start = target_info[line_chr]['query_pos'] + line_start - 1
-            custom_end = custom_start + len(seq) #linear -- if not we'll change it below
-            curr_position = '%s:%s-%s'%(target_info[line_chr]['cut1_chr'],custom_start,custom_end)
+            if is_rc:
+                curr_annotation = reverse_complement_cut_str(target_info[line_chr]['target_cut_str']) + ' ' + line_chr
 
             #if custom ref is not linear, set cuts and genome aln locations
             if curr_classification != 'Linear':
-
                 cut1 =  target_info[line_chr]['cut1_chr'] + ":" +  str(target_info[line_chr]['cut1_site'])
                 cut2 =  target_info[line_chr]['cut2_chr'] + ":" +  str(target_info[line_chr]['cut2_site'])
-                curr_cut = cut1 + "~" + cut2
-
 
                 left_dir = target_info[line_chr]['target_cut_str'][1:2]
                 if left_dir == '-': #arm extends left in genome space after cut
@@ -1940,10 +1978,20 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                     right_arm_end = target_info[line_chr]['cut2_site']
                     right_arm_start = right_arm_end - right_ref_bases_count 
 
-                curr_position = '%s:%s-%s~%s:%s-%s'%(
-                        target_info[line_chr]['cut1_chr'],left_arm_start,left_arm_end -1,
-                        target_info[line_chr]['cut2_chr'],right_arm_start,right_arm_end - 1
-                        )
+                #if read aligned to custom seqs in the forward direction
+                if not is_rc:
+                    curr_cut = cut1 + "~" + cut2
+                    curr_position = '%s:%s-%s~%s:%s-%s'%(
+                            target_info[line_chr]['cut1_chr'],left_arm_start,left_arm_end -1,
+                            target_info[line_chr]['cut2_chr'],right_arm_start,right_arm_end - 1
+                            )
+                #if read aligned to custom seqs in the reverse direction
+                else:
+                    curr_cut = cut2 + "~" + cut1
+                    curr_position = '%s:%s-%s~%s:%s-%s'%(
+                            target_info[line_chr]['cut2_chr'],right_arm_end-1,right_arm_start,
+                            target_info[line_chr]['cut1_chr'],left_arm_end-1,left_arm_start
+                            )
 
         if read_is_r1:
             af1.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(read_id,reference_name,curr_classification,curr_annotation,curr_position,curr_cut))
@@ -1989,19 +2037,21 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     else:
         ax.bar(0,0)
     ax.set_ylabel('Number of Reads')
-    ax.set_title('Location of reads aligned to the '+reference_name)
+    ax.set_title('Location of ' + reads_name + ' aligned to the '+reference_name.lower())
     plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(chr_aln_plot_root+".png",pad_inches=1,bbox_inches='tight')
 
-    plot_label = 'Bar plot showing alignment location of reads aligned to ' + reference_name
+    plot_label = 'Bar plot showing alignment location of ' + reads_name + ' aligned to ' + reference_name.lower()
+    if unmapped_fastq_r2_file is not None:
+        plot_label += ' (Note that this plot shows the number of reads not readpairs)'
     if len(keys) == 0:
-        plot_label = '(No reads aligned to ' + reference_name + ')'
+        plot_label = '(No ' + reads_name + ' aligned to ' + reference_name.lower() + ')'
 
     chr_aln_plot_obj = PlotObject(
             plot_name = chr_aln_plot_root,
-            plot_title = reference_name.capitalize() + ' Alignment Summary',
+            plot_title = reference_name.title() + ' alignment summary',
             plot_label = plot_label,
-            plot_datas = [(reference_name.capitalize() + ' Alignment Summary',chr_aln_plot_root + ".txt")]
+            plot_datas = [(reference_name.capitalize() + ' alignment summary',chr_aln_plot_root + ".txt")]
             )
 
     tlen_plot_obj = None
@@ -2016,8 +2066,11 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
-        ax.bar(keys,vals)
-        ax.set_ylim(0,max(vals)+0.5)
+        if len(vals) > 0:
+            ax.bar(keys,vals)
+            ax.set_ylim(0,max(vals)+0.5)
+        else:
+            ax.bar(0,0)
         ax.set_ylabel('Number of Reads')
         ax.set_title('Insert size')
         plt.savefig(tlen_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -2027,7 +2080,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 plot_name = tlen_plot_root,
                 plot_title = reference_name.capitalize() + ' Alignment Insert Size Summary',
                 plot_label = 'Bar plot showing insert size of reads aligned to ' + reference_name,
-                plot_datas = [(reference_name.capitalize() + ' Alignment Insert Size Summary',tlen_plot_root + ".txt")]
+                plot_datas = [(reference_name.capitalize() + ' alignment insert size summary',tlen_plot_root + ".txt")]
                 )
 
     aligned_count = read_count - (unmapped_r1_count + unmapped_r2_count)
@@ -2047,10 +2100,13 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
 
     r1_aln_count = r1_count-unmapped_r1_count
     r2_aln_count = r2_count-unmapped_r2_count
-    logging.info('Finished analysis of %d/%d R1 and %d/%d R2 reads (%d reads input) for %s aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,read_count,reads_name,reference_name))
+    if r2_aln_count > 0:
+        logging.info('Finished analysis of %d/%d R1 and %d/%d R2 %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,reads_name,read_count,reference_name.lower()))
+    else:
+        logging.info('Finished analysis of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
 
-def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True):
+def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,r1_r2_support_max_distance=100000,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True):
     """
     Makes final read assignments after:
         Pairing R1 and R2 if they were processed in separate steps
@@ -2063,6 +2119,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         cut_sites: array of known cut sites
         cut_annotations: dict of cut_site->annotation for description of cut (e.g. either On-target, Off-target, Known, Casoffinder, etc)
         target_info: hash of information for each target_name
+        r1_r2_support_max_distance: max distance between r1 and r2 for the read pair to be classified as 'supported' by r2
         cut_merge_dist: cuts within this distance (bp) will be merged
         genome_map_resolution: window size (bp) for reporting number of reads aligned
         dedup_based_on_aln_pos: if true, reads with the same UMI and alignment positions will be removed from analysis
@@ -2118,6 +2175,20 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             if r2_classification_plot_obj_str != "" and r2_classification_plot_obj_str != "None":
                 r2_classification_plot_obj = PlotObject.from_json(r2_classification_plot_obj_str)
 
+            r1_r2_support_plot_obj_str = fin.readline().strip()
+            r1_r2_support_plot_obj = None
+            if r1_r2_support_plot_obj_str != "" and r1_r2_support_plot_obj_str != "None":
+                r1_r2_support_plot_obj = PlotObject.from_json(r1_r2_support_plot_obj_str)
+            r1_r2_support_dist_plot_obj_str = fin.readline().strip()
+            r1_r2_support_dist_plot_obj = None
+            if r1_r2_support_dist_plot_obj_str != "" and r1_r2_support_dist_plot_obj_str != "None":
+                r1_r2_support_dist_plot_obj = PlotObject.from_json(r1_r2_support_dist_plot_obj_str)
+
+            r1_r2_no_support_dist_plot_obj_str = fin.readline().strip()
+            r1_r2_no_support_dist_plot_obj = None
+            if r1_r2_no_support_dist_plot_obj_str != "" and r1_r2_no_support_dist_plot_obj_str != "None":
+                r1_r2_no_support_dist_plot_obj = PlotObject.from_json(r1_r2_no_support_dist_plot_obj_str)
+
 
         if previous_total_read_count > 0:
             #read final assignments from file
@@ -2165,7 +2236,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
                 if previous_total_read_count == read_total_read_count:
                     logging.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' reads')
-                    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj
+                    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
                 else:
                     logging.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
 
@@ -2434,6 +2505,13 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     r2_read_ids_for_crispresso = defaultdict(list)
     r2_cut_counts_for_crispresso = defaultdict(int)
 
+    #keep track of distance between R1/R2
+    r1_r2_support_distances = defaultdict(int) #for reads that are separated by less than r1_r2_support_max_distance
+    r1_r2_not_support_distances = defaultdict(int) #for reads that are separated by more than r1_r2_support_max_distance
+
+    #counts for 'support' status
+    r1_r2_support_status_counts = defaultdict(int)
+
     #column indices in the final file
     ind_offset = cut_point_ind + 1
     r1_id_ind = id_ind
@@ -2449,7 +2527,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     r2_alignment_ind = alignment_ind + ind_offset
     r2_cut_point_ind = cut_point_ind + ind_offset
     duplicate_ind = 12
-    duplicate_na_str = "NA\tNA\tNA\tNA" #string for duplicates if paired
+    duplicate_na_str = "NA\tNA\tNA\tNA\tNA" #string describing final cut points for duplicates if paired (because they are duplicates, they are not reported)
     with open(final_file_tmp,'r') as fin, open(final_file,'w') as fout:
         if sorted_r2_file is None:
             #single end
@@ -2458,7 +2536,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             duplicate_na_str = "NA\tNA"
         else:
             #paired end
-            fout.write("\t".join(['r1_id','r1_source','r1_classification','r1_annotation','r1_alignment','r1_cut_point','r2_id','r2_source','r2_classification','r2_annotation','r2_alignment','r2_cut_point','read_duplicate_status','read_duplicate_of','r1_final_cut_points','r1_final_cut_keys','r2_final_cut_points','r2_final_cut_keys'])+"\n")
+            fout.write("\t".join(['r1_id','r1_source','r1_classification','r1_annotation','r1_alignment','r1_cut_point','r2_id','r2_source','r2_classification','r2_annotation','r2_alignment','r2_cut_point','read_duplicate_status','read_duplicate_of','r1_final_cut_points','r1_final_cut_keys','r2_final_cut_points','r2_final_cut_keys','r1_r2_status_status'])+"\n")
         for line in fin:
             line = line.strip()
             final_total_count += 1
@@ -2556,13 +2634,27 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
                 r1_fragment_translocation_cut_counts[frag_key_1][frag_key_2] += 1
 
-
+            r1_r2_support_status = None
+            r1_last_aln_chr_for_support = None #values to see if r1 and r2 agree
+            r1_last_aln_pos_for_support = None
+            r1_last_orientation_for_support = None
+            r2_first_aln_chr_for_support = None
+            r2_first_aln_pos_for_support = None
+            r2_first_orientation_for_support = None
             #make window alignment assignments
             for r1_aln_pos in r1_alignment.split("~"):
                 if '*' not in r1_aln_pos:
                     (aln_chr,aln_range) = r1_aln_pos.split(":")
-                    aln_pos = aln_range.split("-")[0]
+                    (aln_pos,aln_end) = aln_range.split("-")
                     aln_pos_window = int(aln_pos)/genome_map_resolution
+
+                    r1_last_aln_chr_for_support = aln_chr
+                    r1_last_aln_pos_for_support = aln_end
+                    if (aln_pos < aln_end):
+                        r1_last_orientation_for_support = "+"
+                    else:
+                        r1_last_orientation_for_support = "-"
+
                     if aln_chr not in r1_aln_pos_counts_by_chr:
                         r1_aln_pos_counts_by_chr[aln_chr] = defaultdict(int)
                         r1_aln_pos_genome_counts_by_chr[aln_chr] = defaultdict(int)
@@ -2576,6 +2668,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         r1_aln_pos_frag_counts_by_chr[aln_chr][aln_pos_window] += 1
                     elif r1_source == 'Custom targets':
                         r1_aln_pos_custom_aln_counts_by_chr[aln_chr][aln_pos_window] += 1
+                else:
+                    r1_last_aln_chr_for_support = "*"
+                    r1_last_aln_pos_for_support = "*"
+                    r1_last_orientation_for_support = None
+
 
             r1_cut_points_str = ",".join(r1_associated_cut_points) if r1_associated_cut_points else "NA"
             r1_cut_keys_str = ",".join(r1_cut_keys) if r1_cut_keys else "NA"
@@ -2690,9 +2787,52 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 r2_cut_points_str = ",".join(r2_associated_cut_points) if r2_associated_cut_points else "NA"
                 r2_cut_keys_str = ",".join(r2_cut_keys) if r2_cut_keys else "NA"
                 r2_print_str = "\t"+r2_cut_points_str+"\t"+r2_cut_keys_str
+
+                # make assignment for R1/R2 support
+                r2_aln_pos = r2_alignment.split("~")[0]
+                if '*' not in r2_aln_pos:
+                    (aln_chr,aln_range) = r2_aln_pos.split(":")
+                    (aln_pos,aln_end) = aln_range.split("-")
+                    r2_first_aln_chr_for_support = aln_chr
+                    r2_first_aln_pos_for_support = aln_pos
+                    if (aln_pos < aln_end):
+                        r2_first_orientation_for_support = "+"
+                    else:
+                        r2_first_orientation_for_support = "-"
+                else:
+                    r2_first_aln_chr_for_support = "*"
+                    r2_first_aln_pos_for_support = "*"
+
+                #determine R1/R2 support
+                if r1_last_aln_chr_for_support == "*" or r2_first_aln_chr_for_support == "*":
+                    r1_r2_support_status = "Not supported by R2 - unaligned"
+                elif r1_last_aln_chr_for_support == r2_first_aln_chr_for_support:
+                    this_support_distance = abs(int(r1_last_aln_pos_for_support) - int(r2_first_aln_pos_for_support))
+                    #distance must be within cutoff
+                    if this_support_distance <= r1_r2_support_max_distance:
+                        #must have different orientations (R1 is pos, R2 is rc/egative)
+                        #for standard illumina sequencing, R1 is forward and R2 is reverse-complement
+                        if r1_last_orientation_for_support != r2_first_orientation_for_support:
+                            r1_r2_support_status = "Supported by R2"
+                            r1_r2_support_distances[this_support_distance] += 1
+                        else:
+                            r1_r2_support_status = "Not supported by R2 - different R1/R2 orientations"
+                            r1_r2_not_support_distances[this_support_distance] += 1
+                    else:
+                        r1_r2_support_status = "Not supported by R2 - alignment separation more than maximum"
+                        r1_r2_not_support_distances[this_support_distance] += 1
+                else:
+                    r1_r2_support_status = "Not supported by R2 - different chrs"
+
+                r1_r2_support_status_counts[r1_r2_support_status] += 1
+
+                r2_print_str += "\t"+r1_r2_support_status
+
             #finished r2
 
-            fout.write(line+"\t"+r1_print_str+r2_print_str+"\n")
+
+
+            fout.write("%s\t%s%s\n"%(line,r1_print_str,r2_print_str))
 
     logging.info('Deduplicated %d/%d reads (kept %d)'%(final_duplicate_count,final_total_count,final_total_count-final_duplicate_count))
 
@@ -2912,6 +3052,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         source_labels = ['Genome','Custom targets','Fragmented']
         classification_labels = ['Primed','Linear','Chimera','Large deletion','Translocation','Unidentified']
 
+        #check to make sure labels match
+        for k in final_source_counts.keys():
+            if k not in source_labels:
+                raise Exception('Source label %s not found in %s'%(k,str(source_labels)))
+
         source_classification_file = root + "." + read_num + "_source_classification.txt"
         with open(source_classification_file,'w') as summary:
             summary.write("\t"+"\t".join(classification_labels)+"\n")
@@ -2936,7 +3081,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         source_plot_obj = PlotObject(
                 plot_name = source_plot_obj_root,
                 plot_title = read_num_capitalized + ' Read Alignments',
-                plot_label = 'Method used to determine the status of each read<br>'+plot_count_str,
+                plot_label = 'Method used to determine the status of each ' + read_num_capitalized + ' read<br>'+plot_count_str,
                 plot_datas = [
                     (read_num_capitalized + ' alignment sources',source_plot_obj_root + ".txt"),('Read assignments',final_file),
                     (read_num_capitalized + ' alignment sources by classification',source_classification_file),
@@ -2978,6 +3123,103 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     if sorted_r2_file is not None:
         r2_source_plot_obj,r2_classification_plot_obj = write_aln_reports_and_make_plots('r2',r2_aln_pos_counts_by_chr,r2_aln_pos_genome_counts_by_chr,r2_aln_pos_custom_aln_counts_by_chr,r2_aln_pos_frag_counts_by_chr,final_file,r2_final_source_counts,r2_final_classification_counts,r2_final_source_classification_counts)
 
+    r1_r2_support_plot_obj = None # plot of how many reads for which r1 and r2 support each other
+    r1_r2_support_dist_plot_obj = None # plot of how far apart the r1/r2 supporting reads were aligned from each other
+    r1_r2_no_support_dist_plot_obj = None # plot of how far apart the r1/r2 reads that did NOT support each other (but were on the same chromosome)
+    if sorted_r2_file is not None:
+        r1_r2_support_labels = ['Supported by R2','Not supported by R2 - different R1/R2 orientations','Not supported by R2 - alignment separation more than maximum','Not supported by R2 - unaligned','Not supported by R2 - different chrs']
+
+        #check to make sure labels match
+        for k in r1_r2_support_status_counts.keys():
+            if k not in r1_r2_support_labels:
+                raise Exception('R1/R2 support label %s not found in %s'%(k,str(r1_r2_support_labels)))
+        values = [r1_r2_support_status_counts[x] for x in r1_r2_support_labels]
+        r1_r2_support_plot_obj_root = root + ".r1_r2_support"
+        with open(r1_r2_support_plot_obj_root+".txt",'w') as summary:
+            summary.write("\t".join(r1_r2_support_labels)+"\n")
+            summary.write("\t".join([str(x) for x in values])+"\n")
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        ax.pie(values,labels=[r1_r2_support_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(r1_r2_support_labels))],autopct="%1.2f%%")
+        ax.set_title('R1/R2 support status')
+        plt.savefig(r1_r2_support_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(r1_r2_support_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(r1_r2_support_labels,values)])
+        r1_r2_support_plot_obj = PlotObject(
+                plot_name = r1_r2_support_plot_obj_root,
+                plot_title = 'R1/R2 Support Classification',
+                plot_label = 'R1/R2 support classification<br>'+plot_count_str,
+                plot_datas = [
+                    ('R1/R2 support classifications',r1_r2_support_plot_obj_root + ".txt")
+                    ]
+                )
+
+        #plot of distance between R1 and R2 for R1/R2 supportive read pairs
+        r1_r2_support_dist_plot_obj_root = root + ".r1_r2_support_distances"
+        keys = sorted(r1_r2_support_distances.keys())
+        vals = [r1_r2_support_distances[key] for key in keys]
+        with open(r1_r2_support_dist_plot_obj_root+".txt","w") as summary:
+            summary.write('R1_R2_distance\tnumReads\n')
+            for key in sorted(r1_r2_support_distances.keys()):
+                summary.write(str(key) + '\t' + str(r1_r2_support_distances[key]) + '\n')
+
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        if len(vals) > 0:
+            ax.bar(range(len(keys)),vals,tick_label=keys)
+            ax.set_ylim(0,max(vals)+0.5)
+        else:
+            ax.bar(0,0)
+        ax.set_ylabel('Number of Reads')
+        ax.set_title('Distance between R1/R2')
+        plt.savefig(r1_r2_support_dist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(r1_r2_support_dist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        plot_label = 'Bar plot showing distance between R1 and R2 reads for reads with R2 supporting the R1 alignment (max distance for support is ' + str(r1_r2_support_max_distance) + 'bp)'
+        if len(keys) == 0:
+            plot_label = '(No R1/R2 supported reads)'
+
+        r1_r2_support_dist_plot_obj = PlotObject(
+                plot_name = r1_r2_support_dist_plot_obj_root,
+                plot_title = 'Distance between R1/R2 Supported Reads',
+                plot_label = plot_label,
+                plot_datas = [('R1/R2 support distance histogram',r1_r2_support_dist_plot_obj_root + ".txt")]
+                )
+
+        #plot of distance between R1 and R2 for R1/R2 NOT supportive read pairs
+        r1_r2_no_support_dist_plot_obj_root = root + ".r1_r2_not_supported_distances"
+        keys = sorted(r1_r2_not_support_distances.keys())
+        vals = [r1_r2_not_support_distances[key] for key in keys]
+        with open(r1_r2_no_support_dist_plot_obj_root+".txt","w") as summary:
+            summary.write('R1_R2_distance\tnumReads\n')
+            for key in sorted(r1_r2_not_support_distances.keys()):
+                summary.write(str(key) + '\t' + str(r1_r2_not_support_distances[key]) + '\n')
+
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        if len(vals) > 0:
+            ax.bar(range(len(keys)),vals,tick_label=keys)
+            ax.set_ylim(0,max(vals)+0.5)
+        else:
+            ax.bar(0,0)
+        ax.set_ylabel('Number of Reads')
+        ax.set_title('Distance between R1/R2')
+        plt.savefig(r1_r2_no_support_dist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(r1_r2_no_support_dist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        plot_label = 'Bar plot showing distance between R1 and R2 reads for reads with R2 NOT supporting the R1 alignment due to incorrect read orientation or exceeding maximum alignment distance (max distance for support is ' + str(r1_r2_support_max_distance) + 'bp)'
+        if len(keys) == 0:
+            plot_label = '(No R1/R2 not-supported reads)'
+
+        r1_r2_no_support_dist_plot_obj = PlotObject(
+                plot_name = r1_r2_no_support_dist_plot_obj_root,
+                plot_title = 'Distance between R1/R2 NOT Supported Reads',
+                plot_label = plot_label,
+                plot_datas = [('R1/R2 not-supported distance histogram',r1_r2_no_support_dist_plot_obj_root + ".txt")]
+                )
+
+
     with open(info_file,'w') as fout:
         fout.write("\t".join(['total_reads_processed','duplicate_reads_discarded','unique_cuts_observed_count'])+"\n")
         fout.write("\t".join(str(x) for x in [final_total_count,final_duplicate_count,final_observed_cuts_count])+"\n")
@@ -3001,8 +3243,23 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             r2_classification_plot_obj_str = r2_classification_plot_obj.to_json()
         fout.write(r2_classification_plot_obj_str+"\n")
 
+        r1_r2_support_plot_obj_str = "None"
+        if r1_r2_support_plot_obj is not None:
+            r1_r2_support_plot_obj_str = r1_r2_support_plot_obj.to_json()
+        fout.write(r1_r2_support_plot_obj_str+"\n")
 
-    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj
+        r1_r2_support_dist_plot_obj_str = "None"
+        if r1_r2_support_dist_plot_obj is not None:
+            r1_r2_support_dist_plot_obj_str = r1_r2_support_dist_plot_obj.to_json()
+        fout.write(r1_r2_support_dist_plot_obj_str+"\n")
+
+        r1_r2_no_support_dist_plot_obj_str = "None"
+        if r1_r2_no_support_dist_plot_obj is not None:
+            r1_r2_no_support_dist_plot_obj_str = r1_r2_no_support_dist_plot_obj.to_json()
+        fout.write(r1_r2_no_support_dist_plot_obj_str+"\n")
+
+
+    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
 
 
 def read_command_output(command):
@@ -3182,8 +3439,6 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     logging.debug('Alignment of chopped fragments to genome: ' + aln_result)
     with open (chopped_bowtie_log,'w') as lout:
         lout.write('Alignment of chopped fragments to genome\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(chopped_aln_command,aln_result))
-
-
 
     logging.info('Analyzing chopped reads')
 
@@ -3975,7 +4230,7 @@ def getLeftRightMismatchesMDZ(mdz_str):
         right_matches = int(curr_num_str)
 
     return left_matches,right_matches
-    
+
 
 def sam2aln(ref_seq,sam_line,include_ref_surrounding_read = True):
     """
