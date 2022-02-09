@@ -1,0 +1,6 @@
+fastq_r1	input.r1.fq
+fastq_r2	input.r2.fq
+genome	/data/pinello/COMMON_DATA/REFERENCE_GENOMES/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome.fa
+cut_sites	chr5:51113396 chr2:60495267 chr11:63955676 
+bowtie2_threads	10
+n_processes	20
