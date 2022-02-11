@@ -333,7 +333,7 @@ def main():
                 min_count_to_run_crispresso=settings['crispresso_min_count']
                 )
 
-    labels = ["Input Reads","Aligned Templates","Aligned Genome","Chopped Translocations","Chopped Large Deletions","Chopped Large Inversions","Chopped Unidentified"]
+    labels = ["Input Reads","Aligned Custom Targets","Aligned Genome","Fragmented Translocations","Fragmented Large Deletions","Fragmented Large Inversions","Fragmented Unidentified"]
     values = [num_reads_input,custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count]
     alignment_summary_root = settings['root']+".alignmentSummary"
     with open(alignment_summary_root+".txt",'w') as summary:
@@ -345,12 +345,13 @@ def main():
     plot_name = alignment_summary_root
     plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
+    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
 
 
     summary_plot_objects.append(
             PlotObject(plot_name = plot_name,
                     plot_title = 'Alignment Summary',
-                    plot_label = 'Pie chart showing final assignment of reads. Total reads in input: ' + str(num_reads_input),
+                    plot_label = 'Pie chart showing final assignment of reads.<br>' + plot_count_str,
                     plot_datas = [('Alignment summary',alignment_summary_root + ".txt")]
                     ))
 
