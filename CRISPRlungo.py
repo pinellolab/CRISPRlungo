@@ -7,6 +7,7 @@ import logging
 import matplotlib
 matplotlib.use('AGG')
 import matplotlib.pyplot as plt
+import multiprocessing as mp
 import numpy as np
 import os
 import re
@@ -14,6 +15,8 @@ import subprocess
 import sys
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
+
+__version__ = "v0.0.3"
 
 def main():
     settings = parse_settings(sys.argv)
@@ -34,14 +37,14 @@ def main():
 
     cut_sites = settings['cuts']
     cut_annotations = {}
-    if len(settings['on_target_cuts']) == 0:
+    if len(settings['on_target_cut_sites']) == 0:
         for cut_site in settings['cuts']:
             cut_annotations[cut_site] = 'Known'
     else:
         for cut_site in settings['cuts']:
             cut_annotations[cut_site] = 'Off-target'
-        cut_sites.extend(settings['on_target_cuts'])
-        for cut_site in settings['on_target_cuts']:
+        cut_sites.extend(settings['on_target_cut_sites'])
+        for cut_site in settings['on_target_cut_sites']:
             cut_annotations[cut_site] = 'On-target'
 
 
@@ -61,12 +64,20 @@ def main():
 
     primer_chr = ""
     primer_loc = -1
-    if 'primer_site' in settings:
+    if settings['primer_site']:
         primer_info = settings['primer_site'].split("_")
         primer_chr = primer_info[0]
         primer_loc = int(primer_info[1])
     primer_seq = None
-    if 'primer_seq' in settings:
+    if settings['primer_seq']:
+        #attempt to align primer to genome
+        primer_aln_cmd = '%s --seed 2248 --end-to-end -x %s -c %s' %(settings['bowtie2_command'],settings['bowtie2_genome'],settings['primer_seq'])
+        primer_aln_results = subprocess.check_output(primer_aln_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
+        if len(primer_aln_results) > 5 and primer_aln_results[3].strip() == '1 (100.00%) aligned exactly 1 time' and len(primer_aln_results[-2].split("\t")) > 5:
+            sam_line_els = primer_aln_results[-2].split("\t")
+            primer_chr = sam_line_els[2]
+            primer_loc = int(sam_line_els[3])
+            logging.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
         primer_seq = settings['primer_seq']
 
     target_padding = settings['alignment_extension']
@@ -98,31 +109,39 @@ def main():
         target_info = {}
 
 
-    reads_to_align_r1 = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
-    reads_to_align_r2 = settings['fastq_r2']
+    curr_r1_file = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
+    curr_r1_description = "input R1 reads"
+    curr_r2_file = settings['fastq_r2']
+    curr_r2_description = "input R2 reads"
 
     #if umis are provided, add them to the fastqs
     if settings['fastq_umi']:
         umi_r1, umi_r2 = add_umi_from_umi_file(
             root = settings['root']+'.addUMI',
-            fastq_r1 = reads_to_align_r1,
-            fastq_r2 = reads_to_align_r2,
-            fastq_umi = settings['fastq_umi']
+            fastq_r1 = curr_r1_file,
+            fastq_r2 = curr_r2_file,
+            fastq_umi = settings['fastq_umi'],
+            can_use_previous_analysis = settings['can_use_previous_analysis']
         )
-        reads_to_align_r1 = umi_r1
-        reads_to_align_r2 = umi_r2
+        curr_r1_file = umi_r1
+        curr_r1_description = "UMI-added R1 reads"
+        curr_r2_file = umi_r2
+        curr_r1_description = "UMI-added R2 reads"
 
     dedup_input_UMI_count = 0
     if settings['dedup_input_on_UMI']:
         (dedup_r1, dedup_r2, dedup_tot_read_count, dedup_count_with_regex, post_dedup_count, post_dedup_read_count
                 ) = dedup_input_file(
                         root = settings['root']+'.dedup',
-                        fastq_r1 = reads_to_align_r1,
-                        fastq_r2 = reads_to_align_r2,
-                        umi_regex = settings['umi_regex']
+                        fastq_r1 = curr_r1_file,
+                        fastq_r2 = curr_r2_file,
+                        umi_regex = settings['umi_regex'],
+                        can_use_previous_analysis = settings['can_use_previous_analysis']
         )
-        reads_to_align_r1 = dedup_r1
-        reads_to_align_r2 = dedup_r2
+        curr_r1_file = dedup_r1
+        curr_r1_description = "UMI-deduplicated R1 reads"
+        curr_r2_file = dedup_r2
+        curr_r2_description = "UMI-deduplicated R2 reads"
 
     filter_primer_match_count = 0
     if settings['primer_min_bp_match_pct'] > 0:
@@ -130,62 +149,75 @@ def main():
         (primer_filter_r1, primer_filter_r2, filter_tot_read_count, filter_count_with_primer_match, filter_count_with_primer_post_match, post_primer_filter_count, filter_on_primer_plot_obj
                 ) = filter_on_primer_seq(
                         root = settings['root']+'.primer_filter',
-                        fastq_r1 = reads_to_align_r1,
-                        fastq_r2 = reads_to_align_r2,
+                        fastq_r1 = curr_r1_file,
+                        fastq_r2 = curr_r2_file,
                         primer_seq = settings['primer_seq'],
                         primer_min_bp_match_pct = settings['primer_min_bp_match_pct'],
                         primer_post_seq = settings['primer_post_seq'],
-                        primer_post_min_bp_match_pct = settings['primer_post_min_bp_match_pct']
+                        primer_post_min_bp_match_pct = settings['primer_post_min_bp_match_pct'],
+                        can_use_previous_analysis = settings['can_use_previous_analysis']
                     )
-        reads_to_align_r1 = primer_filter_r1
-        reads_to_align_r2 = primer_filter_r2
+        curr_r1_file = primer_filter_r1
+        curr_r1_description = "primer-filtered R1 reads"
+        curr_r2_file = primer_filter_r2
+        curr_r2_description = "primer-filtered R2 reads"
         if filter_on_primer_plot_obj is not None:
             filter_on_primer_plot_obj.order = 1
             summary_plot_objects.append(filter_on_primer_plot_obj)
 
-    custom_aligned_count = 0 #number of reads aligned to custom targets
+    genome_aligned_count = 0 # number of reads aligned to genome
+    custom_aligned_count = 0 # number of reads aligned to custom targets
+    frag_linear_count = 0 # number of reads fragmented and classified as linear
+    frag_translocation_count = 0 # number of reads fragmented and classified as translocations
+    frag_large_deletion_count = 0 # number of reads fragmented and classified as large deletions
+    frag_large_inversion_count = 0 # number of reads fragmented and classified as large inversions
+    frag_unidentified_count = 0 # number of reads fragmented and classified as unidentified
 
     #keep track of where every read is assigned
     #these lists keep track of the files containing assignments from the separate analyses
     r1_assignment_files = []
     r2_assignment_files = []
 
-    (genome_r1_assignments,genome_r2_assignments,genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file,genome_chr_aln_plot_obj,genome_tlen_plot_object
-        ) = align_reads(
-                root = settings['root']+'.genomeAlignment',
-                fastq_r1 = reads_to_align_r1,
-                fastq_r2 = reads_to_align_r2,
-                reads_name = 'reads',
-                bowtie2_reference = settings['bowtie2_genome'],
-                reference_name = 'Genome',
-                target_info = target_info,
-                bowtie2_command = settings['bowtie2_command'],
-                bowtie2_threads = settings['n_processes'],
-                samtools_command = settings['samtools_command'],
-                keep_intermediate = settings['keep_intermediate']
-                )
-    r1_assignment_files.append(genome_r1_assignments)
-    if genome_r2_assignments is not None:
-        r2_assignment_files.append(genome_r2_assignments)
+    if settings['perform_unbiased_analysis']:
+        (genome_r1_assignments,genome_r2_assignments,genome_unmapped_r1, genome_unmapped_r2, genome_aligned_count, genome_mapped_bam_file,genome_chr_aln_plot_obj,genome_tlen_plot_object
+            ) = align_reads(
+                    root = settings['root']+'.genomeAlignment',
+                    fastq_r1 = curr_r1_file,
+                    fastq_r2 = curr_r2_file,
+                    reads_name = curr_r1_description.replace(" R1",""),
+                    bowtie2_reference = settings['bowtie2_genome'],
+                    reference_name = 'Genome',
+                    target_info = target_info,
+                    bowtie2_command = settings['bowtie2_command'],
+                    bowtie2_threads = settings['n_processes'],
+                    samtools_command = settings['samtools_command'],
+                    keep_intermediate = settings['keep_intermediate'],
+                    can_use_previous_analysis = settings['can_use_previous_analysis']
+                    )
+        r1_assignment_files.append(genome_r1_assignments)
+        if genome_r2_assignments is not None:
+            r2_assignment_files.append(genome_r2_assignments)
 
-    if genome_tlen_plot_object is not None:
-        genome_tlen_plot_object.order = 2
-        summary_plot_objects.append(genome_tlen_plot_object)
-    if genome_chr_aln_plot_obj is not None:
-        genome_chr_aln_plot_obj.order = 5
-        summary_plot_objects.append(genome_chr_aln_plot_obj)
+        if genome_tlen_plot_object is not None:
+            genome_tlen_plot_object.order = 2
+            summary_plot_objects.append(genome_tlen_plot_object)
+        if genome_chr_aln_plot_obj is not None:
+            genome_chr_aln_plot_obj.order = 5
+            summary_plot_objects.append(genome_chr_aln_plot_obj)
 
-    custom_unmapped_r1 = genome_unmapped_r1
-    custom_unmapped_r2 = genome_unmapped_r2
+        curr_r1_file = genome_unmapped_r1
+        curr_r1_description = "R1 reads not aligned to genome"
+        curr_r2_file = genome_unmapped_r2
+        curr_r2_description = "R2 reads not aligned to genome"
 
     if len(target_names) > 0:
         #first, align the unaligned r1s
         (custom_r1_assignments,none_file,custom_unmapped_r1, none_file2, custom_r1_aligned_count, custom_r1_mapped_bam_file,custom_r1_chr_aln_plot_obj,none_custom_tlen_plot_object
             ) = align_reads(
                     root = settings['root']+'.r1.customTargetAlignment',
-                    fastq_r1 = genome_unmapped_r1,
+                    fastq_r1 = curr_r1_file,
                     fastq_r2 = None,
-                    reads_name = 'genome-unaligned R1 reads',
+                    reads_name = curr_r1_description,
                     bowtie2_reference=custom_index_fasta,
                     reference_name='Custom targets',
                     target_info = target_info,
@@ -194,23 +226,26 @@ def main():
                     bowtie2_command=settings['bowtie2_command'],
                     bowtie2_threads=settings['n_processes'],
                     samtools_command=settings['samtools_command'],
-                    keep_intermediate = settings['keep_intermediate']
+                    keep_intermediate = settings['keep_intermediate'],
+                    can_use_previous_analysis = settings['can_use_previous_analysis']
                     )
         r1_assignment_files.append(custom_r1_assignments)
         custom_aligned_count += custom_r1_aligned_count
+        curr_r1_file = custom_unmapped_r1
+        curr_r1_description = "R1 reads not aligned to custom targets"
 
         if custom_r1_chr_aln_plot_obj is not None:
             custom_r1_chr_aln_plot_obj.order = 10
             summary_plot_objects.append(custom_r1_chr_aln_plot_obj)
 
         #if input is paired, align second reads to the custom targets as welll
-        if genome_unmapped_r2 is not None:
+        if curr_r2_file is not None:
             (custom_r2_assignments,none_file,custom_unmapped_r2, none_file2, custom_r2_aligned_count, custom_r2_mapped_bam_file,custom_r2_chr_aln_plot_obj,none_custom_tlen_plot_object
                 ) = align_reads(
                         root = settings['root']+'.r2.customTargetAlignment',
-                        fastq_r1 = genome_unmapped_r2,
+                        fastq_r1 = curr_r2_file,
                         fastq_r2 = None,
-                        reads_name = 'genome-unaligned R2 reads',
+                        reads_name = curr_r2_description,
                         bowtie2_reference=custom_index_fasta,
                         reference_name='Custom targets',
                         target_info = target_info,
@@ -219,7 +254,8 @@ def main():
                         bowtie2_command=settings['bowtie2_command'],
                         bowtie2_threads=settings['n_processes'],
                         samtools_command=settings['samtools_command'],
-                        keep_intermediate = settings['keep_intermediate']
+                        keep_intermediate = settings['keep_intermediate'],
+                        can_use_previous_analysis = settings['can_use_previous_analysis']
                         )
             r2_assignment_files.append(custom_r2_assignments)
             custom_aligned_count += custom_r2_aligned_count
@@ -228,26 +264,44 @@ def main():
                 custom_r2_chr_aln_plot_obj.order = 11
                 summary_plot_objects.append(custom_r2_chr_aln_plot_obj)
 
-    #chop reads
-    (frag_r1_assignments,frag_r2_assignments,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_plot_obj
-        ) = chop_reads(
-                root = settings['root']+".frags",
-                unmapped_reads_fastq_r1 = custom_unmapped_r1,
-                unmapped_reads_fastq_r2 = custom_unmapped_r2,
-                bowtie2_genome = settings['bowtie2_genome'],
-                fragment_size = settings['fragment_size'],
-                fragment_step_size = settings['fragment_step_size'],
-                bowtie2_command = settings['bowtie2_command'],
-                bowtie2_threads = settings['n_processes'],
-                samtools_command = settings['samtools_command'],
-                )
-    r1_assignment_files.append(frag_r1_assignments)
-    if frag_r2_assignments is not None:
-        r2_assignment_files.append(frag_r2_assignments)
+            curr_r2_file = custom_unmapped_r2
 
-    if frags_plot_obj is not None:
-        frags_plot_obj.order = 16
-        summary_plot_objects.append(frags_plot_obj)
+    if settings['perform_unbiased_analysis']:
+        #chop reads
+        (frag_r1_assignments,frag_r2_assignments,frag_linear_count,frag_translocation_count,frag_large_deletion_count,frag_large_inversion_count,frag_unidentified_count,frags_plot_obj
+            ) = chop_reads(
+                    root = settings['root']+".frags",
+                    unmapped_reads_fastq_r1 = curr_r1_file,
+                    unmapped_reads_fastq_r2 = curr_r2_file,
+                    bowtie2_genome = settings['bowtie2_genome'],
+                    fragment_size = settings['fragment_size'],
+                    fragment_step_size = settings['fragment_step_size'],
+                    min_seen_frag_cutoff = settings['min_seen_frag_cutoff'],
+                    fragment_min_mapq = settings['fragment_min_mapq'],
+                    bowtie2_command = settings['bowtie2_command'],
+                    bowtie2_threads = settings['n_processes'],
+                    samtools_command = settings['samtools_command'],
+                    can_use_previous_analysis = settings['can_use_previous_analysis']
+                    )
+        r1_assignment_files.append(frag_r1_assignments)
+        if frag_r2_assignments is not None:
+            r2_assignment_files.append(frag_r2_assignments)
+
+        if frags_plot_obj is not None:
+            frags_plot_obj.order = 16
+            summary_plot_objects.append(frags_plot_obj)
+    else:
+        (unmapped_r1_assignments, unmapped_r2_assignments, unmapped_r1_count, unmapped_r2_count
+                ) = prep_unmapped_assignments(
+                    root = settings['root']+".unmapped",
+                    unmapped_reads_fastq_r1 = curr_r1_file,
+                    unmapped_reads_fastq_r2 = curr_r2_file,
+                    can_use_previous_analysis = settings['can_use_previous_analysis']
+                    )
+        r1_assignment_files.append(unmapped_r1_assignments)
+        if unmapped_r2_assignments is not None:
+            r2_assignment_files.append(unmapped_r2_assignments)
+
 
     (final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
         ) = make_final_read_assignments(
@@ -261,7 +315,8 @@ def main():
                 cut_merge_dist = 20,
                 genome_map_resolution = 1000000,
                 dedup_based_on_aln_pos = settings['dedup_input_based_on_aln_pos_and_UMI'],
-                discard_reads_without_r2_support = settings['discard_reads_without_r2_support']
+                discard_reads_without_r2_support = settings['discard_reads_without_r2_support'],
+                can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
 
     deduplication_plot_obj.order=20
@@ -297,7 +352,7 @@ def main():
                 av_read_length = av_read_length,
                 genome = settings['genome'],
                 genome_len_file = settings['genome']+'.fai',
-                crispresso_cutoff = settings['crispresso_cutoff'],
+                crispresso_min_count = settings['crispresso_min_count'],
                 crispresso_min_aln_score = settings['crispresso_min_aln_score'],
                 samtools_command=settings['samtools_command'],
                 crispresso_command=settings['crispresso_command'],
@@ -316,7 +371,7 @@ def main():
                     av_read_length = av_read_length,
                     genome = settings['genome'],
                     genome_len_file = settings['genome']+'.fai',
-                    crispresso_cutoff = settings['crispresso_cutoff'],
+                    crispresso_min_count = settings['crispresso_min_count'],
                     crispresso_min_aln_score = settings['crispresso_min_aln_score'],
                     samtools_command=settings['samtools_command'],
                     crispresso_command=settings['crispresso_command'],
@@ -329,19 +384,26 @@ def main():
     crispresso_results = run_and_aggregate_crispresso(
                 root = settings['root']+".CRISPResso",
                 crispresso_infos = crispresso_infos,
-                n_processes=settings['n_processes'],
-                min_count_to_run_crispresso=settings['crispresso_min_count']
+                n_processes = settings['n_processes'],
+                min_count_to_run_crispresso =settings['crispresso_min_count'],
+                can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
 
-    labels = ["Input Reads","Aligned Custom Targets","Aligned Genome","Fragmented Translocations","Fragmented Large Deletions","Fragmented Large Inversions","Fragmented Unidentified"]
-    values = [num_reads_input,custom_aligned_count,genome_aligned_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count]
+    labels = ["Input Reads","Aligned Custom Targets","Aligned Genome","Fragmented Linear","Fragmented Translocations","Fragmented Large Deletions","Fragmented Large Inversions","Fragmented Unidentified"]
+    values = [num_reads_input,custom_aligned_count,genome_aligned_count,frag_linear_count,frag_translocation_count,frag_large_deletion_count,frag_large_inversion_count,frag_unidentified_count]
     alignment_summary_root = settings['root']+".alignmentSummary"
     with open(alignment_summary_root+".txt",'w') as summary:
         summary.write("\t".join(labels)+"\n")
         summary.write("\t".join([str(x) for x in values])+"\n")
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
-    ax.pie(values[1:],labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(1,len(labels))],autopct="%1.2f%%")
+    pie_values = []
+    pie_labels = []
+    for i in range(1,len(labels)):
+        if values[i] > 0:
+            pie_values.append(values[i])
+            pie_labels.append(labels[i]+"\n("+str(values[i])+")")
+    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
     plot_name = alignment_summary_root
     plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
@@ -381,157 +443,408 @@ def parse_settings(args):
     returns:
         settings: dict of parsed settings
     """
-    if len(args) < 2:
-        raise Exception('Error: Settings file is missing\nUsage: ' +
-                    args[0] + ' {settings file}')
-    settings_file = args[1]
+    parser = argparse.ArgumentParser(description='CRISPRlungo: Analyzing unidirectional sequencing of genome editing', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('-v', '--version', action='version', version="%(prog)s "+__version__)
+    parser.add_argument('settings_file', nargs='*', help='Tab-separated settings file')
+
+    parser.add_argument('--debug', action='store_true', help='Tab-separated settings file')
+    parser.add_argument('--root', type=str, default=None, help='Output directory file root')
+    parser.add_argument('--keep_intermediate',action='store_true',help='If true, intermediate files are not deleted')
+
+
+
+    parser.add_argument('--alignment_extension', type=int, help='Number of bp to extend beyond av read length around cut site for custom index', default=50)
+
+    parser.add_argument('--cuts','--cut_sites', nargs='*', help='Cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
+    parser.add_argument('--on_target_cut_sites', nargs='*', help='On-target cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
+
+    #for finding offtargets with casoffinder
+    parser.add_argument('--PAM', type=str, help='PAM for in-silico off-target search', default=None)
+    parser.add_argument('--on_target_guides', nargs='*', help='Spacer sequences of guides for in-silico off-target search (multiple guide sequences are separated by spaces)', default=[])
+    parser.add_argument('--casoffinder_num_mismatches', type=int, help='Number of casoffinder mismatches for in-silico off-target search', default=5)
+    parser.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
+
+    #specify primer information
+    parser.add_argument('--primer_site', type=str, help='Site of genomic primer, of the form chr1:234',default=None)
+    parser.add_argument('--primer_seq', type=str, help='Sequence of primer. Either --primer_site or --primer_seq should be specified.',default=None)
+    parser.add_argument('--add_non_primer_cut_targets', help='Whether to add targets for cuts without a primer. If false, only primer-cut1 pairings will be added. If true, cut1-cut2 pairings will be added.',action='store_true')
+    parser.add_argument('--primer_min_bp_match_pct', type=int, help='Min percent of bases that must match primer_seq. If lower than this percent of bases match, the read will be filtered from output files.', default=0)
+    parser.add_argument('--primer_post_seq', type=str, help='Sequence immedately following primer sequence to check at beginning of R1', default=None)
+    parser.add_argument('--primer_post_min_bp_match_pct', type=int, help='Min percent of bases that must match primer_post_seq. If lower than this percent of bases match, the read will be filtered from output files.', default=0)
+
+    #min alignment cutoffs for alignment to each arm/side of read
+    parser.add_argument('--arm_min_seen_bases', type=int, help='Number of bases that are required to be seen on each "side" of translocated reads. E.g. if a artificial target represents a translocation between chr1 and chr2, arm_min_seen_bases would have to be seen on chr1 as well as on chr2 for the read to be counted.', default=15)
+    parser.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of artifical targets. E.g. if a artificial target represents a translocation between chr1 and chr2, the first arm_min_matched_start_bases of the read would have to match exactly to chr1 and the last arm_min_matched_start_bases of the read would have to match exactly to chr2', default=10)
+
+    #CRISPResso settings
+    parser.add_argument('--run_crispresso_genome_sites', help='Boolean for whether to run CRISPResso on highly-aligned genomic locations (if flag is not set (or false), CRISPResso will only be run at highly-aligned cut sites and artificial targets', action='store_true')
+    parser.add_argument('--crispresso_min_count', type=int, help='Min number of reads required to be seen at a site for it to be analyzed by CRISPResso', default=50)
+    parser.add_argument('--crispresso_min_aln_score', type=int, help='Min alignment score to reference sequence for quantification by CRISPResso', default=20)
+
+    #sub-command parameters
+    parser.add_argument('--samtools_command', help='Command to run samtools', default='samtools')
+    parser.add_argument('--bowtie2_command', help='Command to run bowtie2', default='bowtie2')
+    parser.add_argument('--crispresso_command', help='Command to run crispresso', default='CRISPResso')
+    parser.add_argument('--casoffinder_command', help='Command to run casoffinder', default='cas-offinder')
+    parser.add_argument('--n_processes', type=str, help='Number of processes to run on (may be set to "max")', default='1')
+
+    #fragmentation parameters
+    parser.add_argument('--perform_unbiased_analysis', help='If set, an unbiased search for translocations is performed by fragmenting and analyzing reads that do not align to the genome or to custom targets.', action='store_true')
+    #these two parameters control the size and stride of fragment creation
+    parser.add_argument('--fragment_size', type=int, help='Fragment size (bp) for fragment creation', default=20)
+    parser.add_argument('--fragment_step_size', type=int, help='Step size (bp) between fragments for fragment creation', default=10)
+    parser.add_argument('--min_seen_frag_cutoff', type=int, help='Minimum number of fragments aligned to a location for the location to be considered as a possible alignment location for a read (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_frag_cutoff of 2 would not allow position B', default=2)
+    parser.add_argument('--fragment_min_mapq', type=int, help='Minimum mapq (mapping quality) for a fragment to be considered. Increasing this value may reduce sensitivity for fragments aligned to repetitive regions. Any value greater than 1 will likely eliminate multi-mapped reads.', default=30)
+
+    #umi settings
+    parser.add_argument('--dedup_input_on_UMI', help='If set, input reads will be deduplicated based on UMI before alignment', action='store_true')
+    parser.add_argument('--dedup_input_based_on_aln_pos_and_UMI', help='If set, input reads will be deduplicated based on alignment position and UMI', action='store_true')
+    parser.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match', default='NNWNNWNNN')
+
+    #R1/R2 support settings
+    parser.add_argument('--r1_r2_support_max_distance', type=int, help='Max distance between r1 and r2 for the read pair to be classified as "supported" by r2', default=10000)
+    parser.add_argument('--discard_reads_without_r2_support', help='If set, reads without r2 support will be discarded from final analysis and counts', action='store_true')
+
+    parser.add_argument('--genome', help='Genome sequence file for alignment. This should point to a file ending in ".fa", and the accompanying index file (".fai") should exist.', default=None)
+    parser.add_argument('--bowtie2_genome', help='Bowtie2-indexed genome file.',default=None)
+
+    parser.add_argument('--fastq_r1', help='Input fastq r1 file', default=None)
+    parser.add_argument('--fastq_r2', help='Input fastq r2 file', default=None)
+    parser.add_argument('--fastq_umi', help='Input fastq umi file', default=None)
+
+    cmd_args = parser.parse_args(args[1:])
+
     settings = {}
+    settings_file_args = {}
 
+    # try to read in args from the settings file
+    if (len(cmd_args.settings_file) > 0):
+        for s_file in cmd_args.settings_file:
+            with open(s_file, 'r') as fin:
+                for line in fin:
+                    if line.startswith("#"):
+                        continue
+                    line_els = line.split("#")[0].rstrip('\n').split("\t")
+                    if line_els == ['']:
+                        continue
+                    if (len(line_els) < 2):
+                        raise Exception('Cannot parse line "' + line + '"\nA tab must separate the key and value in the settings file')
+                    key = line_els[0].strip()
+                    val = line_els[1].strip()
+                    settings_file_args[key] = val
+
+    settings['root'] = cmd_args.root
+    if 'root' in settings_file_args:
+        settings['root'] = settings_file_args['root']
+        settings_file_args.pop('root')
+    if cmd_args.root is None:
+        if len(cmd_args.settings_file) > 0:
+            settings['root'] = cmd_args.settings_file[0] + ".CRISPRlungo"
+        else:
+            settings['root'] = "CRISPRlungo"
+
+    settings['debug'] = cmd_args.debug
+    if 'debug' in settings_file_args:
+        settings['debug'] = (settings_file_args['debug'].lower() == 'true')
+        settings_file_args.pop('debug')
+
+    #logger = logging.getLogger(__name__)
     logging_level = logging.INFO
-    if len(args) > 2 and 'debug' in args[2].lower():
+    if settings['debug']:
         logging_level=logging.DEBUG
-        settings['debug'] = True
 
-    log_formatter = logging.Formatter("%(asctime)s:%(levelname)s: %(message)s")
+    log_formatter = logging.Formatter("%(asctime)s:%(levelname)s: %(message)s","%Y-%m-%d %H:%M:%S")
     logging.basicConfig(
-            level=logging_level,
-            format="%(asctime)s:%(levelname)s: %(message)s",
-            filename=settings_file+".CRISPRlungo.log",
-            filemode='w'
+            level = logging_level,
+            format = "%(asctime)s:%(levelname)s: %(message)s",
+            filename = settings['root']+".log",
+            filemode = 'w'
             )
     ch = logging.StreamHandler()
     ch.setFormatter(log_formatter)
     logging.getLogger().addHandler(ch)
 
-    logging.info('CRISPRlungo v0.0.2')
+    logging.info('CRISPRlungo ' + __version__)
 
     logging.info('Parsing settings file')
 
-    with open(settings_file, 'r') as fin:
-        for line in fin:
-            if line.startswith("#"):
-                continue
-            line_els = line.split("#")[0].strip().split("\t")
-            if line_els == ['']:
-                continue
-            if (len(line_els) < 2):
-                raise Exception('Cannot parse line "' + line + '"\nA tab must separate the key and value in the settings file')
-            key = line_els[0].strip()
-            val = line_els[1].strip()
-            settings[key] = val
+    settings['keep_intermediate'] = cmd_args.keep_intermediate
+    if 'keep_intermediate' in settings_file_args:
+        settings['keep_intermediate'] = (settings_file_args['keep_intermediate'].lower() == 'true')
+        settings_file_args.pop('keep_intermediate')
 
-    settings['root'] = settings_file + ".CRISPRlungo"
 
-    settings['keep_intermediate'] = (settings['keep_intermediate'] == 'True') if 'keep_intermediate' in settings else False
+    settings['alignment_extension'] = cmd_args.alignment_extension
+    if 'alignment_extension' in settings_file_args:
+        settings['alignment_extension'] = int(settings_file_args['alignment_extension'])
+        settings_file_args.pop('alignment_extension')
 
-    # two parameters control the size and stride of fragment creation
-    # size of fragment
-    settings['fragment_size'] = int(settings['fragment_size']) if 'fragment_size' in settings else 20
-    # step size between fragments
-    settings['fragment_step_size'] = int(settings['fragment_step_size']) if 'fragment_step_size' in settings else 10
+    settings['cuts'] = cmd_args.cuts
+    if 'cuts' in settings_file_args:
+        settings['cuts'] = settings_file_args['cuts'].split(" ")
+        settings_file_args.pop('cuts')
+    if 'cut_sites' in settings_file_args:
+        settings['cuts'].extend(settings_file_args['cut_sites'].split(" "))
+        settings_file_args.pop('cut_sites')
+    for cut in settings['cuts']:
+        if ":" not in cut:
+            parser.print_usage()
+            raise Exception('Error: cut specification %s is in the incorrect format (must be given as chr1:234',cut)
 
-    # number of bp to extend beyond av read length around cut site for custom index
-    settings['alignment_extension'] = int(settings['alignment_extension']) if 'alignment_extension' in settings else 50
+    settings['on_target_cut_sites'] = cmd_args.on_target_cut_sites
+    if 'on_target_cut_sites' in settings_file_args:
+        settings['on_target_cut_sites'] = settings_file_args['on_target_cut_sites'].split(" ")
+        settings_file_args.pop('on_target_cut_sites')
 
-    #min number of reads to analyze using crispresso
-    settings['crispresso_cutoff'] = int(settings['crispresso_cutoff']) if 'crispresso_cutoff' in settings else 50
+    settings['PAM'] = cmd_args.PAM
+    if 'PAM' in settings_file_args:
+        settings['PAM'] = settings_file_args['PAM']
+        settings_file_args.pop('PAM')
 
-    #space-delimited list of cut sites in the form chr1:234 chr2:234
-    settings['cuts'] = settings['cut_sites'].split(" ") if 'cut_sites' in settings else []
-    settings['on_target_cuts'] = settings['on_target_cut_sites'].split(" ") if 'on_target_cut_sites' in settings else []
+    settings['on_target_guides'] = cmd_args.on_target_guides
+    if 'on_target_guides' in settings_file_args:
+        settings['on_target_guides'] = settings_file_args['on_target_guides'].split(" ")
+        settings_file_args.pop('on_target_guides')
 
-    #for finding offtargets with casoffinder
-    settings['PAM'] = settings['PAM'] if 'PAM' in settings else None
-    settings['on-target_guides'] = settings['on-target_guides'].split(" ") if 'on-target_guides' in settings else None
-    settings['casoffinder_num_mismatches'] = int(settings['casoffinder_num_mismatches']) if 'casoffinder_num_mismatches' in settings else 5
-    settings['cleavage_offset'] = int(settings['cleavage_offset']) if 'cleavage_offset' in settings else -3
+    settings['casoffinder_num_mismatches'] = cmd_args.casoffinder_num_mismatches
+    if 'casoffinder_num_mismatches' in settings_file_args:
+        settings['casoffinder_num_mismatches'] = int(settings_file_args['casoffinder_num_mismatches'])
+        settings_file_args.pop('casoffinder_num_mismatches')
 
-    if 'add_non_primer_cut_targets' in settings and settings['add_non_primer_cut_targets'] == 'True':
+    settings['cleavage_offset'] = cmd_args.cleavage_offset
+    if 'cleavage_offset' in settings_file_args:
+        settings['cleavage_offset'] = int(settings_file_args['cleavage_offset'])
+        settings_file_args.pop('cleavage_offset')
+
+    settings['primer_site'] = cmd_args.primer_site
+    if 'primer_site' in settings_file_args:
+        settings['primer_site'] = settings_file_args['primer_site']
+        settings_file_args.pop('primer_site')
+
+    settings['primer_seq'] = cmd_args.primer_seq
+    if 'primer_seq' in settings_file_args:
+        settings['primer_seq'] = settings_file_args['primer_seq']
+        settings_file_args.pop('primer_seq')
+
+    settings['add_non_primer_cut_targets'] = cmd_args.add_non_primer_cut_targets
+    if 'add_non_primer_cut_targets' in settings_file_args:
+        settings['add_non_primer_cut_targets'] = (settings_file_args['add_non_primer_cut_targets'].lower() == 'true')
+        settings_file_args.pop('add_non_primer_cut_targets')
+
+    # if primer is not specified, add non-primer cut targets
+    if not settings['primer_seq'] and not settings['primer_site']:
         settings['add_non_primer_cut_targets'] = True
-    elif 'primer_site' not in settings or settings['primer_site'] is not None:
-        settings['add_non_primer_cut_targets'] = True
-    elif 'primer_seq' not in settings or settings['primer_seq'] is not None:
-        settings['add_non_primer_cut_targets'] = True
+
+    settings['primer_min_bp_match_pct'] = cmd_args.primer_min_bp_match_pct
+    if 'primer_min_bp_match_pct' in settings_file_args:
+        settings['primer_min_bp_match_pct'] = int(settings_file_args['primer_min_bp_match_pct'])
+        settings_file_args.pop('primer_min_bp_match_pct')
+
+    settings['primer_post_seq'] = cmd_args.primer_post_seq
+    if 'primer_post_seq' in settings_file_args:
+        settings['primer_post_seq'] = settings_file_args['primer_post_seq']
+        settings_file_args.pop('primer_post_seq')
+
+    settings['primer_post_min_bp_match_pct'] = cmd_args.primer_post_min_bp_match_pct
+    if 'primer_post_min_bp_match_pct' in settings_file_args:
+        settings['primer_post_min_bp_match_pct'] = int(settings_file_args['primer_post_min_bp_match_pct'])
+        settings_file_args.pop('primer_post_min_bp_match_pct')
+
+    settings['arm_min_seen_bases'] = cmd_args.arm_min_seen_bases
+    if 'arm_min_seen_bases' in settings_file_args:
+        settings['arm_min_seen_bases'] = int(settings_file_args['arm_min_seen_bases'])
+        settings_file_args.pop('arm_min_seen_bases')
+
+    settings['arm_min_matched_start_bases'] = cmd_args.arm_min_matched_start_bases
+    if 'arm_min_matched_start_bases' in settings_file_args:
+        settings['arm_min_matched_start_bases'] = int(settings_file_args['arm_min_matched_start_bases'])
+        settings_file_args.pop('arm_min_matched_start_bases')
+
+    settings['run_crispresso_genome_sites'] = cmd_args.run_crispresso_genome_sites
+    if 'run_crispresso_genome_sites' in settings_file_args:
+        settings['run_crispresso_genome_sites'] = (settings_file_args['run_crispresso_genome_sites'].lower() == 'true')
+        settings_file_args.pop('run_crispresso_genome_sites')
+
+    settings['crispresso_min_count'] = cmd_args.crispresso_min_count
+    if 'crispresso_min_count' in settings_file_args:
+        settings['crispresso_min_count'] = int(settings_file_args['crispresso_min_count'])
+        settings_file_args.pop('crispresso_min_count')
+
+    settings['crispresso_min_aln_score'] = cmd_args.crispresso_min_aln_score
+    if 'crispresso_min_aln_score' in settings_file_args:
+        settings['crispresso_min_aln_score'] = int(settings_file_args['crispresso_min_aln_score'])
+        settings_file_args.pop('crispresso_min_aln_score')
+
+
+    settings['samtools_command'] = cmd_args.samtools_command
+    if 'samtools_command' in settings_file_args:
+        settings['samtools_command'] = settings_file_args['samtools_command']
+        settings_file_args.pop('samtools_command')
+
+    settings['bowtie2_command'] = cmd_args.bowtie2_command
+    if 'bowtie2_command' in settings_file_args:
+        settings['bowtie2_command'] = settings_file_args['bowtie2_command']
+        settings_file_args.pop('bowtie2_command')
+
+    settings['crispresso_command'] = cmd_args.crispresso_command
+    if 'crispresso_command' in settings_file_args:
+        settings['crispresso_command'] = settings_file_args['crispresso_command']
+        settings_file_args.pop('crispresso_command')
+
+    settings['casoffinder_command'] = cmd_args.casoffinder_command
+    if 'casoffinder_command' in settings_file_args:
+        settings['casoffinder_command'] = settings_file_args['casoffinder_command']
+        settings_file_args.pop('casoffinder_command')
+
+    settings['n_processes'] = cmd_args.n_processes
+    if 'n_processes' in settings_file_args:
+        settings['n_processes'] = settings_file_args['n_processes']
+        settings_file_args.pop('n_processes')
+
+    if settings['n_processes'] == 'max':
+        settings['n_processes'] = mp.cpu_count()
     else:
-        settings['add_non_primer_cut_targets'] = False
+        settings['n_processes'] = int(settings['n_processes'])
 
-    #% bases that must match primer sequence exactly
-    settings['primer_min_bp_match_pct'] = int(settings['primer_min_bp_match_pct']) if 'primer_min_bp_match_pct' in settings else 0
-    #bases after the primer sequence (that must be matched)
-    settings['primer_post_seq'] = settings['primer_post_seq'] if 'primer_post_seq' in settings else None
-    settings['primer_post_min_bp_match_pct'] = int(settings['primer_post_min_bp_match_pct']) if 'primer_post_min_bp_match_pct' in settings else 0
+    settings['perform_unbiased_analysis'] = cmd_args.perform_unbiased_analysis
+    if 'perform_unbiased_analysis' in settings_file_args:
+        settings['perform_unbiased_analysis'] = (settings_file_args['perform_unbiased_analysis'].lower() == 'true')
+        settings_file_args.pop('perform_unbiased_analysis')
 
-    #how many bp are required to be aligned to each arm of artificial targets
-    settings['arm_min_seen_bases'] = int(settings['arm_min_seen_bases']) if 'arm_min_seen_bases' in settings else 15
-    #how many bp are required to match on each arm of artificial targets
-    settings['arm_min_matched_start_bases'] = int(settings['arm_min_matched_start_bases']) if 'arm_min_matched_start_bases' in settings else 10
+    settings['fragment_size'] = cmd_args.fragment_size
+    if 'fragment_size' in settings_file_args:
+        settings['fragment_size'] = int(settings_file_args['fragment_size'])
+        settings_file_args.pop('fragment_size')
 
+    settings['fragment_step_size'] = cmd_args.fragment_step_size
+    if 'fragment_step_size' in settings_file_args:
+        settings['fragment_step_size'] = int(settings_file_args['fragment_step_size'])
+        settings_file_args.pop('fragment_step_size')
 
-    #boolean for whether to run crispresso on highly-aligned genomic locations (if false, crispresso will only be run at cut sites and artificial targets)
-    if 'run_crispresso_genome_sites' in settings and settings['run_crispresso_genome_sites'] == 'True':
-        settings['run_crispresso_genome_sites'] = True
-    else:
-        settings['run_crispresso_genome_sites'] = False
-    
-    #min number of reads required to be seen at a site for it to be analyzed by CRISPResso
-    settings['crispresso_min_count'] = int(settings['crispresso_min_count']) if 'crispresso_min_count' in settings else 10
+    settings['min_seen_frag_cutoff'] = cmd_args.min_seen_frag_cutoff
+    if 'min_seen_frag_cutoff' in settings_file_args:
+        settings['min_seen_frag_cutoff'] = int(settings_file_args['min_seen_frag_cutoff'])
+        settings_file_args.pop('min_seen_frag_cutoff')
 
-    settings['samtools_command'] = settings['samtools_command'] if 'samtools_command' in settings else 'samtools'
-    settings['bowtie2_command'] = settings['bowtie2_command'] if 'bowtie2_command' in settings else 'bowtie2'
-    settings['n_processes'] = int(settings['n_processes']) if 'n_processes' in settings else 1
-    settings['crispresso_command'] = settings['crispresso_command'] if 'crispresso_command' in settings else 'CRISPResso'
-    settings['casoffinder_command'] = settings['casoffinder_command'] if 'casoffinder_command' in settings else 'cas-offinder'
+    settings['fragment_min_mapq'] = cmd_args.fragment_min_mapq
+    if 'fragment_min_mapq' in settings_file_args:
+        settings['fragment_min_mapq'] = int(settings_file_args['fragment_min_mapq'])
+        settings_file_args.pop('fragment_min_mapq')
 
-    settings['umi_regex'] = settings['umi_regex'] if 'umi_regex' in settings else 'NNWNNWNNN'
-    settings['dedup_input_on_UMI'] = (settings['dedup_input_on_UMI'] == 'True') if 'dedup_input_on_UMI' in settings else False
-    settings['dedup_input_based_on_aln_pos_and_UMI'] = (settings['dedup_input_based_on_aln_pos_and_UMI'] == 'True') if 'dedup_input_based_on_aln_pos_and_UMI' in settings else True
+    settings['dedup_input_on_UMI'] = cmd_args.dedup_input_on_UMI
+    if 'dedup_input_on_UMI' in settings_file_args:
+        settings['dedup_input_on_UMI'] = (settings_file_args['dedup_input_on_UMI'].lower() == 'true')
+        settings_file_args.pop('dedup_input_on_UMI')
 
-    #max ditance (bp) between R1 and R2 for R2 to 'support' R1
-    settings['r1_r2_support_max_distance'] = int(settings['r1_r2_support_max_distance']) if 'r1_r2_support_max_distance' in settings else 10000
-    settings['discard_reads_without_r2_support'] = (settings['discard_reads_without_r2_support'] == 'True') if 'discard_reads_without_r2_support' in settings else True
+    settings['dedup_input_based_on_aln_pos_and_UMI'] = cmd_args.dedup_input_based_on_aln_pos_and_UMI
+    if 'dedup_input_based_on_aln_pos_and_UMI' in settings_file_args:
+        settings['dedup_input_based_on_aln_pos_and_UMI'] = (settings_file_args['dedup_input_based_on_aln_pos_and_UMI'].lower() == 'true')
+        settings_file_args.pop('dedup_input_based_on_aln_pos_and_UMI')
 
+    settings['r1_r2_support_max_distance'] = cmd_args.r1_r2_support_max_distance
+    if 'r1_r2_support_max_distance' in settings_file_args:
+        settings['r1_r2_support_max_distance'] = int(settings_file_args['r1_r2_support_max_distance'])
+        settings_file_args.pop('r1_r2_support_max_distance')
 
-    settings['crispresso_min_aln_score'] = int(settings['crispresso_min_aln_score']) if 'crispresso_min_aln_score' in settings else 20
+    settings['discard_reads_without_r2_support'] = cmd_args.discard_reads_without_r2_support
+    if 'discard_reads_without_r2_support' in settings_file_args:
+        settings['discard_reads_without_r2_support'] = (settings_file_args['discard_reads_without_r2_support'].lower() == 'true')
+        settings_file_args.pop('discard_reads_without_r2_support')
 
-    if 'genome' not in settings:
-        raise Exception('Error: genome is required in settings file, pointing to a .fa file. The accompanying .fai file should also exist.')
+    settings['fastq_r1'] = cmd_args.fastq_r1
+    if 'fastq_r1' in settings_file_args:
+        settings['fastq_r1'] = settings_file_args['fastq_r1']
+        settings_file_args.pop('fastq_r1')
+    if not settings['fastq_r1']:
+        parser.print_usage()
+        raise Exception('Error: fastq_r1 file must be provided (--fastq_r1)')
+    if not os.path.isfile(settings['fastq_r1']):
+        parser.print_usage()
+        raise Exception('Error: fastq_r1 file %s does not exist',settings['fastq_r1'])
+
+    settings['fastq_r2'] = cmd_args.fastq_r2
+    if 'fastq_r2' in settings_file_args:
+        settings['fastq_r2'] = settings_file_args['fastq_r2']
+        settings_file_args.pop('fastq_r2')
+    if settings['fastq_r2'] and not os.path.isfile(settings['fastq_r2']):
+        raise Exception('Error: fastq_r2 file %s does not exist',settings['fastq_r2'])
+
+    settings['fastq_umi'] = cmd_args.fastq_umi
+    if 'fastq_umi' in settings_file_args:
+        settings['fastq_umi'] = settings_file_args['fastq_umi']
+        settings_file_args.pop('fastq_umi')
+    if settings['fastq_umi'] and not os.path.isfile(settings['fastq_umi']):
+        raise Exception('Error: fastq_umi file %s does not exist',settings['fastq_umi'])
+
+    settings['genome'] = cmd_args.genome
+    if 'genome' in settings_file_args:
+        settings['genome'] = settings_file_args['genome']
+        settings_file_args.pop('genome')
+
+    if not settings['genome']:
+        parser.print_usage()
+        raise Exception('Error: the genome reference file must be provided (--genome)')
     if not os.path.isfile(settings['genome']):
-        raise Exception('Error: The genome file %s does not exist'%settings['genome'])
+        if os.path.isfile(settings['genome']+".fa"):
+            settings['genome'] = settings['genome']+".fa"
+        else:
+            parser.print_usage()
+            raise Exception('Error: The genome file %s does not exist'%settings['genome'])
     genome_len_file=settings['genome']+'.fai'
     if not os.path.isfile(genome_len_file):
         raise Exception('Error: The genome length file %s does not exist'%genome_len_file)
 
-    if 'bowtie2_genome' not in settings:
+    settings['bowtie2_genome'] = cmd_args.bowtie2_genome
+    if 'bowtie2_genome' in settings_file_args:
+        settings['bowtie2_genome'] = settings_file_args['bowtie2_genome']
+        settings_file_args.pop('bowtie2_genome')
+
+    if settings['bowtie2_genome'] is None:
         potential_bowtie2_path = re.sub('.fa$','',settings['genome'])
         if os.path.isfile(potential_bowtie2_path+'.1.bt2'):
             settings['bowtie2_genome']= potential_bowtie2_path
         else:
-            raise Exception('Error: bowtie2_genome is required in settings file, pointing to a bowtie2 genome (minus trailing .X.bt2)\nAlternately, set genome to the .fa file in a bowtie2 directory.')
+            raise Exception('Error: bowtie2_genome is required in settings file, pointing to a bowtie2 genome (minus trailing .X.bt2)\nAlternatively, set genome to the .fa file in a bowtie2 directory.')
 
-    if 'fastq' in settings:
-        settings['fastq_r1'] = settings['fastq']
+    unused_keys = settings_file_args.keys()
+    if len(unused_keys) > 0:
+        unused_key_str = '"'+'", "'.join(unused_keys)+'"'
+        raise Exception('Unused keys in settings file: ' + unused_key_str)
 
-    if 'fastq_r1' not in settings:
-        raise Exception('Error: fastq_r1 file is required in settings file')
+    # read previous settings (we'll compare to these later to see if we can cache command outputs)
+    settings_used_output_file = settings['root']+".settingsUsed.txt"
+    previous_settings = {}
+    if os.path.exists(settings_used_output_file):
+        with open(settings_used_output_file,'r') as fin:
+            for line in fin.readlines():
+                settings_els = line.strip().split("\t")
+                previous_settings[settings_els[0]] = settings_els[1]
 
-    if not os.path.isfile(settings['fastq_r1']):
-        raise Exception('Error: fastq_r1 file %s does not exist',settings['fastq_r1'])
 
-    if 'fastq_r2' in settings and settings['fastq_r2'].rstrip() != "":
-        if not os.path.isfile(settings['fastq_r2']):
-            raise Exception('Error: fastq_r2 file %s does not exist',settings['fastq_r2'])
-    else:
-        settings['fastq_r2'] = None
-
-    if 'fastq_umi' in settings and settings['fastq_umi'].rstrip() != "":
-        if not os.path.isfile(settings['fastq_umi']):
-            raise Exception('Error: fastq_umi file %s does not exist',settings['fastq_umi'])
-    else:
-        settings['fastq_umi'] = None
-
-    with open (settings['root']+".settingsUsed.txt",'w') as fout:
+    can_use_previous_analysis = False
+    if len(previous_settings) > 0:
+        can_use_previous_analysis = True
         for setting in settings:
-            fout.write("%s: %s\n"%(str(setting),str(settings[setting])))
+            if setting in ['debug','n_processes']:
+                next
+            if setting not in previous_settings:
+                can_use_previous_analysis = False
+                logging.info(('Not using previous analyses - got new setting %s (%s)')%(setting,settings[setting]))
+                break
+            elif str(settings[setting]) != str(previous_settings[setting]):
+                can_use_previous_analysis = False
+                logging.info(('Not using previous analyses - setting for %s has changed (%s (new) vs %s (old))')%(setting,settings[setting],previous_settings[setting]))
+                break
+
+    if can_use_previous_analysis:
+        logging.info('Repeated settings detected. Using previous analyses if completed.')
+
+    with open (settings_used_output_file,'w') as fout:
+        for setting in settings:
+            fout.write("%s\t%s\n"%(str(setting),str(settings[setting])))
+
+    settings['can_use_previous_analysis'] = can_use_previous_analysis
+
     return settings
 
 
@@ -566,8 +879,8 @@ def assert_dependencies(samtools_command='samtools',bowtie2_command='bowtie2',cr
     #check crispresso
     try:
         crispresso_result = subprocess.check_output('%s --version'%crispresso_command, stderr=subprocess.STDOUT,shell=True)
-    except Exception:
-        raise Exception('Error: CRISPResso2 is required')
+    except Exception as e:
+        raise Exception('Error: CRISPResso2 is required ' + str(e))
 
     #check casoffinder
     try:
@@ -602,7 +915,7 @@ def get_av_read_len(fastq,number_reads_to_check=50):
 
     cmd=('z' if fastq.endswith('.gz') else '' ) +('cat < \"%s\"' % fastq)+\
                r''' | awk 'BN {n=0;s=0;} NR%4 == 2 {s+=length($0);n++;} END { printf("%d\n",s/n)}' '''
-    av_read_len = float(subprocess.check_output(cmd,shell=True).decode('utf-8').strip())
+    av_read_len = float(subprocess.check_output(cmd,shell=True).decode(sys.stdout.encoding).strip())
 
     return(int(av_read_len))
 
@@ -622,7 +935,7 @@ def get_num_reads_fastq(fastq):
     else:
         cmd = 'wc -l %s'%fastq
 
-    res = int(subprocess.check_output(cmd,shell=True).decode('utf-8').split(" ")[0])
+    res = int(subprocess.check_output(cmd,shell=True).decode(sys.stdout.encoding).split(" ")[0])
 
     return(res/4)
 
@@ -744,7 +1057,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
         target_count = -1
         with open (info_file,'r') as fin:
             head_line = fin.readline()
-            line_els = fin.readline().strip().split("\t")
+            line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) == 3:
                 (custom_index_fasta,target_count_str,target_list_file) = line_els
                 target_count = int(target_count_str)
@@ -752,11 +1065,11 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                 if target_count > 0 and os.path.isfile(target_list_file):
                     target_cut_str_index = 0
                     with open(target_list_file,'r') as fin:
-                        head_line = fin.readline().strip()
+                        head_line = fin.readline().rstrip('\n')
                         head_line_els = head_line.split("\t")
                         for line in fin:
                             read_target_count += 1
-                            (target_name,target_cut_str,target_class,cut1_chr,cut1_site_str,cut1_anno,cut2_chr,cut2_site_str,cut2_anno,query_pos,target_cut_idx,sequence) = line.strip().split("\t")
+                            (target_name,target_cut_str,target_class,cut1_chr,cut1_site_str,cut1_anno,cut2_chr,cut2_site_str,cut2_anno,query_pos,target_cut_idx,sequence) = line.rstrip('\n').split("\t")
 
                             cut1_site = int(cut1_site_str)
                             cut2_site = int(cut2_site_str)
@@ -835,13 +1148,13 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
             left_bit_B_key = '%s %s %d %d'%(genome,chr_B,cut_start_B,cut_start_B_stop)
             if left_bit_B_key not in fasta_cache:
                 fasta_cache[left_bit_B_key] = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,cut_start_B,cut_start_B_stop),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,cut_start_B,cut_start_B_stop),shell=True).decode(sys.stdout.encoding).strip()
             left_bit_B = fasta_cache[left_bit_B_key]
 
             right_bit_B_key = '%s %s %d %d'%(genome,chr_B,site_B,cut_end_B)
             if right_bit_B_key not in fasta_cache:
                 fasta_cache[right_bit_B_key] = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,site_B,cut_end_B),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,site_B,cut_end_B),shell=True).decode(sys.stdout.encoding).strip()
             right_bit_B = fasta_cache[right_bit_B_key]
 
             LARB = left_bit_A + right_bit_B
@@ -930,13 +1243,13 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
 
             if left_bit_A_key not in fasta_cache:
                 fasta_cache[left_bit_A_key] = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,cut_start_A,cut_start_A_stop),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,cut_start_A,cut_start_A_stop),shell=True).decode(sys.stdout.encoding).strip()
             left_bit_A = fasta_cache[left_bit_A_key]
 
             right_bit_A_key = '%s %s %d %d'%(genome,chr_A,site_A,cut_end_A)
             if right_bit_A_key not in fasta_cache:
                 fasta_cache[right_bit_A_key] = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,site_A,cut_end_A),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,site_A,cut_end_A),shell=True).decode(sys.stdout.encoding).strip()
             right_bit_A = fasta_cache[right_bit_A_key]
 
             #only add both sides if primer_chr is not given -- otherwise, every read has to originate on one end from the primer site.
@@ -1044,13 +1357,13 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                 left_bit_B_key = '%s %s %d %d'%(genome,chr_B,cut_start_B,cut_start_B_stop)
                 if left_bit_B_key not in fasta_cache:
                     fasta_cache[left_bit_B_key] = subprocess.check_output(
-                        '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,cut_start_B,cut_start_B_stop),shell=True).decode('utf-8').strip()
+                        '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,cut_start_B,cut_start_B_stop),shell=True).decode(sys.stdout.encoding).strip()
                 left_bit_B = fasta_cache[left_bit_B_key]
 
                 right_bit_B_key = '%s %s %d %d'%(genome,chr_B,site_B,cut_end_B)
                 if right_bit_B_key not in fasta_cache:
                     fasta_cache[right_bit_B_key] = subprocess.check_output(
-                        '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,site_B,cut_end_B),shell=True).decode('utf-8').strip()
+                        '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,site_B,cut_end_B),shell=True).decode(sys.stdout.encoding).strip()
                 right_bit_B = fasta_cache[right_bit_B_key]
 
 
@@ -1227,7 +1540,9 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
             fout.write('>'+target_names[i]+'\n'+target_info[target_names[i]]['sequence']+'\n')
 
     logging.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
-    index_result = subprocess.check_output(bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta, shell=True,stderr=subprocess.STDOUT)
+    this_command = bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta
+    logging.debug('Bowtie build command: ' + this_command)
+    index_result = subprocess.check_output(this_command, shell=True,stderr=subprocess.STDOUT)
 
     target_list_file = root+".txt"
     with open (target_list_file,'w') as fout:
@@ -1243,7 +1558,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
     return(custom_index_fasta,target_names,target_info)
 
 
-def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False):
+def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False,can_use_previous_analysis=False):
     """
     Deduplicates fastq files based on UMI (UMI is assumed to be the last part of the read ID after the ':'
 
@@ -1254,6 +1569,7 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
         umi_regex: string specifying regex that UMI must match
         min_umi_seen_to_keep_read: min number of times a umi must be seen to keep the umi and read (e.g. if set to 2, a read-UMI pair that is only seen once will be discarded)
         write_UMI_counts: if True, writes a file with the UMI counts
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
     returns:
         fastq_r1_dedup: fastq_r1 file of deduplicated reads
         fastq_r2_dedup: fastq_r2 file of deduplicated reads
@@ -1271,10 +1587,10 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
     post_dedup_count = -1
     post_dedup_read_count = -1
     #if already finished, attempt to read in stats
-    if os.path.isfile(dedup_stats_file):
+    if os.path.isfile(dedup_stats_file) and can_use_previous_analysis:
         with open(dedup_stats_file,'r') as fin:
             head_line = fin.readline()
-            line_els = fin.readline().strip().split("\t")
+            line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) > 3:
                 (fastq_r1_dedup_str,fastq_r2_dedup_str,tot_read_count_str,count_with_regex_str,post_dedup_count_str,post_dedup_read_count_str) = line_els
                 fastq_r1_dedup = None if fastq_r1_dedup_str == "None" else fastq_r1_dedup_str
@@ -1283,8 +1599,8 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
                 count_with_regex = int(count_with_regex_str)
                 post_dedup_count = int(post_dedup_count_str)
                 post_dedup_read_count = int(post_dedup_read_count_str)
-                logging.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
     if tot_read_count != -1:
+        logging.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
         return(fastq_r1_dedup,fastq_r2_dedup, tot_read_count, count_with_regex, post_dedup_count, post_dedup_read_count)
 
     #otherwise perform deduplication (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
@@ -1319,14 +1635,14 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
     umi_seq_best_qual_sum = {} #best qual sum for the best fastq
 
     if fastq_r1.endswith('.gz'):
-        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
+        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rt'))
     else:
-        f1_in = open(fastq_r1,'r')
+        f1_in = open(fastq_r1,'rt')
 
     if fastq_r2.endswith('.gz'):
-        f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
+        f2_in = io.BufferedReader(gzip.open(fastq_r2,'rt'))
     else:
-        f2_in = open(fastq_r2,'r')
+        f2_in = open(fastq_r2,'rt')
 
     #now iterate through f1/f2/umi files
     while (1):
@@ -1399,9 +1715,9 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
         raise Exception("Error: only the empty barcode '' was found.")
 
     fastq_r1_dedup = root + '.r1.gz'
-    f1_out = gzip.open(fastq_r1_dedup, 'wb')
+    f1_out = gzip.open(fastq_r1_dedup, 'wt')
     fastq_r2_dedup = root + '.r2.gz'
-    f2_out = gzip.open(fastq_r2_dedup, 'wb')
+    f2_out = gzip.open(fastq_r2_dedup, 'wt')
 
     collision_count = 0
     collision_count_reads = 0
@@ -1439,7 +1755,7 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
 
     return(fastq_r1_dedup,fastq_r2_dedup, tot_read_count, count_with_regex, post_dedup_count, post_dedup_read_count)
 
-def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
+def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_analysis=False):
     """
     Adds the UMI to the read ID from a UMI file (a third file with the UMI sequences per read)
 
@@ -1448,6 +1764,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
         fastq_r1: R1 reads to dedup
         fastq_r2: R2 reads to dedup
         fastq_umi: UMI fastq to dedup on
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
     returns:
         fastq_r1_umi: fastq_r1 with umi added
         fastq_r2_umi: fastq_r2 with umi added
@@ -1460,10 +1777,10 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
     fastq_r2_dedup = "NA"
     tot_read_count = -1
     #if already finished, attempt to read in stats
-    if os.path.isfile(umi_stats_file):
+    if os.path.isfile(umi_stats_file) and can_use_previous_analysis:
         with open(umi_stats_file,'r') as fin:
             head_line = fin.readline()
-            line_els = fin.readline().strip().split("\t")
+            line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) > 3:
                 logging.info('Using previously-generated fastqs with UMIs')
                 (fastq_r1_dedup,fastq_r2_dedup,tot_read_count_str) = line_els
@@ -1545,7 +1862,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi):
 def hamming_distance(str1, str2):
     return sum(c1 != c2 for c1, c2 in zip(str1, str2))
 
-def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_pct=0,primer_post_seq=None,primer_post_min_bp_match_pct=0):
+def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_pct=0,primer_post_seq=None,primer_post_min_bp_match_pct=0,can_use_previous_analysis=False):
     """
     Filters input reads based on whether they contain the primer (and post-primer sequence) with sufficient matching.
     The primer sequence are the bases that should match the primer. The post-primer sequence is the target sequence immediately following the primer and makes sure that the correct genomic region was amplified.
@@ -1558,6 +1875,7 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
         primer_min_bp_match_pct: min percent of bases that must match primer_seq. If lower than this percent of bases match, the read will be filtered from output files.
         primer_post_seq: sequence immedately following primer sequence to check at beginning of R1
         primer_post_min_bp_match_pct: min percent of bases that must match primer_post_seq. If lower than this percent is matched, the read will be filtered from output files.
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
         fastq_r1_filtered: fastq_r1 file of filtered reads
@@ -1577,10 +1895,10 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     count_with_primer_post_match = -1
     count_post_filtering = -1
     #if already finished, attempt to read in stats
-    if os.path.isfile(filter_stats_file):
+    if os.path.isfile(filter_stats_file) and can_use_previous_analysis:
         with open(filter_stats_file,'r') as fin:
             head_line = fin.readline()
-            line_els = fin.readline().strip().split("\t")
+            line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) > 3:
                 (fastq_r1_filtered_str,fastq_r2_filtered_str,tot_read_count_str,count_with_primer_match_str,count_with_primer_post_match_str,count_post_filtering_str) = line_els
                 fastq_r1_filtered = None if fastq_r1_filtered_str == "None" else fastq_r1_filtered_str
@@ -1590,7 +1908,7 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
                 count_with_primer_post_match = int(count_with_primer_post_match_str)
                 count_post_filtering = int(count_post_filtering_str)
 
-            filter_on_primer_plot_obj_str = fin.readline().strip()
+            filter_on_primer_plot_obj_str = fin.readline().rstrip('\n')
             filter_on_primer_plot_obj = None
             if filter_on_primer_plot_obj_str != "" and filter_on_primer_plot_obj_str != "None":
                 filter_on_primer_plot_obj = PlotObject.from_json(filter_on_primer_plot_obj_str)
@@ -1612,22 +1930,24 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     primer_len = len(primer_seq)
     max_primer_mismatch_count = primer_len - (primer_min_bp_match_pct/float(100) * primer_len)
 
-    primer_post_len = len(primer_post_seq)
-    max_primer_post_mismatch_count = primer_post_len - (primer_post_min_bp_match_pct/float(100) * primer_post_len)
+    primer_post_len = 0
+    max_primer_post_mismatch_count = 0
+    if primer_post_seq is not None:
+        primer_post_len = len(primer_post_seq)
+        max_primer_post_mismatch_count = primer_post_len - (primer_post_min_bp_match_pct/float(100) * primer_post_len)
 
     min_primer_read_len = primer_len + primer_post_len
 
     if fastq_r1.endswith('.gz'):
-        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
+        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rt'))
     else:
-        f1_in = open(fastq_r1,'r')
+        f1_in = open(fastq_r1,'rt')
 
     fastq_r1_filtered = root + '.r1.gz'
-    f1_out = gzip.open(fastq_r1_filtered, 'wb')
+    f1_out = gzip.open(fastq_r1_filtered, 'wt')
 
     #r1 only (single end)
     if fastq_r2 is None:
-        print('r2 only!')
         while (1):
             f1_id_line   = f1_in.readline()
             f1_seq_line  = f1_in.readline().strip()
@@ -1635,7 +1955,7 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
             f1_qual_line = f1_in.readline()
 
             if not f1_qual_line : break
-            if not f1_plus_line.startswith("+"):
+            if not f1_plus_line.startswith('+'):
                 raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
             tot_read_count += 1
 
@@ -1647,11 +1967,12 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
             else:
                 count_with_primer_match += 1
 
-            this_mismatches = hamming_distance(primer_post_seq,f1_seq_line[primer_len:primer_post_len])
-            if this_mismatches > max_primer_post_mismatch_count:
-                read_is_good = False
-            else:
-                count_with_primer_post_match += 1
+            if primer_post_len > 0:
+                this_mismatches = hamming_distance(primer_post_seq,f1_seq_line[primer_len:primer_post_len])
+                if this_mismatches > max_primer_post_mismatch_count:
+                    read_is_good = False
+                else:
+                    count_with_primer_post_match += 1
 
             if read_is_good:
                 f1_out.write("%s%s\n%s%s"%(f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
@@ -1660,12 +1981,12 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     #paired end
     else:
         if fastq_r2.endswith('.gz'):
-            f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
+            f2_in = io.BufferedReader(gzip.open(fastq_r2,'rt'))
         else:
-            f2_in = open(fastq_r2,'r')
+            f2_in = open(fastq_r2,'rt')
 
         fastq_r2_filtered = root + '.r2.gz'
-        f2_out = gzip.open(fastq_r2_filtered, 'wb')
+        f2_out = gzip.open(fastq_r2_filtered, 'wt')
 
         while (1):
             f1_id_line   = f1_in.readline()
@@ -1674,7 +1995,7 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
             f1_qual_line = f1_in.readline()
 
             if not f1_qual_line : break
-            if not f1_plus_line.startswith("+"):
+            if not f1_plus_line.startswith('+'):
                 raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
 
             f2_id_line   = f2_in.readline()
@@ -1692,11 +2013,12 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
             else:
                 count_with_primer_match += 1
 
-            this_mismatches = hamming_distance(primer_post_seq,f1_seq_line[primer_len:primer_post_len])
-            if this_mismatches > max_primer_post_mismatch_count:
-                read_is_good = False
-            else:
-                count_with_primer_post_match += 1
+            if primer_post_len > 0:
+                this_mismatches = hamming_distance(primer_post_seq,f1_seq_line[primer_len:primer_post_len])
+                if this_mismatches > max_primer_post_mismatch_count:
+                    read_is_good = False
+                else:
+                    count_with_primer_post_match += 1
 
             if read_is_good:
                 f1_out.write("%s%s\n%s%s"%(f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
@@ -1721,7 +2043,13 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
         summary.write("\t".join([str(x) for x in values])+"\n")
     fig = plt.figure(figsize=(12,12))
     ax = plt.subplot(111)
-    ax.pie(values,labels=[filter_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(filter_labels))],autopct="%1.2f%%")
+    pie_values = []
+    pie_labels = []
+    for i in range(len(source_labels)):
+        if values[i] > 0:
+            pie_values.append(values[i])
+            pie_labels.append(source_labels[i]+"\n("+str(values[i])+")")
+    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
     ax.set_title('Read filtering based on primer presence')
     plt.savefig(filter_on_primer_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(filter_on_primer_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
@@ -1778,7 +2106,7 @@ def reverse_complement_cut_str(target_cut_str):
     return('%s%s%s~%s%s%s'%(new_left_strand,right_dir,right_pos,left_pos,left_dir,new_right_strand))
     
 
-def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=10,arm_min_matched_start_bases=5,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False):
+def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=10,arm_min_matched_start_bases=5,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
     """
     Aligns reads to the provided reference (either artificial targets or genome)
 
@@ -1796,6 +2124,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         bowtie2_threads: number of threads to run bowtie2 with
         samtools_command: location of samtools to run
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
         r1_assignments_file: file showing locations of assignments for r1
@@ -1813,11 +2142,11 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     mapped_bam_file = root + ".bam"
 
     info_file = root + '.info'
-    if os.path.isfile(info_file):
+    if os.path.isfile(info_file) and can_use_previous_analysis:
         read_count = -1
         with open (info_file,'r') as fin:
             head_line = fin.readline()
-            line_els = fin.readline().strip().split("\t")
+            line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) == 11:
                 (read_count_str,r1_count_str,r2_count_str,unmapped_r1_count_str,unmapped_r2_count_str,aligned_count_str,r1_assignments_file_str,r2_assignments_file_str,unmapped_fastq_r1_file_str,unmapped_fastq_r2_file_str,mapped_bam_file_str) = line_els
                 r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
@@ -1832,12 +2161,12 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 aligned_count  = int(aligned_count_str)
                 mapped_bam_file = None if mapped_bam_file == "None" else mapped_bam_file_str
 
-                chr_aln_plot_obj_str = fin.readline().strip()
+                chr_aln_plot_obj_str = fin.readline().rstrip('\n')
                 chr_aln_plot_obj = None
                 if chr_aln_plot_obj_str != "" and chr_aln_plot_obj_str != "None":
                     chr_aln_plot_obj = PlotObject.from_json(chr_aln_plot_obj_str)
 
-                tlen_plot_obj_str = fin.readline().strip()
+                tlen_plot_obj_str = fin.readline().rstrip('\n')
                 tlen_plot_obj = None
                 if tlen_plot_obj_str != "" and tlen_plot_obj_str != "None":
                     tlen_plot_obj = PlotObject.from_json(tlen_plot_obj_str)
@@ -1856,7 +2185,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     bowtie_log = root + '.bowtie2Log'
     if fastq_r2 is not None: #paired-end reads
         logging.info('Aligning paired reads to %s using %s'%(reference_name.lower(),bowtie2_command))
-        aln_command = '{bowtie2_command} --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -1 {fastq_r1} -2 {fastq_r2} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
+        aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -1 {fastq_r1} -2 {fastq_r2} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
                 bowtie2_threads=bowtie2_threads,
                 bowtie2_reference=bowtie2_reference,
@@ -1865,14 +2194,18 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 samtools_command=samtools_command,
                 mapped_bam_file=mapped_bam_file)
         logging.debug(aln_command)
-        aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
+        aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
+        if 'error' in aln_result.lower():
+            logging.error('Error found while running command:\n'+aln_command+"\nOutput: "+aln_result)
+            raise Exception('Alignment error: ' + aln_result)
+
         logging.debug(aln_result)
         with open (bowtie_log,'w') as lout:
             lout.write('\nAligning paired reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name.lower(),aln_command,aln_result))
     #unpaired reads
     else:
         logging.info('Aligning single-end reads to %s using %s'%(reference_name.lower(),bowtie2_command))
-        aln_command = '{bowtie2_command} --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -U {fastq_r1} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
+        aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -U {fastq_r1} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
                 bowtie2_threads=bowtie2_threads,
                 bowtie2_reference=bowtie2_reference,
@@ -1880,7 +2213,11 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 samtools_command=samtools_command,
                 mapped_bam_file=mapped_bam_file)
         logging.debug(aln_command)
-        aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT)
+        aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
+        if 'error' in aln_result.lower():
+            logging.error('Error found while running command:\n'+aln_command+"\nOutput: "+aln_result)
+            raise Exception('Alignment error: ' + aln_result)
+
         logging.debug(aln_result)
         with open (bowtie_log,'w') as lout:
             lout.write('\nAligning single-end reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name.lower(),aln_command,aln_result))
@@ -2004,40 +2341,54 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
             if is_rc:
                 curr_annotation = reverse_complement_cut_str(target_info[line_chr]['target_cut_str']) + ' ' + line_chr
 
-            #if custom ref is not linear, set cuts and genome aln locations
-            if curr_classification != 'Linear':
-                cut1 =  target_info[line_chr]['cut1_chr'] + ":" +  str(target_info[line_chr]['cut1_site'])
-                cut2 =  target_info[line_chr]['cut2_chr'] + ":" +  str(target_info[line_chr]['cut2_site'])
+            cut1 =  target_info[line_chr]['cut1_chr'] + ":" +  str(target_info[line_chr]['cut1_site'])
+            cut2 =  target_info[line_chr]['cut2_chr'] + ":" +  str(target_info[line_chr]['cut2_site'])
 
-                left_dir = target_info[line_chr]['target_cut_str'][1:2]
-                if left_dir == '-': #arm extends left in genome space after cut
-                    left_arm_end = target_info[line_chr]['cut1_site']
-                    left_arm_start = left_arm_end - left_ref_bases_count
-                else: #arm extends right in genome space after cut
-                    left_arm_start = target_info[line_chr]['cut1_site']
-                    left_arm_end = left_arm_start + left_ref_bases_count
+            left_dir = target_info[line_chr]['target_cut_str'][1:2]
+            if left_dir == '-': #arm extends left in genome space after cut
+                left_arm_end = target_info[line_chr]['cut1_site']
+                left_arm_start = left_arm_end - left_ref_bases_count
+            else: #arm extends right in genome space after cut
+                left_arm_start = target_info[line_chr]['cut1_site']
+                left_arm_end = left_arm_start + left_ref_bases_count
 
-                right_dir = target_info[line_chr]['target_cut_str'][-2:-1]
-                if right_dir == '+': #arm extends right in genome space after cut
-                    right_arm_start = target_info[line_chr]['cut2_site']
-                    right_arm_end = right_arm_start + right_ref_bases_count
+            right_dir = target_info[line_chr]['target_cut_str'][-2:-1]
+            if right_dir == '+': #arm extends right in genome space after cut
+                right_arm_start = target_info[line_chr]['cut2_site']
+                right_arm_end = right_arm_start + right_ref_bases_count
+            else:
+                right_arm_end = target_info[line_chr]['cut2_site']
+                right_arm_start = right_arm_end - right_ref_bases_count
+
+
+            if curr_classification == 'Linear':
+                #if read aligned to custom seqs in the forward direction
+                if not is_rc:
+                    curr_cut = cut1
+                    curr_position = '%s:%s-%s'%(
+                            target_info[line_chr]['cut1_chr'],left_arm_start,right_arm_end - 1
+                            )
                 else:
-                    right_arm_end = target_info[line_chr]['cut2_site']
-                    right_arm_start = right_arm_end - right_ref_bases_count 
+                    curr_cut = cut1
+                    curr_position = '%s:%s-%s'%(
+                            target_info[line_chr]['cut1_chr'],right_arm_end - 1,left_arm_start
+                            )
 
+            #if custom ref is not linear, set cuts and genome aln locations
+            else:
                 #if read aligned to custom seqs in the forward direction
                 if not is_rc:
                     curr_cut = cut1 + "~" + cut2
                     curr_position = '%s:%s-%s~%s:%s-%s'%(
-                            target_info[line_chr]['cut1_chr'],left_arm_start,left_arm_end -1,
+                            target_info[line_chr]['cut1_chr'],left_arm_start,left_arm_end,
                             target_info[line_chr]['cut2_chr'],right_arm_start,right_arm_end - 1
                             )
                 #if read aligned to custom seqs in the reverse direction
                 else:
                     curr_cut = cut2 + "~" + cut1
                     curr_position = '%s:%s-%s~%s:%s-%s'%(
-                            target_info[line_chr]['cut2_chr'],right_arm_end-1,right_arm_start,
-                            target_info[line_chr]['cut1_chr'],left_arm_end-1,left_arm_start
+                            target_info[line_chr]['cut2_chr'],right_arm_end - 1,right_arm_start,
+                            target_info[line_chr]['cut1_chr'],left_arm_end,left_arm_start
                             )
 
         if read_is_r1:
@@ -2080,7 +2431,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     ax = plt.subplot(111)
     if len(vals) > 0:
         ax.bar(range(len(keys)),vals,tick_label=keys)
-        ax.set_ylim(0,max(vals)+0.5)
+        ax.set_ymargin(0.05)
     else:
         ax.bar(0,0)
     ax.set_ylabel('Number of Reads')
@@ -2115,7 +2466,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         ax = plt.subplot(111)
         if len(vals) > 0:
             ax.bar(keys,vals)
-            ax.set_ylim(0,max(vals)+0.5)
+            ax.set_ymargin(0.05)
         else:
             ax.bar(0,0)
         ax.set_ylabel('Number of Reads')
@@ -2153,7 +2504,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         logging.info('Finished analysis of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
 
-def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,r1_r2_support_max_distance=100000,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True,discard_reads_without_r2_support=True):
+def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,r1_r2_support_max_distance=100000,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True,discard_reads_without_r2_support=True,can_use_previous_analysis=False):
     """
     Makes final read assignments after:
         Pairing R1 and R2 if they were processed in separate steps
@@ -2171,6 +2522,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         genome_map_resolution: window size (bp) for reporting number of reads aligned
         dedup_based_on_aln_pos: if true, reads with the same UMI and alignment positions will be removed from analysis
         discard_reads_without_r2_support: if true, reads without r2 support will be discarded from final analysis and counts
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
         final_assignment_filename: filename of final assignments for each read id pair
@@ -2188,12 +2540,12 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     final_file = root + '.final_assignments'
     info_file = root + '.info'
     #check to see if this anaylsis has been completed previously
-    if os.path.isfile(info_file) and os.path.isfile(final_file):
+    if os.path.isfile(info_file) and os.path.isfile(final_file) and can_use_previous_analysis:
         read_total_read_count = 0 #how many lines we read in this time by reading the final assignments file
         previous_total_read_count = -1 #how many lines were reported to be read the preivous time (if the analysis was completed previously)
         with open (info_file,'r') as fin:
             head_line = fin.readline()
-            line_els = fin.readline().strip().split("\t")
+            line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) == 5:
                 (previous_total_read_count_str,final_duplicate_count_str,final_nonsupporting_count_removed_str, final_processed_count_str, final_observed_cuts_count_str) = line_els
                 previous_total_read_count = int(previous_total_read_count_str)
@@ -2203,38 +2555,38 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 final_observed_cuts_count = int(final_observed_cuts_count_str)
 
             #load plots
-            deduplication_plot_obj_str = fin.readline().strip()
+            deduplication_plot_obj_str = fin.readline().rstrip('\n')
             deduplication_plot_obj = None
             if deduplication_plot_obj_str != "" and deduplication_plot_obj_str != "None":
                 deduplication_plot_obj = PlotObject.from_json(deduplication_plot_obj_str)
-            r1_source_plot_obj_str = fin.readline().strip()
+            r1_source_plot_obj_str = fin.readline().rstrip('\n')
             r1_source_plot_obj = None
             if r1_source_plot_obj_str != "" and r1_source_plot_obj_str != "None":
                 r1_source_plot_obj = PlotObject.from_json(r1_source_plot_obj_str)
-            r1_classification_plot_obj_str = fin.readline().strip()
+            r1_classification_plot_obj_str = fin.readline().rstrip('\n')
             r1_classification_plot_obj = None
             if r1_classification_plot_obj_str != "" and r1_classification_plot_obj_str != "None":
                 r1_classification_plot_obj = PlotObject.from_json(r1_classification_plot_obj_str)
 
-            r2_source_plot_obj_str = fin.readline().strip()
+            r2_source_plot_obj_str = fin.readline().rstrip('\n')
             r2_source_plot_obj = None
             if r2_source_plot_obj_str != "" and r2_source_plot_obj_str != "None":
                 r2_source_plot_obj = PlotObject.from_json(r2_source_plot_obj_str)
-            r2_classification_plot_obj_str = fin.readline().strip()
+            r2_classification_plot_obj_str = fin.readline().rstrip('\n')
             r2_classification_plot_obj = None
             if r2_classification_plot_obj_str != "" and r2_classification_plot_obj_str != "None":
                 r2_classification_plot_obj = PlotObject.from_json(r2_classification_plot_obj_str)
 
-            r1_r2_support_plot_obj_str = fin.readline().strip()
+            r1_r2_support_plot_obj_str = fin.readline().rstrip('\n')
             r1_r2_support_plot_obj = None
             if r1_r2_support_plot_obj_str != "" and r1_r2_support_plot_obj_str != "None":
                 r1_r2_support_plot_obj = PlotObject.from_json(r1_r2_support_plot_obj_str)
-            r1_r2_support_dist_plot_obj_str = fin.readline().strip()
+            r1_r2_support_dist_plot_obj_str = fin.readline().rstrip('\n')
             r1_r2_support_dist_plot_obj = None
             if r1_r2_support_dist_plot_obj_str != "" and r1_r2_support_dist_plot_obj_str != "None":
                 r1_r2_support_dist_plot_obj = PlotObject.from_json(r1_r2_support_dist_plot_obj_str)
 
-            r1_r2_no_support_dist_plot_obj_str = fin.readline().strip()
+            r1_r2_no_support_dist_plot_obj_str = fin.readline().rstrip('\n')
             r1_r2_no_support_dist_plot_obj = None
             if r1_r2_no_support_dist_plot_obj_str != "" and r1_r2_no_support_dist_plot_obj_str != "None":
                 r1_r2_no_support_dist_plot_obj = PlotObject.from_json(r1_r2_no_support_dist_plot_obj_str)
@@ -2247,7 +2599,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             r2_read_ids_for_crispresso = defaultdict(list)
             r2_cut_counts_for_crispresso = defaultdict(int)
             with open (final_file,'r') as fin:
-                head_line = fin.readline().strip()
+                head_line = fin.readline().rstrip('\n')
                 head_line_els = head_line.split("\t")
                 read_total_read_count = 0
                 r1_final_cut_ind = 18 #for paired-end
@@ -2337,7 +2689,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         #single end pre-processing of cut sites
         with open(sorted_r1_file,'r') as sf1, open(final_file_tmp,'w') as ff:
             for r1_line in sf1:
-                r1_line = r1_line.strip()
+                r1_line = r1_line.rstrip('\n')
                 total_reads_processed += 1
 
                 r1_line_els = r1_line.split("\t")
@@ -2368,8 +2720,8 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         #paired end pre-processing of cut sites
         with open(sorted_r1_file,'r') as sf1, open(sorted_r2_file,'r') as sf2, open(final_file_tmp,'w') as ff:
             for r1_line in sf1:
-                r1_line = r1_line.strip()
-                r2_line = sf2.readline().strip()
+                r1_line = r1_line.rstrip('\n')
+                r2_line = sf2.readline().rstrip('\n')
                 total_reads_processed += 1
 
                 r1_line_els = r1_line.split("\t")
@@ -2449,7 +2801,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 else:
                     r1_r2_support_status = r1_r2_support_str_not_supported_diff_chrs
 
-                r1_r2_orientation_str = r1_last_orientation_for_support+'/'+r2_first_orientation_for_support
+                r1_r2_orientation_str = "%s/%s"%(r1_last_orientation_for_support,r2_first_orientation_for_support)
 
 
                 this_key = r1_umi + " " + r1_line_els[alignment_ind] + " " + r2_line_els[alignment_ind]
@@ -2508,6 +2860,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     r2_translocation_cut_counts['*'] = defaultdict(int)
 
     r1_fragment_translocation_cut_counts = {} #dict of counts for translocations as in r1_translocation_cut_counts except the keys have a the watson/crick and direction annotation (e.g. w-chr2:60455)
+    r1_fragment_translocation_classifications = {} #classification for each cut
     r1_fragment_translocation_cut_counts['u+*'] = defaultdict(int)
     r2_fragment_translocation_cut_counts = {}
     r2_fragment_translocation_cut_counts['u+*'] = defaultdict(int)
@@ -2673,7 +3026,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             final_head_els = ['r1_id','r1_source','r1_classification','r1_annotation','r1_alignment','r1_cut_point','r2_id','r2_source','r2_classification','r2_annotation','r2_alignment','r2_cut_point','read_duplicate_status','read_duplicate_of','r1_r2_support_status','r1_r2_support_distance','r1_r2_support_orientations','r1_final_cut_points','r1_final_cut_keys','r2_final_cut_points','r2_final_cut_keys']
             fout.write("\t".join(final_head_els)+"\n")
         for line in fin:
-            line = line.strip()
+            line = line.rstrip('\n')
             final_total_count += 1
             line_els = line.split("\t")
             if dedup_based_on_aln_pos and line_els[duplicate_ind] == "duplicate":
@@ -2690,11 +3043,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     r1_r2_support_distances[int(r1_r2_support_dist)] += 1
                 elif r1_r2_support_status == r1_r2_support_str_not_supported_distance:
                     r1_r2_not_support_distances[int(r1_r2_support_dist)] += 1
-                print('here testing ' + r1_r2_support_status)
                 if discard_reads_without_r2_support and r1_r2_support_status != r1_r2_support_str_supported:
                     final_nonsupporting_count_removed += 1
                     fout.write("%s\t%s\n"%(line,duplicate_na_str))
-                    print('removing ' + line)
                     continue
 
             final_processed_count += 1
@@ -2714,11 +3065,12 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
             if r1_classification == 'Linear':
                 (r1_chr,r1_range) = r1_alignment.split(":")
-                (r1_start,r1_stop) = r1_range.split("-")
+                (r1_start,r1_stop) = map(int,r1_range.split("-"))
                 #check to see if this read overlaps with any known cutpoints
                 if r1_chr in final_cut_points_by_chr:
                     for cut_point in final_cut_points_by_chr[r1_chr]:
-                        if cut_point > int(r1_start) and cut_point < int(r1_stop):
+                        #if cut point within forward-facing linear read
+                        if cut_point > r1_start and cut_point < r1_stop:
                             key = r1_chr+":"+str(cut_point)
                             r1_associated_cut_points.append(key)
                             r1_uncut_counts[key] += 1
@@ -2732,6 +3084,29 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                             key1 = 'w-' + key
                             key2 = key + '+w'
                             r1_fragment_translocation_cut_counts[key1][key2] += 1
+                            r1_fragment_translocation_classifications[key1 + " " + key2] = r1_classification
+
+                            #could have multiple cut point overlaps here
+                            r1_cut_key = r1_classification + " " + key
+                            r1_read_ids_for_crispresso[line_els[r1_id_ind]].append(r1_cut_key)
+                            r1_cut_counts_for_crispresso[r1_cut_key] += 1
+                            r1_cut_keys.append(r1_cut_key)
+                        #if cut point within reverse-facing linear read
+                        elif cut_point > r1_stop and cut_point < r1_start:
+                            key = r1_chr+":"+str(cut_point)
+                            r1_associated_cut_points.append(key)
+                            r1_uncut_counts[key] += 1
+                            if r1_source == 'Genome':
+                                r1_uncut_genome_counts[key] += 1
+                            elif r1_source == 'Fragmented':
+                                r1_uncut_frag_counts[key] += 1
+                            elif r1_source == 'Custom targets':
+                                r1_uncut_custom_aln_counts[key] += 1
+                            r1_translocation_cut_counts[key][key] += 1
+                            key1 = 'w+' + key
+                            key2 = key + '-w' 
+                            r1_fragment_translocation_cut_counts[key1][key2] += 1
+                            r1_fragment_translocation_classifications[key1 + " " + key2] = r1_classification
 
                             #could have multiple cut point overlaps here
                             r1_cut_key = r1_classification + " " + key
@@ -2786,6 +3161,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
 
                 r1_fragment_translocation_cut_counts[frag_key_1][frag_key_2] += 1
+                r1_fragment_translocation_classifications[frag_key_1 + " " + frag_key_2] = r1_classification
 
             #make window alignment assignments
             for r1_aln_pos in r1_alignment.split("~"):
@@ -2930,7 +3306,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
             fout.write("%s\t%s%s\n"%(line,r1_print_str,r2_print_str))
 
-    logging.info('Processed % reads. Of these,\n\t%d duplicate reads were removed\n\t%d reads were discarded because they were not supported by R2\n%d reads were used for final calculations'%(final_total_count,final_duplicate_count, final_nonsupporting_count_removed, final_processed_count))
+    logging.info('Processed %d reads. Of these,\n    %d duplicate reads were removed\n    %d reads were discarded because they were not supported by R2\n  %d reads were used for final calculations'%(final_total_count,final_duplicate_count, final_nonsupporting_count_removed, final_processed_count))
 
 
     final_observed_cuts_count = 0
@@ -3009,7 +3385,9 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     cut_2_annotation = 'Novel'
                     if tx_key_2 in cut_annotations:
                         cut_2_annotation = cut_annotations[tx_key_2]
-                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,translocation_cut_counts[tx_key_1][tx_key_2]))
+                    #only write if counts are > 0
+                    if translocation_cut_counts[tx_key_1][tx_key_2] > 0:
+                        fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,translocation_cut_counts[tx_key_1][tx_key_2]))
         logging.info('Wrote ' + read_num + ' translocation list ' + tx_list_report)
 
         tx_report = root + "." + read_num + "_translocation_table.txt"
@@ -3043,7 +3421,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         tx2_keys = defaultdict(int)
         tx_list_report = root + '.' + read_num + "_fragment_translocation_list.txt"
         with open (tx_list_report,'w') as fout:
-            fout.write('fragment_1\tfragment_1_anno\tfragment_2\tfragment_2_anno\tcount\n')
+            fout.write('fragment_1\tfragment_1_anno\tfragment_2\tfragment_2_anno\tcount\tannotation\n')
             for tx_key_1 in tx1_keys:
                 cut_1 = tx_key_1[2:]
                 cut_1_annotation = 'Novel'
@@ -3054,7 +3432,13 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     cut_2_annotation = 'Novel'
                     if cut_2 in cut_annotations:
                         cut_2_annotation = cut_annotations[cut_2]
-                    fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,fragment_translocation_cut_counts[tx_key_1][tx_key_2]))
+                    tx_classification = 'Unknown'
+                    tx_class_key = tx_key_1 + " " + tx_key_2
+                    if tx_class_key in r1_fragment_translocation_classifications:
+                        tx_classification = r1_fragment_translocation_classifications[tx_class_key]
+                    # only write if counts exist
+                    if fragment_translocation_cut_counts[tx_key_1][tx_key_2] > 0:
+                        fout.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,fragment_translocation_cut_counts[tx_key_1][tx_key_2],tx_classification))
                     tx2_keys[tx_key_2] += 1
         logging.info('Wrote ' + read_num + ' fragment translocation list ' + tx_list_report)
 
@@ -3095,22 +3479,34 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         write_translocation_reports('r2',r2_translocation_cut_counts,r2_fragment_translocation_cut_counts)
 
     #deduplication plot
-    labels = ['Not duplicate','Duplicate']
-    values = [total_reads_processed-dups_seen,dups_seen]
-    deduplication_plot_obj_root = root + ".deduplication"
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    ax.pie(values,labels=[labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(labels))],autopct="%1.2f%%")
-    ax.set_title('Duplicate read counts')
-    plt.savefig(deduplication_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(deduplication_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+    deduplication_plot_obj = None
+    if total_reads_processed > 0:
+        labels = ['Not duplicate','Duplicate']
+        values = [total_reads_processed-dups_seen,dups_seen]
+        deduplication_plot_obj_root = root + ".deduplication"
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        pie_values = []
+        pie_labels = []
+        for i in range(len(labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+        ax.set_title('Duplicate read counts')
+        plt.savefig(deduplication_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(deduplication_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-    deduplication_plot_obj = PlotObject(
-            plot_name = deduplication_plot_obj_root,
-            plot_title = 'Duplicate read counts',
-            plot_label = 'Number of reads that were counted as deduplication based on alignment and UMI',
-            plot_datas = [('Read assignments',final_file)]
-            )
+        dedup_note = ""
+        if not dedup_based_on_aln_pos:
+            dedup_note = ". Note that deduplication of read for final counts is off by default but can be turned on by running with the parameter --dedup_input_based_on_aln_pos_and_UMI."
+
+        deduplication_plot_obj = PlotObject(
+                plot_name = deduplication_plot_obj_root,
+                plot_title = 'Duplicate read counts',
+                plot_label = 'Number of reads that were counted as deduplication based on alignment and UMI' + dedup_note,
+                plot_datas = [('Read assignments',final_file)]
+                )
 
     def write_aln_reports_and_make_plots(read_num,aln_pos_counts_by_chr,aln_pos_genome_counts_by_chr,aln_pos_custom_aln_counts_by_chr,aln_pos_frag_counts_by_chr,final_file,final_source_counts,final_classification_counts,final_source_classification_counts):
         """
@@ -3145,7 +3541,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         aln_pos_custom_aln_counts_by_chr[chrom][pos],
                         aln_pos_frag_counts_by_chr[chrom][pos]))
 
-        source_labels = ['Genome','Custom targets','Fragmented']
+        source_labels = ['Genome','Custom targets','Fragmented','Unmapped']
         classification_labels = ['Primed','Linear','Chimera','Large deletion','Large inversion','Translocation','Unidentified']
 
         #check to make sure labels match
@@ -3168,7 +3564,13 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             summary.write("\t".join([str(x) for x in values])+"\n")
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
-        ax.pie(values,labels=[source_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(source_labels))],autopct="%1.2f%%")
+        pie_values = []
+        pie_labels = []
+        for i in range(len(source_labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(source_labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
         ax.set_title('Read alignment')
         plt.savefig(source_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(source_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
@@ -3179,7 +3581,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 plot_title = read_num_capitalized + ' Read Alignments',
                 plot_label = 'Method used to determine the status of each ' + read_num_capitalized + ' read<br>'+plot_count_str,
                 plot_datas = [
-                    (read_num_capitalized + ' alignment sources',source_plot_obj_root + ".txt"),('Read assignments',final_file),
+                    (read_num_capitalized + ' alignment sources',source_plot_obj_root + ".txt"),
                     (read_num_capitalized + ' alignment sources by classification',source_classification_file),
                     ('Read assignments',final_file)
                     ]
@@ -3193,7 +3595,13 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             summary.write("\t".join([str(x) for x in values])+"\n")
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
-        ax.pie(values,labels=[classification_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(classification_labels))],autopct="%1.2f%%")
+        pie_values = []
+        pie_labels = []
+        for i in range(len(classification_labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(classification_labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
         ax.set_title('Read alignment')
         plt.savefig(classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(classification_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
@@ -3236,7 +3644,13 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             summary.write("\t".join([str(x) for x in values])+"\n")
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
-        ax.pie(values,labels=[r1_r2_support_labels[idx]+"\n("+str(values[idx])+")" for idx in range(len(r1_r2_support_labels))],autopct="%1.2f%%")
+        pie_values = []
+        pie_labels = []
+        for i in range(len(r1_r2_support_labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(r1_r2_support_labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
         ax.set_title('R1/R2 support status')
         plt.savefig(r1_r2_support_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(r1_r2_support_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
@@ -3264,7 +3678,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         ax = plt.subplot(111)
         if len(vals) > 0:
             ax.bar(range(len(keys)),vals,tick_label=keys)
-            ax.set_ylim(0,max(vals)+0.5)
+            ax.set_ymargin(0.05)
         else:
             ax.bar(0,0)
         ax.set_ylabel('Number of Reads')
@@ -3296,7 +3710,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         ax = plt.subplot(111)
         if len(vals) > 0:
             ax.bar(range(len(keys)),vals,tick_label=keys)
-            ax.set_ylim(0,max(vals)+0.5)
+            ax.set_ymargin(0.05)
         else:
             ax.bar(0,0)
         ax.set_ylabel('Number of Reads')
@@ -3377,7 +3791,7 @@ def read_command_output(command):
             bufsize=-1) #bufsize system default
     return iter(p.stdout.readline, b'')
 
-def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_genome,fragment_size,fragment_step_size,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools'):
+def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_genome,fragment_size,fragment_step_size,min_seen_frag_cutoff=2,fragment_min_mapq=30,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',can_use_previous_analysis=False):
     """
     Creates chopped reads
     Keeps track of locations where reads map
@@ -3390,15 +3804,18 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         bowtie2_genome: location of bowtie2 indexed reference genome
         fragment_size: size of resulting chopped fragments.
         fragment_step_size: stride between chopped fragments. 5 results in a new fragment every 5bp
+        min_seen_frag_cutoff: minimum number of fragments aligned to a location for the location to be considered as a possible alignment location for a read (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_frag_cutoff of 2 would not allow position B
+        fragment_min_mapq: min mapq (mapping quality) for a fragment to be considered
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
         samtools_command: location of samtools to run
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
 
     returns:
         r1_assignments_file: file of location assignments for each r1 read
         r2_assignments_file: file of location assignments for each r2 read (None if single-end)
-        linear_count: number of reads that were identified as linear (for some reason they didn't map using global mapping, but they map to a linear piece of DNA)
+        linear_count: number of reads that were identified as linear (for some reason they didn't map using global mapping, but they map to a linear piece of DNA - eg there are bits on the end of the read that don't map)
         translocation_count: number of reads that were identified as translocations
         large_deletion_count: number of reads that were identified as large deletion (same chr, different orientation(e.g. one extending left, one extending right))
         large_inversion_count: number of reads that were identified as large inversions (same chr, same orientation (e.g. both reading left))
@@ -3406,11 +3823,11 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         frags_plot_obj: plot object summarizing fragments
     """
     info_file = root + '.info'
-    if os.path.isfile(info_file):
+    if os.path.isfile(info_file) and can_use_previous_analysis:
         frags_mapped_count = -1
         with open (info_file,'r') as fin:
             head_line = fin.readline()
-            line_els = fin.readline().strip().split("\t")
+            line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) == 8:
                 (r1_assignments_file_str,r2_assignments_file_str,linear_count_str,translocation_count_str,large_deletion_count_str,large_inversion_count_str,unidentified_count_str,frags_mapped_count_str) = line_els
                 r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
@@ -3422,7 +3839,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                 unidentified_count  = int(unidentified_count_str)
                 frags_mapped_count  = int(frags_mapped_count_str)
 
-                frags_plot_obj_str = fin.readline().strip()
+                frags_plot_obj_str = fin.readline().rstrip('\n')
                 frags_plot_obj = None
                 if frags_plot_obj_str != "" and frags_plot_obj_str != "None":
                     frags_plot_obj = PlotObject.from_json(frags_plot_obj_str)
@@ -3451,10 +3868,10 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
             with open(unmapped_reads_fastq,'r') as unmapped_reads:
                 line_id = unmapped_reads.readline()
                 while(line_id):
-                    line_id = line_id.strip()
-                    line_seq = unmapped_reads.readline().strip()
-                    line_plus = unmapped_reads.readline().strip()
-                    line_qual = unmapped_reads.readline().strip()
+                    line_id = line_id.rstrip('\n')
+                    line_seq = unmapped_reads.readline().rstrip('\n')
+                    line_plus = unmapped_reads.readline().rstrip('\n')
+                    line_qual = unmapped_reads.readline().rstrip('\n')
 
                     this_id = line_id
 
@@ -3508,7 +3925,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         ax.bar(range(len(keys)),vals,tick_label=keys)
-        ax.set_ylim(0,max(vals)+0.5)
+        ax.set_ymargin(0.05)
         ax.set_xlabel('Number of fragments')
         ax.set_ylabel('Number of Reads')
         ax.set_title('Number of fragments per unaligned read')
@@ -3528,19 +3945,19 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     mapped_chopped_sam_file = root + ".mapped.sam"
     chopped_bowtie_log = root + ".mapped.bowtie2Log"
-    chopped_aln_command = '%s --sam-no-qname-trunc --reorder --no-hd --threads %d --end-to-end -x %s -U %s -S %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file)
+    chopped_aln_command = '%s --seed 2248 --sam-no-qname-trunc --reorder --no-hd --threads %d --end-to-end -x %s -U %s -S %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file)
 
     logging.info('Aligning chopped reads')
 
     logging.debug(chopped_aln_command)
-    aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode('utf-8')
+    aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
     logging.debug('Alignment of chopped fragments to genome: ' + aln_result)
     with open (chopped_bowtie_log,'w') as lout:
         lout.write('Alignment of chopped fragments to genome\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(chopped_aln_command,aln_result))
 
     logging.info('Analyzing chopped reads')
 
-    def analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags,min_seen_count=2):
+    def analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags,min_seen_frag_cutoff=2):
         """
         Helper function to analyze a list of curr_id_vals
         A midpoint is found that splits the aligned fragments such that the number of locations in each split is minimized.
@@ -3553,23 +3970,27 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
             fragment_size: size of resulting chopped fragments.
             fragment_step_size: stride between chopped fragments. 5 results in a new fragment every 5bp
             max_frags: the max number of frags to print (for constructing the outline to be printed)
-            min_seen_count: the minimum number of fragments aligned to a location for it to be counted (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_count of 2 would not allow position A)
+            min_seen_frag_cutoff: minimum number of fragments aligned to a location for the location to be considered as a possible alignment location for a read (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_frag_cutoff of 2 would not allow position B
         returns:
             outline: String to be printed to output with locationa and max_frags number of columns describing where each fragment aligned
             curr_chr_count: how many chrs fragments from this read aligned to
-            left_chr: Chr location where the left part of this read was determined to come from
-            left_cut_pos: Base Location where the left part could have resulted from a cut at
-            left_read_start: Base location where the left fragment could have started at
-            left_pos: Base location where the left part of the read aligned
+            left_chr: Chromosome of location where the left part of this read was determined to come from
+            left_cut_pos: Basepair location where the left part could have resulted from a cut at
+            left_read_start: Basepair location where the left fragment could have started at
+            left_pos: Basepair location where the left part of the read aligned
             left_orientation: orientation (+ or -) for whether the read extends to the left or the right away from the cut
             right_cut_pos
             right_pos
         """
         # first create arrays from the dict of positions
-        curr_id_chrs = {} #dict of where fragments align chr->count
+        curr_id_chrs = defaultdict(int) #dict of where fragments align chr->count
         pos_list = [None]*max_frags #chr and pos where each frag mapped
         val_list = [] #for printing the outline
         mapped_frag_len = 0 # length of array for which all frags are mapped frag (some reads are shorter, and don't have any fragments on the left side). I used the length so I can perform range and indexing operations (as opposed to keeping the index of the last mapped frag)
+
+        val_counts = defaultdict(int)
+        for val in curr_id_vals.values():
+            val_counts[val] += 1
 
         for i in range(max_frags):
             val = ""
@@ -3577,212 +3998,276 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                 mapped_frag_len = i+1
                 val = curr_id_vals[i]
                 val_chr,val_pos,val_strand = curr_id_vals[i].split(" ")
-                if val_chr != "*":
-                    if val_chr not in curr_id_chrs:
-                        curr_id_chrs[val_chr] = 0
+                if val_counts[val] >= min_seen_frag_cutoff and val_chr != "*":
                     curr_id_chrs[val_chr] += 1
                     pos_list[i] = val
 
             val_list.append(val)
 
-        min_pos_unique_sum = max_frags
-        max_majority_sum = 0
-        min_i = None
-        #create partitions of the fragments, choose the one that:
-        # - minimizes the number of unique locations seen in each partition
-        # - maximizes the number of fragments that are the majority in their respective partitions
-#        print('pos list: ' + str(pos_list))
-#        print('last frag ind: ' + str(mapped_frag_len))
-        for i in range(1,mapped_frag_len):
-            left_list = filter(None,pos_list[0:i])
-            num_pos_left = len(set(left_list))
+        all_list = [x for x in pos_list if x is not None]
+        num_pos_all = len(set(all_list)) #could also be zero if completely unmapped
 
-            right_list = filter(None,pos_list[i:mapped_frag_len])
-            len_right_list = len(right_list)
-            num_pos_right = len(set(filter(None,pos_list[i:mapped_frag_len])))
+        #if there is only one mapped location
+        if num_pos_all == 1:
+            one_chr,one_pos,one_strand = all_list[0].split(" ")
+            left_aln = -1
+            right_aln = -1
+            for idx in range(0,mapped_frag_len):
+                val = pos_list[idx]
+                if val is None:
+                    continue
+                this_chr,this_pos,this_strand = val.split(" ")
+                if left_aln == -1:
+                    left_aln = curr_id_aln_pos[idx]
+                #just set the right one every time as we progress through the array
+                right_aln = curr_id_aln_pos[idx]
 
-            #if one of the partitions has no pos (all are None), continue
-            if num_pos_right == 0 or num_pos_left == 0:
-                continue
+            # if aligned in the forward orientation, the left will be less than right
+            if left_aln < right_aln:
+                read_start = left_aln
+                read_end = right_aln + fragment_size
+                orientation = '+'
+            # if aligned in the reverse orientation, right is less than left, and the start of the alignment will be the left + fragment size
+            else:
+                read_start = left_aln + fragment_size
+                read_end = right_aln
+                orientation = '-'
 
-#            if val_list[0] == "chr1 223763905" and val_list[1] == "chr2 60498399":
-#                print("i:"+str(i)+"/"+str(mapped_frag_len))
-#                print('left bit: ' + str(pos_list[0:i]))
-#                print('right bit: ' + str(pos_list[i:mapped_frag_len]))
-#                print('num_pos_left: ' + str(num_pos_left))
-#                print('num_pos_right: ' + str(num_pos_right))
-#                print('ratio left: ' + str(ratio_left))
-#                print('ratio right: ' + str(ratio_right))
-#                if i > 5:
-#                    toggle = 1
-#                if toggle == 1 and i < 5:
-#                    asdf()
+            curr_annotation = "Linear"
+            left_chr = one_chr
+            left_cut_pos = read_start
+            left_read_start = read_start
+            left_pos = read_start
+            left_orientation = orientation
+            right_chr = one_chr
+            right_cut_pos = read_end
+            right_read_end = read_end
+            right_pos = read_end
+            right_orientation = orientation
+            min_i = None
 
-            this_unique_sum = num_pos_left + num_pos_right
-            #if the total num of unique positions in each partition is minimized here, set this to be the best partition so far
-            #or if it is a tie, calculate the majority ratio and choose the partitioning that maximizes that
-            if this_unique_sum <= min_pos_unique_sum:
-                #calculate the ratio of the most-frequent position observed out of all positions in that partition for left and right partitions
+            outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,left_orientation,right_chr,right_cut_pos,right_read_end,right_pos,right_orientation,min_i,"\t".join(val_list))
+
+            curr_chr_count = 1
+
+            curr_loc = "%s:%s-%s"%(one_chr,read_start,read_end)
+            curr_cuts = "NA"
+
+            return outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut_pos,left_read_start,left_orientation,right_chr,right_cut_pos,right_read_end,right_orientation
+
+        #if there are multiple mapped locations
+        else:
+            min_pos_unique_sum = max_frags
+            max_majority_sum = 0
+            min_i = None #  keep track of the right-most i that maximizes the partition
+            #create partitions of the fragments, choose the one that:
+            # - minimizes the number of unique locations seen in each partition
+            # - maximizes the number of fragments that are the majority in their respective partitions
+    #        print('pos list: ' + str(pos_list))
+    #        print('last frag ind: ' + str(mapped_frag_len))
+            for i in range(1,mapped_frag_len):
+                left_list = [x for x in pos_list[0:i] if x is not None]
+                num_pos_left = len(set(left_list))
+
+                right_list = [x for x in pos_list[i:mapped_frag_len] if x is not None]
+                len_right_list = len(right_list)
+                num_pos_right = len(set(right_list))
+
+                #if one of the partitions has no pos (all are None), continue
+                if num_pos_right == 0 or num_pos_left == 0:
+                    continue
+
+#                if val_list[0] == "chr1 223763905" and val_list[1] == "chr2 60498399":
+#                    print("i:"+str(i)+"/"+str(mapped_frag_len))
+#                    print('left bit: ' + str(pos_list[0:i]))
+#                    print('right bit: ' + str(pos_list[i:mapped_frag_len]))
+#                    print('num_pos_left: ' + str(num_pos_left))
+#                    print('num_pos_right: ' + str(num_pos_right))
+#                    print('ratio left: ' + str(ratio_left))
+#                    print('ratio right: ' + str(ratio_right))
+#                    if i > 5:
+#                        toggle = 1
+#                    if toggle == 1 and i < 5:
+#                        asdf()
+
+                this_unique_sum = num_pos_left + num_pos_right
+                #if the total num of unique positions in each partition is minimized here, set this to be the best partition so far
+                #or if it is a tie, calculate the majority ratio and choose the partitioning that maximizes that
+                if this_unique_sum <= min_pos_unique_sum:
+                    #calculate the ratio of the most-frequent position observed out of all positions in that partition for left and right partitions
+                    left_counts = {}
+                    left_val = None;
+                    left_majority_count = 0
+                    for val in left_list:
+                        left_counts[val] = left_counts.get(val,0) + 1
+                        if left_counts[val] > left_majority_count and val is not None:
+                            left_majority_count = left_counts[val]
+                            left_val = val
+
+                    right_counts = {}
+                    right_val = None;
+                    right_majority_count = 0
+                    for val in right_list:
+                        right_counts[val] = right_counts.get(val,0) + 1
+                        if right_counts[val] > right_majority_count and val is not None and val != left_val:
+                            right_majority_count = right_counts[val]
+                            right_val = val
+
+                    this_majority_sum = left_majority_count + right_majority_count
+
+                    #if the unique sum is less, then just set this i to min_i
+                    if this_unique_sum < min_pos_unique_sum:
+                        min_pos_unique_sum = this_unique_sum
+                        max_majority_count = this_majority_sum
+                        min_i = i
+                    elif this_majority_sum > max_majority_sum: #this_unique_sum == min_pos_unique_sum from if statement above
+                        min_pos_unique_sum = this_unique_sum
+                        max_majority_sum = this_majority_sum
+                        min_i = i
+
+            if min_i is not None:
                 left_counts = {}
                 left_val = None;
-                left_majority_count = 0
-                for val in left_list:
+                left_count = 0
+                for val in pos_list[0:min_i]:
                     left_counts[val] = left_counts.get(val,0) + 1
-                    if left_counts[val] > left_majority_count and val is not None:
-                        left_majority_count = left_counts[val]
+                    if left_counts[val] > left_count and not val is None:
+                        left_count = left_counts[val]
                         left_val = val
+                if left_count > 0:
+                    if left_counts[left_val] >= min_seen_frag_cutoff:
+                        left_chr,left_pos,left_strand = left_val.split(" ")
+                    else: #an alignment was seen, but below the cutoff
+                        left_chr = "*"
+                        left_pos = "-1"
+                        left_strand='u'
+                else: #no alignments were seen
+                    left_chr = "*"
+                    left_pos = "-2"
+                    left_strand='u'
 
                 right_counts = {}
                 right_val = None;
-                right_majority_count = 0
-                for val in right_list:
+                right_count = 0
+                for val in pos_list[min_i:mapped_frag_len]:
                     right_counts[val] = right_counts.get(val,0) + 1
-                    if right_counts[val] > right_majority_count and val is not None and val != left_val:
-                        right_majority_count = right_counts[val]
+                    if right_counts[val] > right_count and not val is None:
+                        right_count = right_counts[val]
                         right_val = val
-
-                this_majority_sum = left_majority_count + right_majority_count
-
-                #if the unique sum is less, then just set this i to min_i
-                if this_unique_sum < min_pos_unique_sum:
-                    min_pos_unique_sum = this_unique_sum
-                    max_majority_count = this_majority_sum
-                    min_i = i
-                elif this_majority_sum > max_majority_sum: #this_unique_sum == min_pos_unique_sum from if statement above
-                    min_pos_unique_sum = this_unique_sum
-                    max_majority_sum = this_majority_sum
-                    min_i = i
-
-#        print('min_i:' + str(min_i))
-        if min_i is not None:
-            left_counts = {}
-            left_val = None;
-            left_count = 0
-            for val in pos_list[0:min_i]:
-                left_counts[val] = left_counts.get(val,0) + 1
-                if left_counts[val] > left_count and not val is None:
-                    left_count = left_counts[val]
-                    left_val = val
-            if left_count > 0:
-                if left_counts[left_val] >= min_seen_count:
-                    left_chr,left_pos,left_strand = left_val.split(" ")
-                else: #an alignment was seen, but below the cutoff
-                    left_chr = "*"
-                    left_pos = "-1"
-                    left_strand='u'
-            else: #no alignments were seen
-                left_chr = "*"
-                left_pos = "-2"
-                left_strand='u'
-
-            right_counts = {}
-            right_val = None;
-            right_count = 0
-            for val in pos_list[min_i:mapped_frag_len]:
-                right_counts[val] = right_counts.get(val,0) + 1
-                if right_counts[val] > right_count and not val is None:
-                    right_count = right_counts[val]
-                    right_val = val
-            if right_count > 0:
-                if right_counts[right_val] >= min_seen_count:
-                    right_chr,right_pos,right_strand = right_val.split(" ")
-                else: #an alignment was seen, but below the cutoff
+                if right_count > 0:
+                    if right_counts[right_val] >= min_seen_frag_cutoff:
+                        right_chr,right_pos,right_strand = right_val.split(" ")
+                    else: #an alignment was seen, but below the cutoff
+                        right_chr = "*"
+                        right_pos = "-1"
+                        right_strand='u'
+                else: #no alignments were seen
                     right_chr = "*"
-                    right_pos = "-1"
+                    right_pos = "-2"
                     right_strand='u'
-            else: #no alignments were seen
+            else: #no alignments were seen, min_i is None
+                left_chr = "*"
+                left_pos = "-3"
+                left_strand='u'
                 right_chr = "*"
-                right_pos = "-2"
+                right_pos = "-3"
                 right_strand='u'
-        else: #no alignments were seen, min_i is None
-            left_chr = "*"
-            left_pos = "-3"
-            left_strand='u'
-            right_chr = "*"
-            right_pos = "-3"
-            right_strand='u'
-            min_i = -1
+                min_i = -1
 
-        # estimate position where cuts may have occurred to create this read
-        left_cut_pos = "*"
-        left_read_start = left_pos
-        if left_chr != "*":
-            left_left_aln = -1; #for the left part of the read, identify the left and right parts of it -- the right part will be the cut position
-            left_right_aln = -1;
-            for idx in range(0,min_i):
-                val = pos_list[idx]
-                if val is None:
-                    continue
-                this_chr,this_pos,this_strand = val.split(" ")
-                #make sure this fragment is aligned to the correct(identified) spot
-                if this_chr == left_chr and this_pos == left_pos:
-                    if left_left_aln == -1:
-                        left_left_aln = curr_id_aln_pos[idx]
-                    #just set the left_right one every time as we progress through the array
-                    left_right_aln = curr_id_aln_pos[idx]
+            # estimate position where cuts may have occurred to create this read
+            left_cut_pos = "*"
+            left_read_start = left_pos
+            if left_chr != "*":
+                left_left_aln = -1; #for the left part of the read, identify the left and right parts of it -- the right part will be the cut position
+                left_right_aln = -1;
+                for idx in range(0,min_i):
+                    val = pos_list[idx]
+                    if val is None:
+                        continue
+                    this_chr,this_pos,this_strand = val.split(" ")
+                    #make sure this fragment is aligned to the correct(identified) spot
+                    if this_chr == left_chr and this_pos == left_pos:
+                        if left_left_aln == -1:
+                            left_left_aln = curr_id_aln_pos[idx]
+                        #just set the left_right one every time as we progress through the array
+                        left_right_aln = curr_id_aln_pos[idx]
 
-            # if aligned in the forward orientation, the cut will be at the right of the last aligned position
-            if left_left_aln < left_right_aln:
-                left_cut_pos = left_right_aln + fragment_size
-                left_read_start = left_left_aln
-            # if aligned in the reverse orientation, the cut will be exactly at the left_right aligned position, but the start of the alignment will be the left_left + fragment size
-            else:
-                left_cut_pos = left_right_aln
-                left_read_start = left_left_aln + fragment_size
+                # if aligned in the forward orientation, the cut will be at the right of the last aligned position
+                if left_left_aln < left_right_aln:
+                    left_cut_pos = left_right_aln + fragment_size
+                    left_read_start = left_left_aln
+                # if aligned in the reverse orientation, the cut will be exactly at the left_right aligned position, but the start of the alignment will be the left_left + fragment size
+                else:
+                    left_cut_pos = left_right_aln
+                    left_read_start = left_left_aln + fragment_size
 
 
-        right_cut_pos = "*"
-        right_read_end = right_pos
-        if right_chr != "*":
-            right_left_aln = -1; #for the right part of the read, identify the left and right parts of it -- the left part will be the cut position
-            right_right_aln = -1;
-            for idx in range(min_i,mapped_frag_len):
-                val = pos_list[idx]
-                if val is None:
-                    continue
-                this_chr,this_pos,this_strand = val.split(" ")
-                #make sure this fragment is aligned to the correct(identified) spot
-                if this_chr == right_chr and this_pos == right_pos:
-                    if right_left_aln == -1:
-                        right_left_aln = curr_id_aln_pos[idx]
-                    #just set the right_right one every time as we progress through the array
-                    right_right_aln = curr_id_aln_pos[idx]
+            right_cut_pos = "*"
+            right_read_end = right_pos
+            if right_chr != "*":
+                right_left_aln = -1; #for the right part of the read, identify the left and right parts of it -- the left part will be the cut position
+                right_right_aln = -1;
+                for idx in range(min_i,mapped_frag_len):
+                    val = pos_list[idx]
+                    if val is None:
+                        continue
+                    this_chr,this_pos,this_strand = val.split(" ")
+                    #make sure this fragment is aligned to the correct(identified) spot
+                    if this_chr == right_chr and this_pos == right_pos:
+                        if right_left_aln == -1:
+                            right_left_aln = curr_id_aln_pos[idx]
+                        #just set the right_right one every time as we progress through the array
+                        right_right_aln = curr_id_aln_pos[idx]
 
-            # if aligned in the forward orientation, the cut will be at the right_left aligned position, and the alignment start will be right_right+fragment size
-            if right_left_aln < right_right_aln:
-                right_read_end = right_right_aln + fragment_size
-                right_cut_pos = right_left_aln
-            # if aligned in the reverse orientation, the cut will be at the right_left aligned position+fragment_size
-            else:
-                right_cut_pos = right_left_aln + fragment_size
-                right_read_end = right_right_aln
+                # if aligned in the forward orientation, the cut will be at the right_left aligned position, and the alignment start will be right_right+fragment size
+                if right_left_aln < right_right_aln:
+                    right_read_end = right_right_aln + fragment_size
+                    right_cut_pos = right_left_aln
+                # if aligned in the reverse orientation, the cut will be at the right_left aligned position+fragment_size
+                else:
+                    right_cut_pos = right_left_aln + fragment_size
+                    right_read_end = right_right_aln
 
-        #create annotation for this read
-        #if left read is to the left of the cut (forward alignment of read to the genome)
-        left_anno = "%s-%s:%s"%(left_strand,left_chr,left_cut_pos)
-        left_orientation = '-'
-        #if left read is to the right of the cut
-        if left_read_start > left_cut_pos:
-            left_anno = "%s+%s:%s"%(left_strand,left_chr,left_cut_pos)
-            left_orientation = '+'
+            #create annotation for this read
+            #if left read is to the left of the cut (forward alignment of read to the genome)
+            left_anno = "%s-%s:%s"%(left_strand,left_chr,left_cut_pos)
+            left_orientation = '-'
+            #if left read is to the right of the cut
+            if left_read_start > left_cut_pos:
+                left_anno = "%s+%s:%s"%(left_strand,left_chr,left_cut_pos)
+                left_orientation = '+'
 
-        #if right read is to the right of the cut (forward alignment of the read to the genome)
-        right_anno = "%s:%s+%s"%(right_chr,right_cut_pos,right_strand)
-        right_orientation = '+'
-        #if right read is to the left of the cut
-        if right_read_end < right_cut_pos:
-            right_anno = "%s:%s-%s"%(right_chr,right_cut_pos,right_strand)
-            right_orientation = '-'
+            #if right read is to the right of the cut (forward alignment of the read to the genome)
+            right_anno = "%s:%s+%s"%(right_chr,right_cut_pos,right_strand)
+            right_orientation = '+'
+            #if right read is to the left of the cut
+            if right_read_end < right_cut_pos:
+                right_anno = "%s:%s-%s"%(right_chr,right_cut_pos,right_strand)
+                right_orientation = '-'
 
-        curr_annotation = left_anno+"_"+right_anno
+            curr_annotation = left_anno+"_"+right_anno
+
+#            if curr_annotation == 'c+chr18:80075325_chr18:80075365-c':
+#                print('left pos: ' + str(left_pos))
+#                print('left start: ' + str(left_read_start))
+#                print('left cut: ' + str(left_cut_pos))
+#                print('right cut: ' + str(right_cut_pos))
+#                print('right read_end: ' + str(right_read_end))
+#                print('right pos: ' + str(right_pos))
+#                print('left: ' + str(pos_list[0:min_i]))
+#                print('left_left_aln: ' + str(left_left_aln))
+#                print('left_right_aln: ' + str(left_right_aln))
+#                print('right: ' + str(pos_list[min_i:mapped_frag_len]))
+#                print('right_left_aln: ' + str(right_left_aln))
+#                print('right_right_aln: ' + str(right_right_aln))
 
 
-        outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,left_orientation,right_chr,right_cut_pos,right_read_end,right_pos,right_orientation,min_i,"\t".join(val_list))
+            outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(curr_annotation,left_chr,left_cut_pos,left_read_start,left_pos,left_orientation,right_chr,right_cut_pos,right_read_end,right_pos,right_orientation,min_i,"\t".join(val_list))
 
-        curr_chr_count = len(curr_id_chrs.keys())
+            curr_chr_count = len(curr_id_chrs.keys())
 
-        curr_loc = "%s:%s-%s~%s:%s-%s"%(left_chr,left_pos,left_cut_pos,right_chr,right_cut_pos,right_pos)
-        curr_cuts = left_chr + ":" + str(left_cut_pos) + "~" + right_chr + ":" + str(right_cut_pos)
+            curr_loc = "%s:%s-%s~%s:%s-%s"%(left_chr,left_pos,left_cut_pos,right_chr,right_cut_pos,right_pos)
+            curr_cuts = left_chr + ":" + str(left_cut_pos) + "~" + right_chr + ":" + str(right_cut_pos)
 
         return outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut_pos,left_read_start,left_orientation,right_chr,right_cut_pos,right_read_end,right_orientation
         ### end of helper function
@@ -3798,27 +4283,27 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
             head += "\t"+str(i)
         frag_file.write(head+"\n")
 
+        translocations = defaultdict(int) # hash of all translocation locations
+        linear_count = 0
+        translocation_count = 0
+        large_deletion_count = 0
+        large_inversion_count = 0
+        unidentified_count = 0
+        chroms_per_frag_read_count = defaultdict(int) # keep track for all read how many chrs the fragments mapped to
+        frags_mapped_count = 0
+
+        curr_id = "" # whole id of the read (alignments will be aggregated based on this id)
+        curr_idx = "" # read index (either 1 for r1 or 2 for r2
+        curr_id_vals = {} # keep track of where each frag maps to (this is a hash but it's like an array, so we can check for uninitialized values)
+        curr_id_aln_pos = {} # keep track of the location where each frag aligns - curr_id_vals keeps track of where a read having a fragment in that position would align.
         with open(mapped_chopped_sam_file,'r') as aln_frags:
-            curr_id = "" #whole id of the read (alignments will be aggregated based on this id)
-            curr_idx = "" #read index (either 1 for r1 or 2 for r2
-            curr_id_chrs = {} # keep track of which chrs frags from this id map to
-            curr_id_vals = {} # keep track of where each frag maps to (this is a hash but it's like an array, so we can check for uninitialized values)
-            curr_id_aln_pos = {} # keep track of the location where each frag aligns - curr_id_vals keeps track of where a read having a fragment in that position would align.
-            translocations = defaultdict(int) # hash of all translocation locations
-            linear_count = 0
-            translocation_count = 0
-            large_deletion_count = 0
-            large_inversion_count = 0
-            unidentified_count = 0
-            chroms_per_frag_read_count = defaultdict(int) # keep track for all read how many chrs the fragments mapped to
-            frags_mapped_count = 0
             for line in aln_frags:
                 line_els = line.split("\t")
                 line_chr = line_els[2]
                 frags_mapped_chrs[line_chr] += 1
                 frags_mapped_count += 1
 
-                line_mapq = line_els[5]
+                line_mapq = line_els[4]
                 line_unmapped = int(line_els[1]) & 0x4
                 line_reverse = int(line_els[1]) & 0x10
                 line_start = int(line_els[3])-1
@@ -3833,22 +4318,31 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
                 #write results from last id if this line is for a new id
                 if curr_id != next_id and curr_id != "":
-                    (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,left_orientation,right_chr,right_cut,right_pos,right_orientation) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags)
+                    (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,left_orientation,right_chr,right_cut,right_pos,right_orientation) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags,min_seen_frag_cutoff)
                     frag_file.write(curr_id+"\t"+outline)
 
                     curr_classification = "NA"
                     if left_chr == "*" or right_chr == "*":
                         unidentified_count += 1
                         curr_classification = "Unidentified"
+                    elif curr_annotation == 'Linear':
+                        linear_count += 1
+                        curr_classification = 'Linear'
+
                     else:
                         key = left_chr + " " + str(left_pos) + " " + right_chr + " " + str(right_pos)
                         translocations[key] += 1
-
-                        #can't be linear otherwise it would have mapped in genomic alignment previuosly
                         if left_chr == right_chr:
                             if left_orientation == right_orientation:
-                                large_inversion_count += 1
-                                curr_classification = "Large inversion"
+                                if left_pos == right_cut or left_cut == right_pos:
+                                    #vals = [outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,left_orientation,right_chr,right_cut,right_pos,right_orientation]
+                                    #names = ["outline","curr_chr_count","curr_loc","curr_cuts","curr_annotation","left_chr","left_cut","left_pos","left_orientation","right_chr","right_cut","right_pos","right_orientation"]
+                                    #print("\n".join([str(x)+":"+str(y) for x,y in zip(names,vals)]))
+                                    #print('currid: ' + curr_id)
+                                    raise Exception('Left and right have same position!')
+                                else:
+                                    large_inversion_count += 1
+                                    curr_classification = "Large inversion"
                             else:
                                 large_deletion_count += 1
                                 curr_classification = "Large deletion"
@@ -3862,7 +4356,6 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     else:
                         af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'Fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
 
-                    curr_id_chrs = {}
                     curr_id_vals = {}
                     curr_id_aln_pos = {}
 
@@ -3873,38 +4366,38 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                 if line_reverse:
                     inferred_start = line_start + int(lungo_offset)
 
-                curr_id_vals[int(lungo_frag)] = line_chr + " " + str(inferred_start) + " " + line_strand
-                curr_id_aln_pos[int(lungo_frag)] = line_start
+                if int(line_mapq) > fragment_min_mapq:
+                    curr_id_vals[int(lungo_frag)] = line_chr + " " + str(inferred_start) + " " + line_strand
+                    curr_id_aln_pos[int(lungo_frag)] = line_start
+                else:
+                    curr_id_vals[int(lungo_frag)] = "*" + " " + str(inferred_start) + " " + line_strand
+                    curr_id_aln_pos[int(lungo_frag)] = line_start
 
             #finish last item
             if frags_mapped_count > 0:
-                (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,left_orientation,right_chr,right_cut,right_pos,right_orientation) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags)
+                (outline,curr_chr_count,curr_loc,curr_cuts,curr_annotation,left_chr,left_cut,left_pos,left_orientation,right_chr,right_cut,right_pos,right_orientation) = analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags,min_seen_frag_cutoff)
                 frag_file.write(curr_id+"\t"+outline)
 
                 curr_classification = "NA"
                 if left_chr == "*" or right_chr == "*":
                     unidentified_count += 1
                     curr_classification = "Unidentified"
+                elif curr_annotation == 'Linear':
+                    linear_count += 1
+                    curr_classification = 'Linear'
                 else:
                     key = left_chr + " " + str(left_cut) + " " + right_chr + " " + str(right_cut)
-
-                    #can't be linear otherwise it would have mapped in genomic alignment previuosly
+                    translocations[key] += 1
                     if left_chr == right_chr:
-                        if left_pos == right_pos:
-                            linear_count += 1
-                            curr_classification = "Linear"
+                        if left_orientation == right_orientation:
+                            large_inversion_count += 1
+                            curr_classification = "Large inversion"
                         else:
-                            if left_orientation == right_orientation:
-                                large_inversion_count += 1
-                                curr_classification = "Large inversion"
-                            else:
-                                large_deletion_count += 1
-                                curr_classification = "Large deletion"
-                            translocations[key] += 1
+                            large_deletion_count += 1
+                            curr_classification = "Large deletion"
                     else:
                         translocation_count += 1
                         curr_classification = "Translocation"
-                        translocations[key] += 1
 
                 chroms_per_frag_read_count[curr_chr_count] += 1
 
@@ -3927,7 +4420,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         ax.bar(range(len(keys)),vals,tick_label=keys)
-        ax.set_ylim(0,max(vals)+0.5)
+        ax.set_ymargin(0.05)
         ax.set_ylabel('Number of Reads')
         ax.set_title('Location of fragments from unaligned reads')
 
@@ -3946,7 +4439,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         ax.bar(range(len(keys)),vals,tick_label=keys)
-        ax.set_ylim(0,max(vals)+0.5)
+        ax.set_ymargin(0.05)
         ax.set_xlabel('Number of Chromosomes')
         ax.set_ylabel('Number of Reads')
         ax.set_title('Number of different chromosomes aligned by a fragmented single read')
@@ -3997,10 +4490,110 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
 
     return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_plot_obj)
 
-def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_cutoff,crispresso_min_aln_score,samtools_command,crispresso_command):
+def prep_unmapped_assignments(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,can_use_previous_analysis=False):
+    """
+    Creates assigmnets file for unmapped reads
+
+    params:
+        root: root for written files
+        unmapped_reads_fastq_r1: fastq file of r1 unmappable reads
+        unmapped_reads_fastq_r2: fastq file of r2 unmappable reads
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
+
+
+    returns:
+        r1_assignments_file: file of location assignments for each r1 read
+        r2_assignments_file: file of location assignments for each r2 read (None if single-end)
+        unmapped_r1_count: number of unmapped R1 reads
+        unmapped_r2_count: number of unmapped R2 reads
+    """
+    info_file = root + '.info'
+    if os.path.isfile(info_file) and can_use_previous_analysis:
+        unmapped_r1_count = 0
+        unmapped_r2_count = 0
+        with open (info_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().rstrip('\n').split("\t")
+            if len(line_els) == 4:
+                (r1_assignments_file_str,r2_assignments_file_str,unmapped_r1_count_str,unmapped_r2_count_str) = line_els
+                r1_assignments_file = None if r1_assignments_file_str == "None" else r1_assignments_file_str
+                r2_assignments_file = None if r2_assignments_file_str == "None" else r2_assignments_file_str
+                unmapped_r1_count  = int(unmapped_r1_count_str)
+                unmapped_r2_count  = int(unmapped_r2_count_str)
+
+                if unmapped_r1_count >= 0 or unmapped_r2_count >= 0:
+                    logging.info('Using previously-created assignments for %s unmapped R1 reads and %s unmapped R2 reads'%(unmapped_r1_count, unmapped_r2_count))
+                    return (r1_assignments_file,r2_assignments_file,unmapped_r1_count, unmapped_r2_count)
+                else:
+                    logging.info('Could not recover previously-created assignments. Recreating.')
+
+    logging.info('Creating assignments for unmapped reads')
+
+    unmapped_str = "%s\t%s\t%s\t%s\t%s"%('Unmapped','Unidentified','u+*:*','*:*','*:*')
+
+    r1_assignments_file = root + '.assignments_r1.txt'
+    r2_assignments_file = None
+    unmapped_r1_count = 0
+    unmapped_r2_count = 0
+
+    if unmapped_reads_fastq_r1.endswith('.gz'):
+        f1_in = io.BufferedReader(gzip.open(unmapped_reads_fastq_r1,'rt'))
+    else:
+        f1_in = open(unmapped_reads_fastq_r1,'rt')
+
+
+    with open(r1_assignments_file,'w') as af1:
+        while (1):
+            f1_id_line   = f1_in.readline().strip()
+            f1_seq_line  = f1_in.readline().strip()
+            f1_plus_line = f1_in.readline()
+            f1_qual_line = f1_in.readline().strip()
+            if not f1_qual_line : break
+
+            f1_id = f1_id_line[1:]
+
+            af1.write("%s\t%s\n"%(f1_id,unmapped_str))
+            unmapped_r1_count += 1
+    f1_in.close()
+
+    if unmapped_reads_fastq_r2 is not None:
+        r2_assignments_file = root + '.assignments_r2.txt'
+
+        if unmapped_reads_fastq_r2.endswith('.gz'):
+            f2_in = io.BufferedReader(gzip.open(unmapped_reads_fastq_r2,'rt'))
+        else:
+            f2_in = open(unmapped_reads_fastq_r2,'rt')
+
+
+        with open(r2_assignments_file,'w') as af2:
+            while (1):
+                f2_id_line   = f2_in.readline().strip()
+                f2_seq_line  = f2_in.readline()
+                f2_plus_line = f2_in.readline()
+                f2_qual_line = f2_in.readline()
+                if not f2_qual_line : break
+
+                f2_id = f2_id_line[1:]
+
+                af2.write("%s\t%s\n"%(f2_id,unmapped_str))
+                unmapped_r2_count += 1
+        f2_in.close()
+
+
+    with open(info_file,'w') as fout:
+        fout.write("\t".join(['r1_assignments_file','r2_assignments_file','unmapped_r1_count','unmapped_r2_count'])+"\n")
+        fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,unmapped_r1_count,unmapped_r2_count]])+"\n")
+
+
+    logging.info('Finished creation of assignments for %s unaligned R1 reads and %s unaligned R2 reads'%(unmapped_r1_count, unmapped_r2_count))
+
+    return (r1_assignments_file,r2_assignments_file,unmapped_r1_count,unmapped_r2_count)
+
+
+def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,samtools_command,crispresso_command):
     """
     Prepares reads for analysis by crispresso2
-    Frequently-aligned locations with a min number of reads (crispresso_cutoff) are identified
+    Frequently-aligned locations with a min number of reads (crispresso_min_count) are identified
     Reads from these locations are extracted and prepared for analysis by CRISPResso2
 
     params:
@@ -4011,7 +4604,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         av_read_length: average read length (used to calculate reference region size for CRISPResso)
         genome: path to genome fa file
         genome_len_file: path to tab-sep file with lengths of chrs in genome (ends with .fai)
-        crispresso_cutoff: min number of reads at site for crispresso2 processing
+        crispresso_min_count: min number of reads at site for crispresso2 processing
         crispresso_min_aln_score: minimum score for reads to align to amplicons
         samtools_command: location of samtools to run
         crispresso_command: location of crispresso to run
@@ -4072,7 +4665,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             if '*' in this_cut:
                 continue
 
-            if cut_counts_for_crispresso[this_cut] < crispresso_cutoff:
+            if cut_counts_for_crispresso[this_cut] < crispresso_min_count:
                 continue
 
             if this_cut not in cut_names:
@@ -4102,7 +4695,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             amp_start = int(cut_pos)-amp_half_length
             amp_end = int(cut_pos)+amp_half_length
             amp_seq = subprocess.check_output(
-                '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,amp_start,amp_end),shell=True).decode('utf-8').strip()
+                '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,amp_start,amp_end),shell=True).decode(sys.stdout.encoding).strip()
         else:
             left_strand = cut_loc[0]
             left_direction = cut_loc[1]
@@ -4120,7 +4713,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
                 left_amp_end = left_pos
                 left_amp_start = left_pos - amp_half_length
                 left_amp_seq = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,left_chr,left_amp_start,left_amp_end),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,left_chr,left_amp_start,left_amp_end - 1),shell=True).decode(sys.stdout.encoding).strip()
                 if left_direction == "c":
                     left_amp_seq = complement(left_amp_seq)
 
@@ -4129,7 +4722,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
                 left_amp_start = left_pos
 
                 left_amp_seq = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,left_chr,left_amp_start,left_amp_end),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,left_chr,left_amp_start,left_amp_end),shell=True).decode(sys.stdout.encoding).strip()
                 if left_direction == "w":
                     left_amp_seq = reverse(left_amp_seq)
                 else:
@@ -4141,7 +4734,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
                 right_amp_start = right_pos
                 right_amp_end = right_pos + amp_half_length
                 right_amp_seq = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,right_chr,right_amp_start,right_amp_end),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,right_chr,right_amp_start,right_amp_end),shell=True).decode(sys.stdout.encoding).strip()
                 if right_direction == "c":
                     right_amp_seq = complement(right_amp_seq)
 
@@ -4150,7 +4743,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
                 right_amp_start = right_pos - amp_half_length
 
                 right_amp_seq = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,right_chr,right_amp_start,right_amp_end),shell=True).decode('utf-8').strip()
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,right_chr,right_amp_start,right_amp_end - 1),shell=True).decode(sys.stdout.encoding).strip()
                 if right_direction == "w":
                     right_amp_seq = reverse(right_amp_seq)
                 else:
@@ -4181,7 +4774,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 
     return (crispresso_infos)
 
-def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_run_crispresso,skip_failed=True):
+def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_run_crispresso,skip_failed=True,can_use_previous_analysis=False):
     """
     Runs CRISPResso2 commands and aggregates output
 
@@ -4192,32 +4785,48 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
         n_processes: number of processes to run CRISPResso commands on
         min_count_to_run_crispresso: minimum number of reads assigned to a site to run CRISPResso
         skip_failed: if true, failed CRISPResso runs are skipped. Otherwise, if one fails, the program will fail.
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
-        crispresso_infos: array of metadata information for CRISPResso
+        crispresso_results: dict of run_names and run_sub_htmls for display in report
 
     """
-    logging.info('Running and analyzing ' + str(len(crispresso_infos)) + ' alignments using CRISPResso2')
 
-
-    # getting rid of pickle in crispresso... so I'm leaving this import here in the meantime
-    running_python3 = False
-    if sys.version_info > (3, 0):
-        running_python3 = True
-
-    if running_python3:
-        import pickle as cp #python 3
-    else:
-        import cPickle as cp #python 2.7
-    # end nasty pickle part
+    crispresso_stats_file = root + ".info"
 
     crispresso_commands = []
     for crispresso_info in crispresso_infos:
-        if crispresso_info['printed_read_count'] > min_count_to_run_crispresso:
+        if crispresso_info['printed_read_count'] >= min_count_to_run_crispresso:
             crispresso_commands.append(crispresso_info['command'])
+    expected_completed_command_count = len(crispresso_commands)
+
+    #check to see if runs have been completed previously
+    crispresso_run_names = []
+    crispresso_sub_htmls = {}
+    read_completed_command_count = 0
+    if os.path.isfile(crispresso_stats_file) and can_use_previous_analysis:
+        with open(crispresso_stats_file,'r') as fin:
+            head_line = fin.readline()
+            for line in fin:
+                line_els = line.strip().split()
+                crispresso_run_names.append(line_els[0])
+                crispresso_sub_htmls[line_els[0]] = line_els[1]
+                read_completed_command_count += 1
+        if read_completed_command_count == expected_completed_command_count:
+            logging.info('Using %d previously-completed CRISPResso runs'%read_completed_command_count)
+            crispresso_results = {}
+            crispresso_results['run_names'] = crispresso_run_names
+            crispresso_results['run_sub_htmls'] = crispresso_sub_htmls
+            return(crispresso_results)
+        else:
+            logging.info('Could not recover previously-completed CRISPResso runs. Rerunning.')
 
 
-    CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'CRISPRlungo run',skip_failed)
+    #otherwise run crispresso runs
+    logging.info('Running and analyzing ' + str(len(crispresso_infos)) + ' alignments using CRISPResso2')
+
+
+    CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'run',skip_failed)
 
     crispresso_results = {}
     crispresso_results['run_names'] = []
@@ -4261,38 +4870,68 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
             except:
                 logging.debug('Could not load CRISPResso run information from ' + crispresso_info['name'] + ' at ' + crispresso_info['output_folder'])
             else:
-                report_filename = run_data['report_filename']
-                report_file_loc = os.path.join(root+'.CRISPResso_runs',report_filename)
-                if os.path.isfile(report_file_loc):
-                    crispresso_results['run_names'].append(name)
-                    crispresso_results['run_sub_htmls'][name] = report_file_loc
+                #if running crispresso python 3
+                if 'running_info' in run_data:
+                    report_filename = run_data['running_info']['report_filename']
+                    report_file_loc = os.path.join(os.path.dirname(crispresso_info['output_folder']),report_filename)
+                    if os.path.isfile(report_file_loc):
+                        crispresso_results['run_names'].append(name)
+                        crispresso_results['run_sub_htmls'][name] = report_file_loc
 
-                ref_name = run_data['ref_names'][0] #only expect one amplicon sequence
-                n_total = run_data['aln_stats']['N_TOT_READS']
-                n_aligned = run_data['counts_total'][ref_name]
-                n_unmod = run_data['counts_unmodified'][ref_name]
-                n_mod = run_data['counts_modified'][ref_name]
-                n_discarded = run_data['counts_discarded'][ref_name]
+                    ref_name = run_data['results']['ref_names'][0] #only expect one amplicon sequence
+                    n_total = run_data['running_info']['alignment_stats']['N_TOT_READS']
+                    n_aligned = run_data['results']['alignment_stats']['counts_total'][ref_name]
+                    n_unmod = run_data['results']['alignment_stats']['counts_unmodified'][ref_name]
+                    n_mod = run_data['results']['alignment_stats']['counts_modified'][ref_name]
+                    n_discarded = run_data['results']['alignment_stats']['counts_discarded'][ref_name]
 
-                n_insertion = run_data['counts_insertion'][ref_name]
-                n_deletion = run_data['counts_deletion'][ref_name]
-                n_substitution = run_data['counts_substitution'][ref_name]
-                n_only_insertion = run_data['counts_only_insertion'][ref_name]
-                n_only_deletion = run_data['counts_only_deletion'][ref_name]
-                n_only_substitution = run_data['counts_only_substitution'][ref_name]
-                n_insertion_and_deletion = run_data['counts_insertion_and_deletion'][ref_name]
-                n_insertion_and_substitution = run_data['counts_insertion_and_substitution'][ref_name]
-                n_deletion_and_substitution = run_data['counts_deletion_and_substitution'][ref_name]
-                n_insertion_and_deletion_and_substitution = run_data['counts_insertion_and_deletion_and_substitution'][ref_name]
+                    n_insertion = run_data['results']['alignment_stats']['counts_insertion'][ref_name]
+                    n_deletion = run_data['results']['alignment_stats']['counts_deletion'][ref_name]
+                    n_substitution = run_data['results']['alignment_stats']['counts_substitution'][ref_name]
+                    n_only_insertion = run_data['results']['alignment_stats']['counts_only_insertion'][ref_name]
+                    n_only_deletion = run_data['results']['alignment_stats']['counts_only_deletion'][ref_name]
+                    n_only_substitution = run_data['results']['alignment_stats']['counts_only_substitution'][ref_name]
+                    n_insertion_and_deletion = run_data['results']['alignment_stats']['counts_insertion_and_deletion'][ref_name]
+                    n_insertion_and_substitution = run_data['results']['alignment_stats']['counts_insertion_and_substitution'][ref_name]
+                    n_deletion_and_substitution = run_data['results']['alignment_stats']['counts_deletion_and_substitution'][ref_name]
+                    n_insertion_and_deletion_and_substitution = run_data['results']['alignment_stats']['counts_insertion_and_deletion_and_substitution'][ref_name]
+
+                else:
+                    report_filename = run_data['report_filename']
+                    report_file_loc = os.path.join(os.path.dirname(crispresso_info['output_folder']),report_filename)
+                    if os.path.isfile(report_file_loc):
+                        crispresso_results['run_names'].append(name)
+                        crispresso_results['run_sub_htmls'][name] = report_file_loc
+
+                    ref_name = run_data['ref_names'][0] #only expect one amplicon sequence
+                    n_total = run_data['aln_stats']['N_TOT_READS']
+                    n_aligned = run_data['counts_total'][ref_name]
+                    n_unmod = run_data['counts_unmodified'][ref_name]
+                    n_mod = run_data['counts_modified'][ref_name]
+                    n_discarded = run_data['counts_discarded'][ref_name]
+
+                    n_insertion = run_data['counts_insertion'][ref_name]
+                    n_deletion = run_data['counts_deletion'][ref_name]
+                    n_substitution = run_data['counts_substitution'][ref_name]
+                    n_only_insertion = run_data['counts_only_insertion'][ref_name]
+                    n_only_deletion = run_data['counts_only_deletion'][ref_name]
+                    n_only_substitution = run_data['counts_only_substitution'][ref_name]
+                    n_insertion_and_deletion = run_data['counts_insertion_and_deletion'][ref_name]
+                    n_insertion_and_substitution = run_data['counts_insertion_and_substitution'][ref_name]
+                    n_deletion_and_substitution = run_data['counts_deletion_and_substitution'][ref_name]
+                    n_insertion_and_deletion_and_substitution = run_data['counts_insertion_and_deletion_and_substitution'][ref_name]
 
                 unmod_pct = "NA"
                 mod_pct = "NA"
                 if n_aligned > 0:
                     unmod_pct = 100*n_unmod/float(n_aligned)
                     mod_pct = 100*n_mod/float(n_aligned)
-        for crispresso_info in crispresso_infos:
             new_vals = [name,cut,cut_type,cut_loc,ref_name,n_printed,n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution,cut_amp_seq]
             crispresso_info_file.write("\t".join([str(x) for x in new_vals])+"\n")
+        with open(crispresso_stats_file,'w') as fout:
+            fout.write('Run Name\tRun sub-html\n')
+            for run_name in crispresso_results['run_names']:
+                fout.write(run_name + "\t" + crispresso_results['run_sub_htmls'][run_name]+"\n")
         return crispresso_results
 
 
