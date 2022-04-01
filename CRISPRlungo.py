@@ -16,6 +16,9 @@ import sys
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
 
+import matplotlib as mpl
+mpl.rcParams['pdf.fonttype'] = 42
+
 __version__ = "v0.0.3"
 
 def main():
@@ -354,6 +357,7 @@ def main():
                 genome_len_file = settings['genome']+'.fai',
                 crispresso_min_count = settings['crispresso_min_count'],
                 crispresso_min_aln_score = settings['crispresso_min_aln_score'],
+                crispresso_quant_window_size = settings['crispresso_quant_window_size'],
                 samtools_command=settings['samtools_command'],
                 crispresso_command=settings['crispresso_command'],
                 )
@@ -373,6 +377,7 @@ def main():
                     genome_len_file = settings['genome']+'.fai',
                     crispresso_min_count = settings['crispresso_min_count'],
                     crispresso_min_aln_score = settings['crispresso_min_aln_score'],
+                    crispresso_quant_window_size = settings['crispresso_quant_window_size'],
                     samtools_command=settings['samtools_command'],
                     crispresso_command=settings['crispresso_command'],
                     )
@@ -381,13 +386,17 @@ def main():
             info['name'] = 'r2_'+info['name']
             crispresso_infos.append(info)
 
-    crispresso_results = run_and_aggregate_crispresso(
+    crispresso_results, crispresso_classification_plot_obj = run_and_aggregate_crispresso(
                 root = settings['root']+".CRISPResso",
                 crispresso_infos = crispresso_infos,
+                final_assignment_file = final_assignment_file,
                 n_processes = settings['n_processes'],
                 min_count_to_run_crispresso =settings['crispresso_min_count'],
                 can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
+    if crispresso_classification_plot_obj is not None:
+        crispresso_classification_plot_obj.order=31
+        summary_plot_objects.append(crispresso_classification_plot_obj)
 
     labels = ["Input Reads","Aligned Custom Targets","Aligned Genome","Fragmented Linear","Fragmented Translocations","Fragmented Large Deletions","Fragmented Large Inversions","Fragmented Unidentified"]
     values = [num_reads_input,custom_aligned_count,genome_aligned_count,frag_linear_count,frag_translocation_count,frag_large_deletion_count,frag_large_inversion_count,frag_unidentified_count]
@@ -480,6 +489,7 @@ def parse_settings(args):
     parser.add_argument('--run_crispresso_genome_sites', help='Boolean for whether to run CRISPResso on highly-aligned genomic locations (if flag is not set (or false), CRISPResso will only be run at highly-aligned cut sites and artificial targets', action='store_true')
     parser.add_argument('--crispresso_min_count', type=int, help='Min number of reads required to be seen at a site for it to be analyzed by CRISPResso', default=50)
     parser.add_argument('--crispresso_min_aln_score', type=int, help='Min alignment score to reference sequence for quantification by CRISPResso', default=20)
+    parser.add_argument('--crispresso_quant_window_size', type=int, help='Number of bp on each side of a cut to consider for edits', default=1)
 
     #sub-command parameters
     parser.add_argument('--samtools_command', help='Command to run samtools', default='samtools')
@@ -674,6 +684,11 @@ def parse_settings(args):
     if 'crispresso_min_aln_score' in settings_file_args:
         settings['crispresso_min_aln_score'] = int(settings_file_args['crispresso_min_aln_score'])
         settings_file_args.pop('crispresso_min_aln_score')
+
+    settings['crispresso_quant_window_size'] = cmd_args.crispresso_quant_window_size
+    if 'crispresso_quant_window_size' in settings_file_args:
+        settings['crispresso_quant_window_size'] = int(settings_file_args['crispresso_quant_window_size'])
+        settings_file_args.pop('crispresso_quant_window_size')
 
 
     settings['samtools_command'] = cmd_args.samtools_command
@@ -1635,12 +1650,12 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
     umi_seq_best_qual_sum = {} #best qual sum for the best fastq
 
     if fastq_r1.endswith('.gz'):
-        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rt'))
+        f1_in = gzip.open(fastq_r1,'rt')
     else:
         f1_in = open(fastq_r1,'rt')
 
     if fastq_r2.endswith('.gz'):
-        f2_in = io.BufferedReader(gzip.open(fastq_r2,'rt'))
+        f2_in = gzip.open(fastq_r2,'rt')
     else:
         f2_in = open(fastq_r2,'rt')
 
@@ -1793,17 +1808,17 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
         tot_read_count = 0
 
         if fastq_r1.endswith('.gz'):
-            f1_in = io.BufferedReader(gzip.open(fastq_r1,'rb'))
+            f1_in = gzip.open(fastq_r1,'rt')
         else:
             f1_in = open(fastq_r1,'r')
 
         if fastq_r2.endswith('.gz'):
-            f2_in = io.BufferedReader(gzip.open(fastq_r2,'rb'))
+            f2_in = gzip.open(fastq_r2,'rt')
         else:
             f2_in = open(fastq_r2,'r')
 
         if fastq_umi.endswith('.gz'):
-            umi_in = io.BufferedReader(gzip.open(fastq_umi,'rb'))
+            umi_in = gzip.open(fastq_umi,'rt')
         else:
             umi_in = open(fastq_umi,'r')
 
@@ -1939,7 +1954,7 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     min_primer_read_len = primer_len + primer_post_len
 
     if fastq_r1.endswith('.gz'):
-        f1_in = io.BufferedReader(gzip.open(fastq_r1,'rt'))
+        f1_in = gzip.open(fastq_r1,'rt')
     else:
         f1_in = open(fastq_r1,'rt')
 
@@ -2708,8 +2723,8 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 ff.write(r1_line + "\tnot_duplicate\tNA\n")
 
                 #parse out cut positions and record them
-                r1_cut_points = r1_line_els[cut_point_ind]
                 if r1_line_els[classification_ind] != 'Linear':
+                    r1_cut_points = r1_line_els[cut_point_ind]
                     for cut_point in r1_cut_points.split("~"):
                         (cut_chr,cut_pos) = cut_point.split(":")
                         if cut_chr != "*":
@@ -2843,6 +2858,10 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         if cut_chr not in known_cut_points_by_chr:
             known_cut_points_by_chr[cut_chr] = []
         known_cut_points_by_chr[cut_chr].append(int(cut_pos))
+        #add known cut points to final cut point lookup as well
+        if cut_chr not in cut_points_by_chr:
+            cut_points_by_chr[cut_chr] = defaultdict(int)
+        cut_points_by_chr[cut_chr][int(cut_pos)] += 1
 
     #the counts in this file include only reads that weren't marked as duplicates, and reads that weren't Linear
     #each non-duplicate read could contribute at least 2 cut points (perhaps more?), for a total of at least 2*(non-duplicated,non-linear)
@@ -2864,7 +2883,6 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     r1_fragment_translocation_cut_counts['u+*'] = defaultdict(int)
     r2_fragment_translocation_cut_counts = {}
     r2_fragment_translocation_cut_counts['u+*'] = defaultdict(int)
-
 
     for cut_chr in cut_points_by_chr:
         these_cut_points = sorted(cut_points_by_chr[cut_chr])
@@ -3104,7 +3122,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                                 r1_uncut_custom_aln_counts[key] += 1
                             r1_translocation_cut_counts[key][key] += 1
                             key1 = 'w+' + key
-                            key2 = key + '-w' 
+                            key2 = key + '-w'
                             r1_fragment_translocation_cut_counts[key1][key2] += 1
                             r1_fragment_translocation_classifications[key1 + " " + key2] = r1_classification
 
@@ -3142,7 +3160,6 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         r1_cut_custom_aln_counts[cut_2] += 1
                 else:
                     cut_2 = "*"
-
 
                 r1_translocation_cut_counts[cut_1][cut_2] += 1
 
@@ -4537,7 +4554,7 @@ def prep_unmapped_assignments(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_
     unmapped_r2_count = 0
 
     if unmapped_reads_fastq_r1.endswith('.gz'):
-        f1_in = io.BufferedReader(gzip.open(unmapped_reads_fastq_r1,'rt'))
+        f1_in = gzip.open(unmapped_reads_fastq_r1,'rt')
     else:
         f1_in = open(unmapped_reads_fastq_r1,'rt')
 
@@ -4560,7 +4577,7 @@ def prep_unmapped_assignments(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_
         r2_assignments_file = root + '.assignments_r2.txt'
 
         if unmapped_reads_fastq_r2.endswith('.gz'):
-            f2_in = io.BufferedReader(gzip.open(unmapped_reads_fastq_r2,'rt'))
+            f2_in = gzip.open(unmapped_reads_fastq_r2,'rt')
         else:
             f2_in = open(unmapped_reads_fastq_r2,'rt')
 
@@ -4590,7 +4607,7 @@ def prep_unmapped_assignments(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_
     return (r1_assignments_file,r2_assignments_file,unmapped_r1_count,unmapped_r2_count)
 
 
-def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,samtools_command,crispresso_command):
+def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,crispresso_quant_window_size,samtools_command,crispresso_command):
     """
     Prepares reads for analysis by crispresso2
     Frequently-aligned locations with a min number of reads (crispresso_min_count) are identified
@@ -4606,6 +4623,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         genome_len_file: path to tab-sep file with lengths of chrs in genome (ends with .fai)
         crispresso_min_count: min number of reads at site for crispresso2 processing
         crispresso_min_aln_score: minimum score for reads to align to amplicons
+        crispresso_quant_window_size: number of bases on each side of the cut site in which to consider editing events
         samtools_command: location of samtools to run
         crispresso_command: location of crispresso to run
 
@@ -4641,7 +4659,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
     #iterate through fastq file
     # if read id is in the read_ids_for_crispresso, print it to that file
     if input_fastq_file.endswith('.gz'):
-        f_in = io.BufferedReader(gzip.open(input_fastq_file,'rb'))
+        f_in = gzip.open(input_fastq_file,'rt')
     else:
         f_in = open(input_fastq_file,'r')
     while (1):
@@ -4678,7 +4696,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             if reads_file not in filehandles:
                 fh = open(reads_file,'w')
                 filehandles[reads_file] = fh
-            filehandles[reads_file].write("%s\n%s\n%s%s\n"%(id_line,seq_line,plus_line,qual_line))
+            filehandles[reads_file].write("%s\n%s\n%s%s\n"%(id_line,seq_line.upper(),plus_line,qual_line))
 
             printed_cuts[this_cut] += 1
 
@@ -4696,6 +4714,8 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             amp_end = int(cut_pos)+amp_half_length
             amp_seq = subprocess.check_output(
                 '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,amp_start,amp_end),shell=True).decode(sys.stdout.encoding).strip()
+            quant_window_start = amp_half_length - crispresso_quant_window_size
+            quant_window_coords = "%d-%d"%(quant_window_start, quant_window_start + 2*(crispresso_quant_window_size) - 1)
         else:
             left_strand = cut_loc[0]
             left_direction = cut_loc[1]
@@ -4755,10 +4775,12 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 #            print('left amp: ' +left_amp_seq + ' right: ' + right_amp_seq)
 #            asdf()
             amp_seq = left_amp_seq + right_amp_seq
+            quant_window_start = len(left_amp_seq) - crispresso_quant_window_size
+            quant_window_coords = "%d-%d"%(quant_window_start, quant_window_start + 2*(crispresso_quant_window_size) - 1)
 
         reads_file = os.path.join(data_dir,cut_name+".fq")
         output_folder = os.path.join(data_dir,'CRISPResso_on_'+cut_names[cut])
-        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,amp_seq,reads_file,reads_file)
+        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s --fastq_output --quantification_window_coordinates %s --no_rerun --n_processes 4 &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,amp_seq,reads_file,quant_window_coords,reads_file)
 
         crispresso_infos.append({
                 "cut":cut,
@@ -4774,7 +4796,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 
     return (crispresso_infos)
 
-def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_run_crispresso,skip_failed=True,can_use_previous_analysis=False):
+def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_processes,min_count_to_run_crispresso,skip_failed=True,can_use_previous_analysis=False):
     """
     Runs CRISPResso2 commands and aggregates output
 
@@ -4782,6 +4804,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
         root: root for written files
         crispresso_infos: array of metadata information for CRISPResso
             dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
+        final_assignment_file: filename of final assignments for each read id pair
         n_processes: number of processes to run CRISPResso commands on
         min_count_to_run_crispresso: minimum number of reads assigned to a site to run CRISPResso
         skip_failed: if true, failed CRISPResso runs are skipped. Otherwise, if one fails, the program will fail.
@@ -4789,6 +4812,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
 
     returns:
         crispresso_results: dict of run_names and run_sub_htmls for display in report
+        crispresso_classification_plot_obj: plot object with classifications includign crispresso analysis
 
     """
 
@@ -4805,7 +4829,13 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
     crispresso_sub_htmls = {}
     read_completed_command_count = 0
     if os.path.isfile(crispresso_stats_file) and can_use_previous_analysis:
+        classification_plot_obj = None
         with open(crispresso_stats_file,'r') as fin:
+            classification_plot_obj_str = fin.readline().rstrip('\n')
+            if classification_plot_obj_str != "" and classification_plot_obj_str != "None":
+                classification_plot_obj = PlotObject.from_json(classification_plot_obj_str)
+            spacer_line = fin.readline()
+
             head_line = fin.readline()
             for line in fin:
                 line_els = line.strip().split()
@@ -4817,7 +4847,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
             crispresso_results = {}
             crispresso_results['run_names'] = crispresso_run_names
             crispresso_results['run_sub_htmls'] = crispresso_sub_htmls
-            return(crispresso_results)
+            return(crispresso_results,classification_plot_obj)
         else:
             logging.info('Could not recover previously-completed CRISPResso runs. Rerunning.')
 
@@ -4828,6 +4858,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
 
     CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'run',skip_failed)
 
+    all_crispresso_read_modified_data = {} #dict storing read id > modifed/unmodified
     crispresso_results = {}
     crispresso_results['run_names'] = []
     crispresso_results['run_sub_htmls'] = {}
@@ -4896,7 +4927,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
                     n_deletion_and_substitution = run_data['results']['alignment_stats']['counts_deletion_and_substitution'][ref_name]
                     n_insertion_and_deletion_and_substitution = run_data['results']['alignment_stats']['counts_insertion_and_deletion_and_substitution'][ref_name]
 
-                else:
+                else: #python 2 version
                     report_filename = run_data['report_filename']
                     report_file_loc = os.path.join(os.path.dirname(crispresso_info['output_folder']),report_filename)
                     if os.path.isfile(report_file_loc):
@@ -4928,11 +4959,96 @@ def run_and_aggregate_crispresso(root,crispresso_infos,n_processes,min_count_to_
                     mod_pct = 100*n_mod/float(n_aligned)
             new_vals = [name,cut,cut_type,cut_loc,ref_name,n_printed,n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution,cut_amp_seq]
             crispresso_info_file.write("\t".join([str(x) for x in new_vals])+"\n")
-        with open(crispresso_stats_file,'w') as fout:
-            fout.write('Run Name\tRun sub-html\n')
-            for run_name in crispresso_results['run_names']:
-                fout.write(run_name + "\t" + crispresso_results['run_sub_htmls'][run_name]+"\n")
-        return crispresso_results
+
+            if 'fastq_output' not in run_data:
+                logging.warn('Cannot read fastq output for ' + crispresso_info['name'])
+            else:
+                this_read_number = crispresso_info['name'][0:2] # either r1 or r2
+                mod_read_count = 0
+                unmod_read_count = 0
+                fastq_output = run_data['fastq_output']
+                if fastq_output.endswith('.gz'):
+                    fq_in = gzip.open(fastq_output,'rt')
+                else:
+                    fq_in = open(fastq_output,'rt')
+
+                while (1):
+                    fq_id_line   = fq_in.readline().strip()
+                    fq_seq_line  = fq_in.readline().strip()
+                    fq_plus_line = fq_in.readline()
+                    fq_qual_line = fq_in.readline().strip()
+
+                    if not fq_qual_line: break
+
+                    read_id = this_read_number + '_' + fq_id_line[1:]
+                    if 'CLASS=Reference_MODIFIED' in fq_plus_line:
+                        all_crispresso_read_modified_data[read_id] = 'M'
+                        mod_read_count += 1
+                    else:
+                        all_crispresso_read_modified_data[read_id] = 'U'
+                        unmod_read_count += 1
+                fq_in.close()
+
+                if n_mod != mod_read_count:
+                    raise Exception("Couldn't get correct number of modified reads from the fastq_output file " + fastq_output)
+
+    annotated_final_assignments_file = root + ".annotated_final_assignments"
+    annotated_final_class_counts = defaultdict(int)
+    with open(final_assignment_file,'r') as f_assignments, open(annotated_final_assignments_file,'w') as fout:
+        head = f_assignments.readline().rstrip('\n')
+        fout.write(head+"\tr1_crispresso_status\n")
+        for line in f_assignments:
+            line = line.rstrip('\n')
+            f_assignments_line_els = line.split("\t")
+            crispresso_status = 'NA'
+            this_id = 'r1_' + f_assignments_line_els[0]
+            if this_id in all_crispresso_read_modified_data:
+                if all_crispresso_read_modified_data[this_id] == 'M':
+                    crispresso_status = "short indels"
+                else:
+                    crispresso_status = "no indels"
+            if f_assignments_line_els[2] != 'Unidentified':
+                annotated_final_class_counts[f_assignments_line_els[2] + ' ' + crispresso_status] += 1
+            fout.write("%s\t%s\n"%(line, crispresso_status))
+
+    classification_plot_obj_root = root+".classificationSummary"
+    labels = sorted(list(annotated_final_class_counts.keys()))
+    values = [annotated_final_class_counts[x] for x in labels]
+    with open(classification_plot_obj_root+".txt",'w') as summary:
+        summary.write("\t".join(labels)+"\n")
+        summary.write("\t".join([str(x) for x in values])+"\n")
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    pie_values = []
+    pie_labels = []
+    for i in range(len(labels)):
+        if values[i] > 0:
+            pie_values.append(values[i])
+            pie_labels.append(labels[i]+"\n("+str(values[i])+")")
+    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+    plot_name = classification_plot_obj_root
+    plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
+    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
+
+    classification_plot_obj = PlotObject(
+            plot_name = classification_plot_obj_root,
+            plot_title = 'Read classification including CRISPResso analysis',
+            plot_label = 'CRISPResso classification<br>' + plot_count_str,
+            plot_datas = [
+                ('CRISPResso classification summary',classification_plot_obj_root + ".txt")
+                ]
+            )
+
+
+    with open(crispresso_stats_file,'w') as fout:
+        classification_plot_obj_str = classification_plot_obj.to_json()
+        fout.write(classification_plot_obj_str+"\n\n")
+
+        fout.write('Run Name\tRun sub-html\n')
+        for run_name in crispresso_results['run_names']:
+            fout.write(run_name + "\t" + crispresso_results['run_sub_htmls'][run_name]+"\n")
+    return crispresso_results, classification_plot_obj
 
 
 def getLeftRightMismatchesMDZ(mdz_str):
