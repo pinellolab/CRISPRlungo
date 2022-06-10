@@ -22,7 +22,7 @@ mpl.rcParams['pdf.fonttype'] = 42
 __version__ = "v0.0.3"
 
 def main():
-    settings = parse_settings(sys.argv)
+    settings, logger = parse_settings(sys.argv)
 
     #data structures for plots for report
     summary_plot_objects=[]  # list of PlotObjects for plotting
@@ -36,7 +36,7 @@ def main():
 
     av_read_length = get_av_read_len(settings['fastq_r1'])
     num_reads_input = get_num_reads_fastq(settings['fastq_r1'])
-    logging.info('%d reads in input'%num_reads_input)
+    logger.info('%d reads in input'%num_reads_input)
 
     cut_sites = settings['cuts']
     cut_annotations = {}
@@ -74,13 +74,14 @@ def main():
     primer_seq = None
     if settings['primer_seq']:
         #attempt to align primer to genome
+        logger.info('Finding genomic coordinates of primer %s'%(settings['primer_seq']))
         primer_aln_cmd = '%s --seed 2248 --end-to-end -x %s -c %s' %(settings['bowtie2_command'],settings['bowtie2_genome'],settings['primer_seq'])
         primer_aln_results = subprocess.check_output(primer_aln_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
         if len(primer_aln_results) > 5 and primer_aln_results[3].strip() == '1 (100.00%) aligned exactly 1 time' and len(primer_aln_results[-2].split("\t")) > 5:
             sam_line_els = primer_aln_results[-2].split("\t")
             primer_chr = sam_line_els[2]
             primer_loc = int(sam_line_els[3])
-            logging.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
+            logger.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
         primer_seq = settings['primer_seq']
 
     target_padding = settings['alignment_extension']
@@ -346,7 +347,7 @@ def main():
 
     crispresso_infos = [] #meta info about the crispresso runs
             #dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
-    logging.info('Preparing R1 reads for analysis')
+    logger.info('Preparing R1 reads for analysis')
     r1_crispresso_infos = prep_crispresso2(
                 root = settings['root']+'.CRISPResso_r1',
                 input_fastq_file = settings['fastq_r1'],
@@ -360,13 +361,14 @@ def main():
                 crispresso_quant_window_size = settings['crispresso_quant_window_size'],
                 samtools_command=settings['samtools_command'],
                 crispresso_command=settings['crispresso_command'],
+                n_processes = settings['n_processes']
                 )
     for info in r1_crispresso_infos:
         info['name'] = 'r1_'+info['name']
         crispresso_infos.append(info)
 
     if settings['fastq_r2'] is not None:
-        logging.info('Preparing R2 reads for analysis')
+        logger.info('Preparing R2 reads for analysis')
         r2_crispresso_infos = prep_crispresso2(
                     root = settings['root']+'.CRISPResso_r2',
                     input_fastq_file = settings['fastq_r2'],
@@ -380,6 +382,7 @@ def main():
                     crispresso_quant_window_size = settings['crispresso_quant_window_size'],
                     samtools_command=settings['samtools_command'],
                     crispresso_command=settings['crispresso_command'],
+                    n_processes = settings['n_processes']
                     )
 
         for info in r2_crispresso_infos:
@@ -395,7 +398,7 @@ def main():
                 can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
     if crispresso_classification_plot_obj is not None:
-        crispresso_classification_plot_obj.order=31
+        crispresso_classification_plot_obj.order=40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
     labels = ["Input Reads","Aligned Custom Targets","Aligned Genome","Fragmented Linear","Fragmented Translocations","Fragmented Large Deletions","Fragmented Large Inversions","Fragmented Unidentified"]
@@ -435,11 +438,9 @@ def main():
             )
 
 
-    logging.info('Successfully completed!')
+    logger.info('Successfully completed!')
 
     # FINISHED
-
-
 
 def parse_settings(args):
     """
@@ -558,25 +559,28 @@ def parse_settings(args):
         settings['debug'] = (settings_file_args['debug'].lower() == 'true')
         settings_file_args.pop('debug')
 
-    #logger = logging.getLogger(__name__)
+    logger = logging.getLogger('CRISPRlungo')
     logging_level = logging.INFO
     if settings['debug']:
         logging_level=logging.DEBUG
 
+    logger.setLevel(logging.DEBUG)
+
     log_formatter = logging.Formatter("%(asctime)s:%(levelname)s: %(message)s","%Y-%m-%d %H:%M:%S")
-    logging.basicConfig(
-            level = logging_level,
-            format = "%(asctime)s:%(levelname)s: %(message)s",
-            filename = settings['root']+".log",
-            filemode = 'w'
-            )
-    ch = logging.StreamHandler()
-    ch.setFormatter(log_formatter)
-    logging.getLogger().addHandler(ch)
 
-    logging.info('CRISPRlungo ' + __version__)
+    sh = logging.StreamHandler()
+    sh.setFormatter(log_formatter)
+    sh.setLevel(logging_level)
+    logger.addHandler(sh)
 
-    logging.info('Parsing settings file')
+    fh = logging.FileHandler(settings['root']+".log")
+    fh.setFormatter(log_formatter)
+    logger.addHandler(fh)
+
+
+    logger.info('CRISPRlungo ' + __version__)
+
+    logger.info('Parsing settings file')
 
     settings['keep_intermediate'] = cmd_args.keep_intermediate
     if 'keep_intermediate' in settings_file_args:
@@ -844,15 +848,15 @@ def parse_settings(args):
                 next
             if setting not in previous_settings:
                 can_use_previous_analysis = False
-                logging.info(('Not using previous analyses - got new setting %s (%s)')%(setting,settings[setting]))
+                logger.info(('Not using previous analyses - got new setting %s (%s)')%(setting,settings[setting]))
                 break
             elif str(settings[setting]) != str(previous_settings[setting]):
                 can_use_previous_analysis = False
-                logging.info(('Not using previous analyses - setting for %s has changed (%s (new) vs %s (old))')%(setting,settings[setting],previous_settings[setting]))
+                logger.info(('Not using previous analyses - setting for %s has changed (%s (new) vs %s (old))')%(setting,settings[setting],previous_settings[setting]))
                 break
 
     if can_use_previous_analysis:
-        logging.info('Repeated settings detected. Using previous analyses if completed.')
+        logger.info('Repeated settings detected. Using previous analyses if completed.')
 
     with open (settings_used_output_file,'w') as fout:
         for setting in settings:
@@ -860,7 +864,7 @@ def parse_settings(args):
 
     settings['can_use_previous_analysis'] = can_use_previous_analysis
 
-    return settings
+    return settings, logger
 
 
 def assert_dependencies(samtools_command='samtools',bowtie2_command='bowtie2',crispresso_command='CRISPResso',casoffinder_command='cas-offinder'):
@@ -875,7 +879,8 @@ def assert_dependencies(samtools_command='samtools',bowtie2_command='bowtie2',cr
 
     Raises exception if any command is not found
     """
-    logging.info('Checking dependencies')
+    logger = logging.getLogger('CRISPRlungo')
+    logger.info('Checking dependencies')
 
     # check faidx
     try:
@@ -970,7 +975,8 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
         casoffinder_cut_sites: list of off-target cleavage positions
     """
 
-    logging.info('Calculating cut positions from guide sequence using Cas-OFFinder')
+    logger = logging.getLogger('CRISPRlungo')
+    logger.info('Calculating cut positions from guide sequence using Cas-OFFinder')
 
 
     #link in genome -- it throws a seg fault if it's in the bowtie directory
@@ -997,12 +1003,12 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
         cout.write('Linking genome from %s to %s\n'%(genome,linked_genome))
         cout.write('Command used:\n===\n%s\n===\nOutput:\n===\n'%casoffinder_cmd)
 
-    logging.debug(casoffinder_cmd)
+    logger.debug(casoffinder_cmd)
     if not os.path.exists(casoffinder_output_file):
         casoffinder_result = subprocess.check_output(casoffinder_cmd,shell=True,stderr=subprocess.STDOUT)
-        logging.debug('Casoffinder output:' + casoffinder_result)
+        logger.debug('Casoffinder output:' + casoffinder_result)
     else:
-        logging.debug('Using previously-calculated offtargets')
+        logger.debug('Using previously-calculated offtargets')
 
     os.remove(linked_genome)
 
@@ -1019,12 +1025,12 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
             else: #neg strand
                 cut_loc = int(loc) - cleavage_offset + 1 + pam_len
             casoffinder_cut_sites.append(chrom+":"+str(cut_loc))
-    logging.info('Found %d cut sites'%(len(casoffinder_cut_sites)))
+    logger.info('Found %d cut sites'%(len(casoffinder_cut_sites)))
 
     cut_log = root + '.cut_sites.txt'
     with open (cut_log,'w') as fout:
         fout.write(' '.join(casoffinder_cut_sites))
-    logging.info('Wrote cut sites to ' + cut_log)
+    logger.info('Wrote cut sites to ' + cut_log)
     return casoffinder_cut_sites
 
 def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,target_padding,primer_chr ="",primer_loc=-1,primer_seq=None,add_non_primer_cut_targets=False,samtools_command='samtools',bowtie2_command='bowtie2',bowtie2_threads=1):
@@ -1064,7 +1070,8 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
             target_info[target_name]['target_cut_idx']: bp of cut in target
             target_info[target_name]['target_cut_str']: string designating the cut site, as well as the direction each side of the read comes off of the cut site e.g. w-chr1:50_chr2:60+c means that the left part of the read started on the left side (designated by the -) watson-strand of chr1:50, and the right part of the read started at chr2:60 and extended right on the crick-strand (complement of reference)
     """
-    logging.info('Making artificial targets')
+    logger = logging.getLogger('CRISPRlungo')
+    logger.info('Making artificial targets')
     target_names = []
     target_info = {}
     info_file = root + '.info'
@@ -1104,12 +1111,12 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                                 'target_cut_str':target_cut_str
                                 }
                     if read_target_count == target_count:
-                        logging.info('Using ' + str(target_count) + ' previously-created targets')
+                        logger.info('Using ' + str(target_count) + ' previously-created targets')
                         return custom_index_fasta,target_names,target_info
                     else:
-                        logging.info('In attempting to recover previuosly-created custom targets, expecting ' + str(target_count) + ' targets, but only read ' + str(read_target_count) + ' from ' + target_list_file + '. Recreating.')
+                        logger.info('In attempting to recover previuosly-created custom targets, expecting ' + str(target_count) + ' targets, but only read ' + str(read_target_count) + ' from ' + target_list_file + '. Recreating.')
                 else:
-                    logging.info('Could not recover previously-created targets. Recreating.')
+                    logger.info('Could not recover previously-created targets. Recreating.')
 
     fasta_cache = {}
 
@@ -1549,14 +1556,14 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
 
 
     custom_index_fasta = root + '.fa'
-    logging.info('Printing ' + str(len(target_names)) + ' targets to custom index (' + custom_index_fasta + ')')
+    logger.info('Printing ' + str(len(target_names)) + ' targets to custom index (' + custom_index_fasta + ')')
     with open(custom_index_fasta,'w') as fout:
         for i in range(len(target_names)):
             fout.write('>'+target_names[i]+'\n'+target_info[target_names[i]]['sequence']+'\n')
 
-    logging.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
+    logger.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
     this_command = bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta
-    logging.debug('Bowtie build command: ' + this_command)
+    logger.debug('Bowtie build command: ' + this_command)
     index_result = subprocess.check_output(this_command, shell=True,stderr=subprocess.STDOUT)
 
     target_list_file = root+".txt"
@@ -1615,11 +1622,11 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
                 post_dedup_count = int(post_dedup_count_str)
                 post_dedup_read_count = int(post_dedup_read_count_str)
     if tot_read_count != -1:
-        logging.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
+        logger.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
         return(fastq_r1_dedup,fastq_r2_dedup, tot_read_count, count_with_regex, post_dedup_count, post_dedup_read_count)
 
     #otherwise perform deduplication (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
-    logging.info('Deduplicating input fastqs')
+    logger.info('Deduplicating input fastqs')
     
     #first, create the regex that matches UMIs
     umi_regex_string = umi_regex
@@ -1724,8 +1731,8 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
     umi_count = len(umi_list)
 #    print("umi_list: " + str(umi_list))
 
-    logging.info('Read %d reads'%tot_read_count)
-    logging.info("Processed " + str(umi_count) + " UMIs")
+    logger.info('Read %d reads'%tot_read_count)
+    logger.info("Processed " + str(umi_count) + " UMIs")
     if umi_count == 1 and umi_list[0] == '':
         raise Exception("Error: only the empty barcode '' was found.")
 
@@ -1760,10 +1767,10 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
         fout.write('UMI\tCount\n')
         for umi in sorted(umi_key_counts):
             fout.write(umi + "\t" + str(umi_key_counts[umi]) + "\n")
-        logging.info('Wrote UMI counts to ' + root+".umiCounts.txt")
+        logger.info('Wrote UMI counts to ' + root+".umiCounts.txt")
 
 
-    logging.info('Wrote %d deduplicated reads'%post_dedup_count)
+    logger.info('Wrote %d deduplicated reads'%post_dedup_count)
     with open(dedup_stats_file,'w') as fout:
         fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count","count_with_regex","post_dedup_count","post_dedup_read_count"])+"\n")
         fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count,count_with_regex,post_dedup_count,post_dedup_read_count]])+"\n")
@@ -1797,13 +1804,13 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
             head_line = fin.readline()
             line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) > 3:
-                logging.info('Using previously-generated fastqs with UMIs')
+                logger.info('Using previously-generated fastqs with UMIs')
                 (fastq_r1_dedup,fastq_r2_dedup,tot_read_count_str) = line_els
                 tot_read_count = int(tot_read_count_str)
 
     #otherwise perform umi adding (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
     if tot_read_count == -1:
-        logging.info('Adding UMIs to input fastqs')
+        logger.info('Adding UMIs to input fastqs')
 
         tot_read_count = 0
 
@@ -1866,7 +1873,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
         if tot_read_count == 0:
             raise Exception("UMI command failed. Got no reads from " + fastq_r1 + " and " + fastq_r2 )
 
-        logging.info('Added UMIs fo %d reads'%tot_read_count)
+        logger.info('Added UMIs fo %d reads'%tot_read_count)
         with open(dedup_stats_file,'w') as fout:
             fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count"])+"\n")
             fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count]])+"\n")
@@ -1901,6 +1908,7 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
         count_post_filtering: number of reads post filtering
         filter_on_primer_plot_obj: plot object showing number of reads filtered
     """
+    logger = logging.getLogger('CRISPRlungo')
 
     filter_stats_file = root + ".info"
     fastq_r1_filtered = None
@@ -1929,13 +1937,13 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
                 filter_on_primer_plot_obj = PlotObject.from_json(filter_on_primer_plot_obj_str)
 
         if tot_read_count != -1:
-            logging.info('Using previously-filtered fastqs with %d reads'%count_post_filtering)
+            logger.info('Using previously-filtered fastqs with %d reads'%count_post_filtering)
             return(fastq_r1_filtered, fastq_r2_filtered, tot_read_count, count_with_primer_match, count_with_primer_post_match, count_post_filtering,filter_on_primer_plot_obj)
         else:
-            logging.info('Could not recover previously-filtered files. Reanalyzing.')
+            logger.info('Could not recover previously-filtered files. Reanalyzing.')
 
     #otherwise perform filtering
-    logging.info('Filtering input fastqs on primer sequence')
+    logger.info('Filtering input fastqs on primer sequence')
 
     tot_read_count = 0
     count_with_primer_match = 0
@@ -2046,8 +2054,8 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     f1_out.close()
     f1_in.close()
 
-    logging.info('Read %d reads'%tot_read_count)
-    logging.info('Wrote %d filtered reads'%count_post_filtering)
+    logger.info('Read %d reads'%tot_read_count)
+    logger.info('Wrote %d filtered reads'%count_post_filtering)
 
     #plot summary
     filter_labels = ['Discarded','Retained']
@@ -2060,10 +2068,10 @@ def filter_on_primer_seq(root,fastq_r1,fastq_r2,primer_seq,primer_min_bp_match_p
     ax = plt.subplot(111)
     pie_values = []
     pie_labels = []
-    for i in range(len(source_labels)):
+    for i in range(len(filter_labels)):
         if values[i] > 0:
             pie_values.append(values[i])
-            pie_labels.append(source_labels[i]+"\n("+str(values[i])+")")
+            pie_labels.append(filter_labels[i]+"\n("+str(values[i])+")")
     ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
     ax.set_title('Read filtering based on primer presence')
     plt.savefig(filter_on_primer_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -2119,7 +2127,6 @@ def reverse_complement_cut_str(target_cut_str):
     new_right_strand = 'w' if left_strand == 'c' else 'c'
 
     return('%s%s%s~%s%s%s'%(new_left_strand,right_dir,right_pos,left_pos,left_dir,new_right_strand))
-    
 
 def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=10,arm_min_matched_start_bases=5,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
     """
@@ -2152,7 +2159,8 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         tlen_plot_object: plot object showing insert sizes for paired alignments
     """
 
-    logging.info('Aligning %s to %s'%(reads_name,reference_name.lower()))
+    logger = logging.getLogger('CRISPRlungo')
+    logger.info('Aligning %s to %s'%(reads_name,reference_name.lower()))
 
     mapped_bam_file = root + ".bam"
 
@@ -2189,17 +2197,17 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                     r1_aln_count = r1_count-unmapped_r1_count
                     r2_aln_count = r2_count-unmapped_r2_count
                     if r2_count > -1:
-                        logging.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,reads_name,read_count,reference_name.lower()))
+                        logger.info('Using previously-processed alignment of %d/%d R1 and %d/%d R2 %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,reads_name,read_count,reference_name.lower()))
                     else:
-                        logging.info('Using previously-processed alignment of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
+                        logger.info('Using previously-processed alignment of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
                     return r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file, unmapped_fastq_r2_file, aligned_count, mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj
                 else:
-                    logging.info('Could not recover previously-analyzed alignments. Reanalyzing.')
+                    logger.info('Could not recover previously-analyzed alignments. Reanalyzing.')
 
 
     bowtie_log = root + '.bowtie2Log'
     if fastq_r2 is not None: #paired-end reads
-        logging.info('Aligning paired reads to %s using %s'%(reference_name.lower(),bowtie2_command))
+        logger.info('Aligning paired reads to %s using %s'%(reference_name.lower(),bowtie2_command))
         aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -1 {fastq_r1} -2 {fastq_r2} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
                 bowtie2_threads=bowtie2_threads,
@@ -2208,18 +2216,18 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 fastq_r2=fastq_r2,
                 samtools_command=samtools_command,
                 mapped_bam_file=mapped_bam_file)
-        logging.debug(aln_command)
+        logger.debug(aln_command)
         aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
         if 'error' in aln_result.lower():
-            logging.error('Error found while running command:\n'+aln_command+"\nOutput: "+aln_result)
+            logger.error('Error found while running command:\n'+aln_command+"\nOutput: "+aln_result)
             raise Exception('Alignment error: ' + aln_result)
 
-        logging.debug(aln_result)
+        logger.debug(aln_result)
         with open (bowtie_log,'w') as lout:
             lout.write('\nAligning paired reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name.lower(),aln_command,aln_result))
     #unpaired reads
     else:
-        logging.info('Aligning single-end reads to %s using %s'%(reference_name.lower(),bowtie2_command))
+        logger.info('Aligning single-end reads to %s using %s'%(reference_name.lower(),bowtie2_command))
         aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --end-to-end --threads {bowtie2_threads} -x {bowtie2_reference} -U {fastq_r1} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
                 bowtie2_threads=bowtie2_threads,
@@ -2227,17 +2235,17 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
                 fastq_r1=fastq_r1,
                 samtools_command=samtools_command,
                 mapped_bam_file=mapped_bam_file)
-        logging.debug(aln_command)
+        logger.debug(aln_command)
         aln_result = subprocess.check_output(aln_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
         if 'error' in aln_result.lower():
-            logging.error('Error found while running command:\n'+aln_command+"\nOutput: "+aln_result)
+            logger.error('Error found while running command:\n'+aln_command+"\nOutput: "+aln_result)
             raise Exception('Alignment error: ' + aln_result)
 
-        logging.debug(aln_result)
+        logger.debug(aln_result)
         with open (bowtie_log,'w') as lout:
             lout.write('\nAligning single-end reads to %s\n===\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(reference_name.lower(),aln_command,aln_result))
 
-    logging.info('Analyzing reads aligned to %s'%(reference_name.lower()))
+    logger.info('Analyzing reads aligned to %s'%(reference_name.lower()))
 
     #analyze alignments
     # - if read aligned, store read id and loc in dict r1_assignments
@@ -2514,9 +2522,9 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
     r1_aln_count = r1_count-unmapped_r1_count
     r2_aln_count = r2_count-unmapped_r2_count
     if r2_aln_count > 0:
-        logging.info('Finished analysis of %d/%d R1 and %d/%d R2 %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,reads_name,read_count,reference_name.lower()))
+        logger.info('Finished analysis of %d/%d R1 and %d/%d R2 %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,r2_aln_count,r2_count,reads_name,read_count,reference_name.lower()))
     else:
-        logging.info('Finished analysis of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
+        logger.info('Finished analysis of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
 
 def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,r1_r2_support_max_distance=100000,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True,discard_reads_without_r2_support=True,can_use_previous_analysis=False):
@@ -2551,6 +2559,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         r2_source_plot_obj: plot for R2 sources (genome/custom/frags)
         r2_classification_plot_obj: plot for R2 assignments (linear, translocation, etc)
     """
+    logger = logging.getLogger('CRISPRlungo')
 
     final_file = root + '.final_assignments'
     info_file = root + '.info'
@@ -2652,19 +2661,19 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                                 r1_cut_counts_for_crispresso[key] += 1
 
                 if previous_total_read_count == read_total_read_count:
-                    logging.info('Using previously-processed assignments for ' + str(final_processed_count) + '/' + str(read_total_read_count) + ' total reads')
+                    logger.info('Using previously-processed assignments for ' + str(final_processed_count) + '/' + str(read_total_read_count) + ' total reads')
                     return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
                 else:
-                    logging.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
+                    logger.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
 
-    logging.info('Making final read assignments')
+    logger.info('Making final read assignments')
 
     sorted_r1_file = root + '.r1.sorted'
     sorted_r2_file = root + '.r2.sorted'
     final_file_tmp = root + '.final_assignments.tmp'
     cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | LC_COLLATE=C sort > ' + sorted_r1_file
 #    cat_and_sort_cmd = 'cat ' + " ".join(r1_assignment_files) + ' | sort > ' + sorted_r1_file
-    logging.debug('r1 cat command: ' + str(cat_and_sort_cmd))
+    logger.debug('r1 cat command: ' + str(cat_and_sort_cmd))
     cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
 
     #if single end
@@ -2673,7 +2682,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
     else:
         #cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | sort > ' + sorted_r2_file
         cat_and_sort_cmd = 'cat ' + " ".join(r2_assignment_files) + ' | LC_COLLATE=C sort > ' + sorted_r2_file
-        logging.debug('r2 cat command: ' + str(cat_and_sort_cmd))
+        logger.debug('r2 cat command: ' + str(cat_and_sort_cmd))
         cat_and_sort_result = subprocess.check_output(cat_and_sort_cmd, shell=True,stderr=subprocess.STDOUT)
 
     #first pass through file:
@@ -3323,7 +3332,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
             fout.write("%s\t%s%s\n"%(line,r1_print_str,r2_print_str))
 
-    logging.info('Processed %d reads. Of these,\n    %d duplicate reads were removed\n    %d reads were discarded because they were not supported by R2\n  %d reads were used for final calculations'%(final_total_count,final_duplicate_count, final_nonsupporting_count_removed, final_processed_count))
+    logger.info('Processed %d reads. Of these,\n    %d duplicate reads were removed\n    %d reads were discarded because they were not supported by R2\n  %d reads were used for final calculations'%(final_total_count,final_duplicate_count, final_nonsupporting_count_removed, final_processed_count))
 
 
     final_observed_cuts_count = 0
@@ -3353,7 +3362,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         r1_uncut_frag_counts[cut_key],
                         cut_annotation))
 
-        logging.info('Wrote cut report ' + r1_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
+        logger.info('Wrote cut report ' + r1_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
     else:
         #paired cut report
         with open (r1_cut_report,'w') as r1_cut_out, open(r2_cut_report,'w') as r2_cut_out:
@@ -3387,7 +3396,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         r2_uncut_frag_counts[cut_key],
                         cut_annotation))
 
-        logging.info('Wrote cut reports ' + r1_cut_report + ' ' + r2_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
+        logger.info('Wrote cut reports ' + r1_cut_report + ' ' + r2_cut_report + ' for ' + str(final_observed_cuts_count) + ' cuts')
 
     def write_translocation_reports(read_num,translocation_cut_counts,fragment_translocation_cut_counts):
         tx_keys = sorted(translocation_cut_counts.keys())
@@ -3405,14 +3414,14 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     #only write if counts are > 0
                     if translocation_cut_counts[tx_key_1][tx_key_2] > 0:
                         fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,translocation_cut_counts[tx_key_1][tx_key_2]))
-        logging.info('Wrote ' + read_num + ' translocation list ' + tx_list_report)
+        logger.info('Wrote ' + read_num + ' translocation list ' + tx_list_report)
 
         tx_report = root + "." + read_num + "_translocation_table.txt"
         with open (tx_report,'w') as fout:
             fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
             for tx_key in tx_keys:
                 fout.write(tx_key+"\t"+"\t".join([str(translocation_cut_counts[tx_key][x]) for x in tx_keys])+"\n")
-        logging.info('Wrote ' + read_num + ' translocation table ' + tx_report)
+        logger.info('Wrote ' + read_num + ' translocation table ' + tx_report)
 
         tx_ontarget_report = root + '.' + read_num + "_ontarget_translocation_table.txt"
         on_targets = sorted([x for x in cut_annotations if cut_annotations[x] == 'On-target'])
@@ -3431,7 +3440,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 fout.write('Translocations\t'+"\t".join(on_to_off_target_list)+"\n")
                 for tx_key in on_targets:
                     fout.write(tx_key+"\t"+"\t".join([str(translocation_cut_counts[tx_key][x]) if tx_key in translocation_cut_counts else str(0) for x in on_to_off_target_list])+"\n")
-            logging.info('Wrote ' + read_num + ' on-target translocation table ' + tx_ontarget_report)
+            logger.info('Wrote ' + read_num + ' on-target translocation table ' + tx_ontarget_report)
 
         # fragment translocations
         tx1_keys = sorted(fragment_translocation_cut_counts.keys())
@@ -3457,7 +3466,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     if fragment_translocation_cut_counts[tx_key_1][tx_key_2] > 0:
                         fout.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,fragment_translocation_cut_counts[tx_key_1][tx_key_2],tx_classification))
                     tx2_keys[tx_key_2] += 1
-        logging.info('Wrote ' + read_num + ' fragment translocation list ' + tx_list_report)
+        logger.info('Wrote ' + read_num + ' fragment translocation list ' + tx_list_report)
 
         tx_report = root + "." + read_num + "_fragment_translocation_table.txt"
         tx2_keys_to_report = sorted(tx2_keys)
@@ -3465,7 +3474,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             fout.write('Translocations\t'+"\t".join(tx2_keys_to_report)+"\n")
             for tx_key in tx1_keys:
                 fout.write(tx_key+"\t"+"\t".join([str(fragment_translocation_cut_counts[tx_key][x]) if tx_key in fragment_translocation_cut_counts else str(0) for x in tx2_keys_to_report])+"\n")
-        logging.info('Wrote ' + read_num + ' fragment translocation table ' + tx_report)
+        logger.info('Wrote ' + read_num + ' fragment translocation table ' + tx_report)
 
         tx_ontarget_report = root + "." + read_num + "_ontarget_fragment_translocation_table.txt"
         on_targets = sorted([x for x in cut_annotations if cut_annotations[x] == 'On-target'])
@@ -3487,7 +3496,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                 fout.write('Translocations\t'+"\t".join(on_targets_2_list)+"\n")
                 for tx_key in on_targets_1_to_report:
                     fout.write(tx_key+"\t"+"\t".join([str(fragment_translocation_cut_counts[tx_key][x]) if tx_key in fragment_translocation_cut_counts else str(0) for x in on_targets_2_list])+"\n")
-            logging.info('Wrote ' + read_num + ' on-target fragment translocation table ' + tx_ontarget_report)
+            logger.info('Wrote ' + read_num + ' on-target fragment translocation table ' + tx_ontarget_report)
 
     #r1 translocations
     write_translocation_reports('r1',r1_translocation_cut_counts,r1_fragment_translocation_cut_counts)
@@ -3839,7 +3848,9 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
         unidentified_count: number of reads that couldn't be identified as translocations
         frags_plot_obj: plot object summarizing fragments
     """
+    logger = logging.getLogger('CRISPRlungo')
     info_file = root + '.info'
+
     if os.path.isfile(info_file) and can_use_previous_analysis:
         frags_mapped_count = -1
         with open (info_file,'r') as fin:
@@ -3862,12 +3873,12 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     frags_plot_obj = PlotObject.from_json(frags_plot_obj_str)
 
                 if frags_mapped_count >= 0:
-                    logging.info('Using previously-processed fragment analysis for %d mapped fragments (%d linear reads, %d translocations, %d large deletions, %d large inversions, and %d unidentified reads)'%(frags_mapped_count,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count))
+                    logger.info('Using previously-processed fragment analysis for %d mapped fragments (%d linear reads, %d translocations, %d large deletions, %d large inversions, and %d unidentified reads)'%(frags_mapped_count,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count))
                     return (r1_assignments_file,r2_assignments_file,linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count,frags_plot_obj)
                 else:
-                    logging.info('Could not recover previously-analyzed fragments. Reanalyzing.')
+                    logger.info('Could not recover previously-analyzed fragments. Reanalyzing.')
 
-    logging.info('Creating read fragments')
+    logger.info('Creating read fragments')
 
     unmapped_ids = {}
     unmapped_id = 0
@@ -3928,7 +3939,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     line_id = unmapped_reads.readline()
 
     number_unmapped_reads_chopped = unmapped_id
-    logging.info('Created chopped reads for ' + str(number_unmapped_reads_chopped) + ' reads')
+    logger.info('Created chopped reads for ' + str(number_unmapped_reads_chopped) + ' reads')
 
     frags_per_unaligned_read_root = root + ".fragsPerUnalignedRead"
     keys = sorted(frags_per_read.keys())
@@ -3964,15 +3975,16 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
     chopped_bowtie_log = root + ".mapped.bowtie2Log"
     chopped_aln_command = '%s --seed 2248 --sam-no-qname-trunc --reorder --no-hd --threads %d --end-to-end -x %s -U %s -S %s' %(bowtie2_command,bowtie2_threads,bowtie2_genome,unmapped_frag_file,mapped_chopped_sam_file)
 
-    logging.info('Aligning chopped reads')
+    logger = logging.getLogger('CRISPRlungo')
+    logger.info('Aligning chopped reads')
 
-    logging.debug(chopped_aln_command)
+    logger.debug(chopped_aln_command)
     aln_result = subprocess.check_output(chopped_aln_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
-    logging.debug('Alignment of chopped fragments to genome: ' + aln_result)
+    logger.debug('Alignment of chopped fragments to genome: ' + aln_result)
     with open (chopped_bowtie_log,'w') as lout:
         lout.write('Alignment of chopped fragments to genome\nCommand used:\n===\n%s\n===\nOutput:\n===\n%s'%(chopped_aln_command,aln_result))
 
-    logging.info('Analyzing chopped reads')
+    logger.info('Analyzing chopped reads')
 
     def analyze_curr_id_vals(curr_id_vals,curr_id_aln_pos,fragment_size,fragment_step_size,max_frags,min_seen_frag_cutoff=2):
         """
@@ -4424,7 +4436,7 @@ def chop_reads(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_r2,bowtie2_geno
                     af2.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(curr_id,'Fragmented',curr_classification,curr_annotation,curr_loc,curr_cuts))
             #done with last one
 
-    logging.info("Found %d linear reads, %d translocations, %d large deletions, %d large inversions, and %d unidentified reads"%(linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count))
+    logger.info("Found %d linear reads, %d translocations, %d large deletions, %d large inversions, and %d unidentified reads"%(linear_count,translocation_count,large_deletion_count,large_inversion_count,unidentified_count))
 
     frags_aligned_chrs_root = root + ".chrs"
     keys = sorted(frags_mapped_chrs.keys())
@@ -4524,7 +4536,9 @@ def prep_unmapped_assignments(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_
         unmapped_r1_count: number of unmapped R1 reads
         unmapped_r2_count: number of unmapped R2 reads
     """
+    logger = logging.getLogger('CRISPRlungo')
     info_file = root + '.info'
+
     if os.path.isfile(info_file) and can_use_previous_analysis:
         unmapped_r1_count = 0
         unmapped_r2_count = 0
@@ -4539,12 +4553,12 @@ def prep_unmapped_assignments(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_
                 unmapped_r2_count  = int(unmapped_r2_count_str)
 
                 if unmapped_r1_count >= 0 or unmapped_r2_count >= 0:
-                    logging.info('Using previously-created assignments for %s unmapped R1 reads and %s unmapped R2 reads'%(unmapped_r1_count, unmapped_r2_count))
+                    logger.info('Using previously-created assignments for %s unmapped R1 reads and %s unmapped R2 reads'%(unmapped_r1_count, unmapped_r2_count))
                     return (r1_assignments_file,r2_assignments_file,unmapped_r1_count, unmapped_r2_count)
                 else:
-                    logging.info('Could not recover previously-created assignments. Recreating.')
+                    logger.info('Could not recover previously-created assignments. Recreating.')
 
-    logging.info('Creating assignments for unmapped reads')
+    logger.info('Creating assignments for unmapped reads')
 
     unmapped_str = "%s\t%s\t%s\t%s\t%s"%('Unmapped','Unidentified','u+*:*','*:*','*:*')
 
@@ -4602,12 +4616,12 @@ def prep_unmapped_assignments(root,unmapped_reads_fastq_r1,unmapped_reads_fastq_
         fout.write("\t".join([str(x) for x in [r1_assignments_file,r2_assignments_file,unmapped_r1_count,unmapped_r2_count]])+"\n")
 
 
-    logging.info('Finished creation of assignments for %s unaligned R1 reads and %s unaligned R2 reads'%(unmapped_r1_count, unmapped_r2_count))
+    logger.info('Finished creation of assignments for %s unaligned R1 reads and %s unaligned R2 reads'%(unmapped_r1_count, unmapped_r2_count))
 
     return (r1_assignments_file,r2_assignments_file,unmapped_r1_count,unmapped_r2_count)
 
 
-def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,crispresso_quant_window_size,samtools_command,crispresso_command):
+def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,av_read_length,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,crispresso_quant_window_size,samtools_command,crispresso_command,n_processes=1):
     """
     Prepares reads for analysis by crispresso2
     Frequently-aligned locations with a min number of reads (crispresso_min_count) are identified
@@ -4626,12 +4640,14 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         crispresso_quant_window_size: number of bases on each side of the cut site in which to consider editing events
         samtools_command: location of samtools to run
         crispresso_command: location of crispresso to run
+        n_processes: number of processes to run CRISPResso commands on
 
     returns:
         crispresso_infos: dict containing metadata about each crispresso run
             #dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
     """
-    logging.info('Preparing reads for analysis by CRISPResso2')
+    logger = logging.getLogger('CRISPRlungo')
+    logger.info('Preparing reads for analysis by CRISPResso2')
 
     chrom_lens = {}
     chroms = []
@@ -4779,8 +4795,11 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             quant_window_coords = "%d-%d"%(quant_window_start, quant_window_start + 2*(crispresso_quant_window_size) - 1)
 
         reads_file = os.path.join(data_dir,cut_name+".fq")
+        processes_str = ""
+        if n_processes > 4:
+            processes_str = "--n_processes 4"
         output_folder = os.path.join(data_dir,'CRISPResso_on_'+cut_names[cut])
-        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s --fastq_output --quantification_window_coordinates %s --no_rerun --n_processes 4 &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,amp_seq,reads_file,quant_window_coords,reads_file)
+        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s --fastq_output --quantification_window_coordinates %s %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,amp_seq,reads_file,quant_window_coords,processes_str,reads_file)
 
         crispresso_infos.append({
                 "cut":cut,
@@ -4815,7 +4834,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
         crispresso_classification_plot_obj: plot object with classifications includign crispresso analysis
 
     """
-
+    logger = logging.getLogger('CRISPRlungo')
     crispresso_stats_file = root + ".info"
 
     crispresso_commands = []
@@ -4843,17 +4862,17 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
                 crispresso_sub_htmls[line_els[0]] = line_els[1]
                 read_completed_command_count += 1
         if read_completed_command_count == expected_completed_command_count:
-            logging.info('Using %d previously-completed CRISPResso runs'%read_completed_command_count)
+            logger.info('Using %d previously-completed CRISPResso runs'%read_completed_command_count)
             crispresso_results = {}
             crispresso_results['run_names'] = crispresso_run_names
             crispresso_results['run_sub_htmls'] = crispresso_sub_htmls
             return(crispresso_results,classification_plot_obj)
         else:
-            logging.info('Could not recover previously-completed CRISPResso runs. Rerunning.')
+            logger.info('Could not recover previously-completed CRISPResso runs. Rerunning.')
 
 
     #otherwise run crispresso runs
-    logging.info('Running and analyzing ' + str(len(crispresso_infos)) + ' alignments using CRISPResso2')
+    logger.info('Running and analyzing ' + str(len(crispresso_infos)) + ' alignments using CRISPResso2')
 
 
     CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'run',skip_failed)
@@ -4864,10 +4883,10 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
     crispresso_results['run_sub_htmls'] = {}
     crispresso_command_file = root + '.commands.txt'
     crispresso_info_file = root + '.summary.txt'
-    with open(crispresso_info_file,'w') as crispresso_info_file, open(crispresso_command_file,'w') as crispresso_command_file:
-        crispresso_info_file.write('name\tcut_annotation\tcut_type\tcut_location\treference\treads_printed\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\treads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\treads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\tamplicon_sequence\n')
+    with open(crispresso_info_file,'w') as crispresso_info_fh, open(crispresso_command_file,'w') as crispresso_command_fh:
+        crispresso_info_fh.write('name\tcut_annotation\tcut_type\tcut_location\treference\treads_printed\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\treads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\treads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\tamplicon_sequence\n')
         for crispresso_info in crispresso_infos:
-            crispresso_command_file.write(crispresso_info['command'])
+            crispresso_command_fh.write(crispresso_info['command'])
             name = crispresso_info['name']
             cut = crispresso_info['cut']
             cut_type = crispresso_info['type']
@@ -4899,7 +4918,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
                 run_data = CRISPRessoShared.load_crispresso_info(crispresso_info['output_folder'])
 
             except:
-                logging.debug('Could not load CRISPResso run information from ' + crispresso_info['name'] + ' at ' + crispresso_info['output_folder'])
+                logger.debug('Could not load CRISPResso run information from ' + crispresso_info['name'] + ' at ' + crispresso_info['output_folder'])
             else:
                 #if running crispresso python 3
                 if 'running_info' in run_data:
@@ -4958,10 +4977,10 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
                     unmod_pct = 100*n_unmod/float(n_aligned)
                     mod_pct = 100*n_mod/float(n_aligned)
             new_vals = [name,cut,cut_type,cut_loc,ref_name,n_printed,n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution,cut_amp_seq]
-            crispresso_info_file.write("\t".join([str(x) for x in new_vals])+"\n")
+            crispresso_info_fh.write("\t".join([str(x) for x in new_vals])+"\n")
 
             if 'fastq_output' not in run_data:
-                logging.warn('Cannot read fastq output for ' + crispresso_info['name'])
+                logger.warn('Cannot read fastq output for ' + crispresso_info['name'])
             else:
                 this_read_number = crispresso_info['name'][0:2] # either r1 or r2
                 mod_read_count = 0
@@ -5367,23 +5386,24 @@ def make_report(report_file,report_name,crisprlungo_folder,
             crispresso_run_names,crispresso_sub_html_files,
             summary_plot_objects=[]
         ):
-        """
-        Makes an HTML report for a CRISPRlungo run
+    """
+    Makes an HTML report for a CRISPRlungo run
 
-        Parameters:
-        report_file: path to the output report
-        report_name: description of report type to be shown at top of report
-        crisprlungo_folder (string): absolute path to the crisprlungo output
+    Parameters:
+    report_file: path to the output report
+    report_name: description of report type to be shown at top of report
+    crisprlungo_folder (string): absolute path to the crisprlungo output
 
-        crispresso_run_names (arr of strings): names of crispresso runs
-        crispresso_sub_html_files (dict): dict of run_name->file_loc
-        
-        summary_plot_objects (list): list of PlotObjects to plot
-        """
+    crispresso_run_names (arr of strings): names of crispresso runs
+    crispresso_sub_html_files (dict): dict of run_name->file_loc
 
-        ordered_plot_objects = sorted(summary_plot_objects,key=lambda x: x.order)
-        
-        html_str = """
+    summary_plot_objects (list): list of PlotObjects to plot
+    """
+
+    logger = logging.getLogger('CRISPRlungo')
+    ordered_plot_objects = sorted(summary_plot_objects,key=lambda x: x.order)
+
+    html_str = """
 <!doctype html>
 <html lang="en">
   <head>
@@ -5416,42 +5436,42 @@ body {
     <h1 class='display-3'>CRISPRlungo</h1><hr><h2>"""+report_name+"""</h2>
     </div>
 """
-        data_path = ""
-        if len(crispresso_run_names) > 0:
-            run_string = """<div class='card text-center mb-2'>
-              <div class='card-header'>
-                <h5>CRISPResso Output</h5>
-              </div>
-              <div class='card-body p-0'>
-                <div class="list-group list-group-flush">
-                """
-            for crispresso_run_name in crispresso_run_names:
-                crispresso_run_names,crispresso_sub_html_files,
-                run_string += "<a href='"+data_path+crispresso_sub_html_files[crispresso_run_name]+"' class='list-group-item list-group-item-action'>"+crispresso_run_name+"</a>\n"
-            run_string += "</div></div></div>"
-            html_str += run_string
+    data_path = ""
+    if len(crispresso_run_names) > 0:
+        run_string = """<div class='card text-center mb-2'>
+          <div class='card-header'>
+            <h5>CRISPResso Output</h5>
+          </div>
+          <div class='card-body p-0'>
+            <div class="list-group list-group-flush">
+            """
+        for crispresso_run_name in crispresso_run_names:
+            crispresso_run_names,crispresso_sub_html_files,
+            run_string += "<a href='"+data_path+crispresso_sub_html_files[crispresso_run_name]+"' class='list-group-item list-group-item-action'>"+crispresso_run_name+"</a>\n"
+        run_string += "</div></div></div>"
+        html_str += run_string
 
-        for plot_obj in ordered_plot_objects:
-            plot_str = "<div class='card text-center mb-2'>\n\t<div class='card-header'>\n"
-            plot_str += "<h5>"+plot_obj.title+"</h5>\n"
-            plot_str += "</div>\n"
-            plot_str += "<div class='card-body'>\n"
-            plot_str += "<a href='"+data_path+plot_obj.name+".pdf'><img src='"+data_path + plot_obj.name + ".png' width='80%' ></a>\n"
-            plot_str += "<label>"+plot_obj.label+"</label>\n"
-            for (plot_data_label,plot_data_path) in plot_obj.datas:
-                plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n";
-            plot_str += "</div></div>\n";
-            html_str += plot_str
+    for plot_obj in ordered_plot_objects:
+        plot_str = "<div class='card text-center mb-2'>\n\t<div class='card-header'>\n"
+        plot_str += "<h5>"+plot_obj.title+"</h5>\n"
+        plot_str += "</div>\n"
+        plot_str += "<div class='card-body'>\n"
+        plot_str += "<a href='"+data_path+plot_obj.name+".pdf'><img src='"+data_path + plot_obj.name + ".png' width='80%' ></a>\n"
+        plot_str += "<label>"+plot_obj.label+"</label>\n"
+        for (plot_data_label,plot_data_path) in plot_obj.datas:
+            plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n";
+        plot_str += "</div></div>\n";
+        html_str += plot_str
 
-        html_str += """
-</div>
-</div>
-</div>
-     </body>
+    html_str += """
+                </div>
+            </div>
+        </div>
+    </body>
 </html>
 """
-        with open(report_file,'w') as fo:
-            fo.write(html_str)
-        logging.info('Wrote ' + report_file)
+    with open(report_file,'w') as fo:
+        fo.write(html_str)
+    logger.info('Wrote ' + report_file)
 
 main()

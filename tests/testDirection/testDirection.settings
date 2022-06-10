@@ -1,8 +1,8 @@
 fastq_r1	input.fq
 genome	/data/pinello/COMMON_DATA/REFERENCE_GENOMES/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome.fa
 cut_sites	chr5:51113396 chr2:60495267 chr11:63955676 chr8:140143024 chr8:87700789 chr13:30199219 chrX:101733826 chr2:20589473 chr2:60498373 chr2:31377611 chr5:149836966 chr3:52473572 chr12:13274273
-bowtie2_threads	10
 n_processes	20
 primer_seq	GGGCAGCCCATT
 arm_min_seen_bases	5
 arm_min_matched_start_bases	5
+perform_unbiased_analysis	True
