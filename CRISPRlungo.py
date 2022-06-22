@@ -65,24 +65,16 @@ def main():
         for cut_site in casoffinder_cut_sites:
             cut_annotations[cut_site] = 'Casoffinder'
 
-    primer_chr = ""
-    primer_loc = -1
-    if settings['primer_site']:
-        primer_info = settings['primer_site'].split("_")
-        primer_chr = primer_info[0]
-        primer_loc = int(primer_info[1])
-    primer_seq = None
-    if settings['primer_seq']:
-        #attempt to align primer to genome
-        logger.info('Finding genomic coordinates of primer %s'%(settings['primer_seq']))
-        primer_aln_cmd = '%s --seed 2248 --end-to-end -x %s -c %s' %(settings['bowtie2_command'],settings['bowtie2_genome'],settings['primer_seq'])
-        primer_aln_results = subprocess.check_output(primer_aln_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
-        if len(primer_aln_results) > 5 and primer_aln_results[3].strip() == '1 (100.00%) aligned exactly 1 time' and len(primer_aln_results[-2].split("\t")) > 5:
-            sam_line_els = primer_aln_results[-2].split("\t")
-            primer_chr = sam_line_els[2]
-            primer_loc = int(sam_line_els[3])
-            logger.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
-        primer_seq = settings['primer_seq']
+    primer_seq = settings['primer_seq']
+    primer_chr, primer_loc, primer_is_genomic = prep_primer_info(
+            root = settings['root']+'.primerInfo',
+            primer_site = settings['primer_site'],
+            primer_seq = primer_seq,
+            bowtie2_command = settings['bowtie2_command'],
+            bowtie2_genome = settings['bowtie2_genome'],
+            can_use_previous_analysis = settings['can_use_previous_analysis']
+            )
+
 
     target_padding = settings['alignment_extension']
     target_length = av_read_length
@@ -103,9 +95,11 @@ def main():
                 primer_loc=primer_loc,
                 primer_seq=primer_seq,
                 add_non_primer_cut_targets=settings['add_non_primer_cut_targets'],
+                primer_is_genomic=primer_is_genomic,
                 samtools_command=settings['samtools_command'],
                 bowtie2_command=settings['bowtie2_command'],
-                bowtie2_threads = settings['n_processes']
+                bowtie2_threads = settings['n_processes'],
+                can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
     else:
         custom_index_fasta = None
@@ -195,6 +189,7 @@ def main():
                     bowtie2_command = settings['bowtie2_command'],
                     bowtie2_threads = settings['n_processes'],
                     samtools_command = settings['samtools_command'],
+                    ignore_n = settings['ignore_n'],
                     keep_intermediate = settings['keep_intermediate'],
                     can_use_previous_analysis = settings['can_use_previous_analysis']
                     )
@@ -230,6 +225,7 @@ def main():
                     bowtie2_command=settings['bowtie2_command'],
                     bowtie2_threads=settings['n_processes'],
                     samtools_command=settings['samtools_command'],
+                    ignore_n = settings['ignore_n'],
                     keep_intermediate = settings['keep_intermediate'],
                     can_use_previous_analysis = settings['can_use_previous_analysis']
                     )
@@ -242,7 +238,7 @@ def main():
             custom_r1_chr_aln_plot_obj.order = 10
             summary_plot_objects.append(custom_r1_chr_aln_plot_obj)
 
-        #if input is paired, align second reads to the custom targets as welll
+        #if input is paired, align second reads to the custom targets (and genome as well if not performed previously)
         if curr_r2_file is not None:
             (custom_r2_assignments,none_file,custom_unmapped_r2, none_file2, custom_r2_aligned_count, custom_r2_mapped_bam_file,custom_r2_chr_aln_plot_obj,none_custom_tlen_plot_object
                 ) = align_reads(
@@ -258,6 +254,7 @@ def main():
                         bowtie2_command=settings['bowtie2_command'],
                         bowtie2_threads=settings['n_processes'],
                         samtools_command=settings['samtools_command'],
+                        ignore_n = settings['ignore_n'],
                         keep_intermediate = settings['keep_intermediate'],
                         can_use_previous_analysis = settings['can_use_previous_analysis']
                         )
@@ -269,6 +266,38 @@ def main():
                 summary_plot_objects.append(custom_r2_chr_aln_plot_obj)
 
             curr_r2_file = custom_unmapped_r2
+            curr_r2_description = "R2 reads not aligned to custom targets"
+
+        
+            #if we haven't aligned to genome above..
+            if not settings['perform_unbiased_analysis']:
+                (genome_r2_assignments,none_file,genome_unmapped_r2, none_file2, genome_r2_aligned_count, genome_r2_mapped_bam_file,genome_r2_chr_aln_plot_obj,genome_r2_tlen_plot_object
+                    ) = align_reads(
+                            root = settings['root']+'.r2_genomeAlignment',
+                            fastq_r1 = curr_r2_file,
+                            fastq_r2 = None,
+                            reads_name = curr_r2_description,
+                            bowtie2_reference = settings['bowtie2_genome'],
+                            reference_name = 'Genome',
+                            target_info = target_info,
+                            bowtie2_command = settings['bowtie2_command'],
+                            bowtie2_threads = settings['n_processes'],
+                            samtools_command = settings['samtools_command'],
+                            ignore_n = settings['ignore_n'],
+                            keep_intermediate = settings['keep_intermediate'],
+                            can_use_previous_analysis = settings['can_use_previous_analysis']
+                            )
+                r2_assignment_files.append(genome_r2_assignments)
+
+                if genome_r2_tlen_plot_object is not None:
+                    genome_r2_tlen_plot_object.order = 2
+                    summary_plot_objects.append(genome_r2_tlen_plot_object)
+                if genome_r2_chr_aln_plot_obj is not None:
+                    genome_r2_chr_aln_plot_obj.order = 5
+                    summary_plot_objects.append(genome_r2_chr_aln_plot_obj)
+
+                curr_r2_file = genome_unmapped_r2
+                curr_r2_description = "R2 reads not aligned to custom targets or genome"
 
     if settings['perform_unbiased_analysis']:
         #chop reads
@@ -462,59 +491,8 @@ def parse_settings(args):
     parser.add_argument('--keep_intermediate',action='store_true',help='If true, intermediate files are not deleted')
 
 
-
-    parser.add_argument('--alignment_extension', type=int, help='Number of bp to extend beyond av read length around cut site for custom index', default=50)
-
     parser.add_argument('--cuts','--cut_sites', nargs='*', help='Cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
     parser.add_argument('--on_target_cut_sites', nargs='*', help='On-target cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
-
-    #for finding offtargets with casoffinder
-    parser.add_argument('--PAM', type=str, help='PAM for in-silico off-target search', default=None)
-    parser.add_argument('--on_target_guides', nargs='*', help='Spacer sequences of guides for in-silico off-target search (multiple guide sequences are separated by spaces)', default=[])
-    parser.add_argument('--casoffinder_num_mismatches', type=int, help='Number of casoffinder mismatches for in-silico off-target search', default=5)
-    parser.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
-
-    #specify primer information
-    parser.add_argument('--primer_site', type=str, help='Site of genomic primer, of the form chr1:234',default=None)
-    parser.add_argument('--primer_seq', type=str, help='Sequence of primer. Either --primer_site or --primer_seq should be specified.',default=None)
-    parser.add_argument('--add_non_primer_cut_targets', help='Whether to add targets for cuts without a primer. If false, only primer-cut1 pairings will be added. If true, cut1-cut2 pairings will be added.',action='store_true')
-    parser.add_argument('--primer_min_bp_match_pct', type=int, help='Min percent of bases that must match primer_seq. If lower than this percent of bases match, the read will be filtered from output files.', default=0)
-    parser.add_argument('--primer_post_seq', type=str, help='Sequence immedately following primer sequence to check at beginning of R1', default=None)
-    parser.add_argument('--primer_post_min_bp_match_pct', type=int, help='Min percent of bases that must match primer_post_seq. If lower than this percent of bases match, the read will be filtered from output files.', default=0)
-
-    #min alignment cutoffs for alignment to each arm/side of read
-    parser.add_argument('--arm_min_seen_bases', type=int, help='Number of bases that are required to be seen on each "side" of translocated reads. E.g. if a artificial target represents a translocation between chr1 and chr2, arm_min_seen_bases would have to be seen on chr1 as well as on chr2 for the read to be counted.', default=15)
-    parser.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of artifical targets. E.g. if a artificial target represents a translocation between chr1 and chr2, the first arm_min_matched_start_bases of the read would have to match exactly to chr1 and the last arm_min_matched_start_bases of the read would have to match exactly to chr2', default=10)
-
-    #CRISPResso settings
-    parser.add_argument('--run_crispresso_genome_sites', help='Boolean for whether to run CRISPResso on highly-aligned genomic locations (if flag is not set (or false), CRISPResso will only be run at highly-aligned cut sites and artificial targets', action='store_true')
-    parser.add_argument('--crispresso_min_count', type=int, help='Min number of reads required to be seen at a site for it to be analyzed by CRISPResso', default=50)
-    parser.add_argument('--crispresso_min_aln_score', type=int, help='Min alignment score to reference sequence for quantification by CRISPResso', default=20)
-    parser.add_argument('--crispresso_quant_window_size', type=int, help='Number of bp on each side of a cut to consider for edits', default=1)
-
-    #sub-command parameters
-    parser.add_argument('--samtools_command', help='Command to run samtools', default='samtools')
-    parser.add_argument('--bowtie2_command', help='Command to run bowtie2', default='bowtie2')
-    parser.add_argument('--crispresso_command', help='Command to run crispresso', default='CRISPResso')
-    parser.add_argument('--casoffinder_command', help='Command to run casoffinder', default='cas-offinder')
-    parser.add_argument('--n_processes', type=str, help='Number of processes to run on (may be set to "max")', default='1')
-
-    #fragmentation parameters
-    parser.add_argument('--perform_unbiased_analysis', help='If set, an unbiased search for translocations is performed by fragmenting and analyzing reads that do not align to the genome or to custom targets.', action='store_true')
-    #these two parameters control the size and stride of fragment creation
-    parser.add_argument('--fragment_size', type=int, help='Fragment size (bp) for fragment creation', default=20)
-    parser.add_argument('--fragment_step_size', type=int, help='Step size (bp) between fragments for fragment creation', default=10)
-    parser.add_argument('--min_seen_frag_cutoff', type=int, help='Minimum number of fragments aligned to a location for the location to be considered as a possible alignment location for a read (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_frag_cutoff of 2 would not allow position B', default=2)
-    parser.add_argument('--fragment_min_mapq', type=int, help='Minimum mapq (mapping quality) for a fragment to be considered. Increasing this value may reduce sensitivity for fragments aligned to repetitive regions. Any value greater than 1 will likely eliminate multi-mapped reads.', default=30)
-
-    #umi settings
-    parser.add_argument('--dedup_input_on_UMI', help='If set, input reads will be deduplicated based on UMI before alignment', action='store_true')
-    parser.add_argument('--dedup_input_based_on_aln_pos_and_UMI', help='If set, input reads will be deduplicated based on alignment position and UMI', action='store_true')
-    parser.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match', default='NNWNNWNNN')
-
-    #R1/R2 support settings
-    parser.add_argument('--r1_r2_support_max_distance', type=int, help='Max distance between r1 and r2 for the read pair to be classified as "supported" by r2', default=10000)
-    parser.add_argument('--discard_reads_without_r2_support', help='If set, reads without r2 support will be discarded from final analysis and counts', action='store_true')
 
     parser.add_argument('--genome', help='Genome sequence file for alignment. This should point to a file ending in ".fa", and the accompanying index file (".fai") should exist.', default=None)
     parser.add_argument('--bowtie2_genome', help='Bowtie2-indexed genome file.',default=None)
@@ -522,6 +500,67 @@ def parse_settings(args):
     parser.add_argument('--fastq_r1', help='Input fastq r1 file', default=None)
     parser.add_argument('--fastq_r2', help='Input fastq r2 file', default=None)
     parser.add_argument('--fastq_umi', help='Input fastq umi file', default=None)
+
+    custom_group = parser.add_argument_group('Custom target settings')
+    custom_group.add_argument('--alignment_extension', type=int, help='Number of bp to extend beyond av read length around cut site for custom index', default=50)
+
+    #for finding offtargets with casoffinder
+    ot_group = parser.add_argument_group('In silico off-target search parameters')
+    ot_group.add_argument('--PAM', type=str, help='PAM for in-silico off-target search', default=None)
+    ot_group.add_argument('--on_target_guides', nargs='*', help='Spacer sequences of guides for in-silico off-target search (multiple guide sequences are separated by spaces)', default=[])
+    ot_group.add_argument('--casoffinder_num_mismatches', type=int, help='Number of casoffinder mismatches for in-silico off-target search', default=5)
+    ot_group.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
+
+    #specify primer information
+    p_group = parser.add_argument_group('Primer parameters and settings')
+    p_group.add_argument('--primer_site', type=str, help='Site of genomic primer, of the form chr1:234',default=None)
+    p_group.add_argument('--primer_seq', type=str, help='Sequence of primer. Either --primer_site or --primer_seq should be specified.',default=None)
+    p_group.add_argument('--add_non_primer_cut_targets', help='Whether to add targets for cuts without a primer. If false, only primer-cut1 pairings will be added. If true, cut1-cut2 pairings will be added.',action='store_true')
+    p_group.add_argument('--primer_min_bp_match_pct', type=int, help='Min percent of bases that must match primer_seq. If lower than this percent of bases match, the read will be filtered from output files.', default=0)
+    p_group.add_argument('--primer_post_seq', type=str, help='Sequence immedately following primer sequence to check at beginning of R1', default=None)
+    p_group.add_argument('--primer_post_min_bp_match_pct', type=int, help='Min percent of bases that must match primer_post_seq. If lower than this percent of bases match, the read will be filtered from output files.', default=0)
+
+    #min alignment cutoffs for alignment to each arm/side of read
+    a_group = parser.add_argument_group('Alignment cutoff parameters')
+    a_group.add_argument('--arm_min_seen_bases', type=int, help='Number of bases that are required to be seen on each "side" of translocated reads. E.g. if a artificial target represents a translocation between chr1 and chr2, arm_min_seen_bases would have to be seen on chr1 as well as on chr2 for the read to be counted.', default=15)
+    a_group.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of artifical targets. E.g. if a artificial target represents a translocation between chr1 and chr2, the first arm_min_matched_start_bases of the read would have to match exactly to chr1 and the last arm_min_matched_start_bases of the read would have to match exactly to chr2', default=10)
+    a_group.add_argument('--ignore_n', type=bool, help='If set, "N" bases will be ignored. By default (False) N bases will count as mismatches in the number of bases required to match at each arm/side of the read', default=False)
+
+    #CRISPResso settings
+    c_group = parser.add_argument_group('CRISPResso settings')
+    c_group.add_argument('--run_crispresso_genome_sites', help='Boolean for whether to run CRISPResso on highly-aligned genomic locations (if flag is not set (or false), CRISPResso will only be run at highly-aligned cut sites and artificial targets', action='store_true')
+    c_group.add_argument('--crispresso_min_count', type=int, help='Min number of reads required to be seen at a site for it to be analyzed by CRISPResso', default=50)
+    c_group.add_argument('--crispresso_min_aln_score', type=int, help='Min alignment score to reference sequence for quantification by CRISPResso', default=20)
+    c_group.add_argument('--crispresso_quant_window_size', type=int, help='Number of bp on each side of a cut to consider for edits', default=1)
+
+    #sub-command parameters
+    p_group = parser.add_argument_group('Pipeline parameters')
+    p_group.add_argument('--samtools_command', help='Command to run samtools', default='samtools')
+    p_group.add_argument('--bowtie2_command', help='Command to run bowtie2', default='bowtie2')
+    p_group.add_argument('--crispresso_command', help='Command to run crispresso', default='CRISPResso')
+    p_group.add_argument('--casoffinder_command', help='Command to run casoffinder', default='cas-offinder')
+    p_group.add_argument('--n_processes', type=str, help='Number of processes to run on (may be set to "max")', default='1')
+
+    #fragmentation parameters
+    f_group = parser.add_argument_group('Fragment parameters')
+    f_group.add_argument('--perform_unbiased_analysis', help='If set, an unbiased search for translocations is performed by fragmenting and analyzing reads that do not align to the genome or to custom targets.', action='store_true')
+    #these two parameters control the size and stride of fragment creation
+    f_group.add_argument('--fragment_size', type=int, help='Fragment size (bp) for fragment creation', default=20)
+    f_group.add_argument('--fragment_step_size', type=int, help='Step size (bp) between fragments for fragment creation', default=10)
+    f_group.add_argument('--min_seen_frag_cutoff', type=int, help='Minimum number of fragments aligned to a location for the location to be considered as a possible alignment location for a read (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_frag_cutoff of 2 would not allow position B', default=2)
+    f_group.add_argument('--fragment_min_mapq', type=int, help='Minimum mapq (mapping quality) for a fragment to be considered. Increasing this value may reduce sensitivity for fragments aligned to repetitive regions. Any value greater than 1 will likely eliminate multi-mapped reads.', default=30)
+
+    #umi settings
+    u_group = parser.add_argument_group('UMI parameters')
+    u_group.add_argument('--dedup_input_on_UMI', help='If set, input reads will be deduplicated based on UMI before alignment', action='store_true')
+    u_group.add_argument('--dedup_input_based_on_aln_pos_and_UMI', help='If set, input reads will be deduplicated based on alignment position and UMI', action='store_true')
+    u_group.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match', default='NNWNNWNNN')
+
+    #R1/R2 support settings
+    r_group = parser.add_argument_group('R1/R2 support settings')
+    r_group.add_argument('--r1_r2_support_max_distance', type=int, help='Max distance between r1 and r2 for the read pair to be classified as "supported" by r2', default=10000)
+    r_group.add_argument('--discard_reads_without_r2_support', help='If set, reads without r2 support will be discarded from final analysis and counts', action='store_true')
+
 
     cmd_args = parser.parse_args(args[1:])
 
@@ -673,6 +712,11 @@ def parse_settings(args):
     if 'arm_min_matched_start_bases' in settings_file_args:
         settings['arm_min_matched_start_bases'] = int(settings_file_args['arm_min_matched_start_bases'])
         settings_file_args.pop('arm_min_matched_start_bases')
+
+    settings['ignore_n'] = cmd_args.ignore_n
+    if 'ignore_n' in settings_file_args:
+        settings['ignore_n'] = (settings_file_args['ignore_n'].lower() == 'true')
+        settings_file_args.pop('ignore_n')
 
     settings['run_crispresso_genome_sites'] = cmd_args.run_crispresso_genome_sites
     if 'run_crispresso_genome_sites' in settings_file_args:
@@ -1033,7 +1077,78 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     logger.info('Wrote cut sites to ' + cut_log)
     return casoffinder_cut_sites
 
-def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,target_padding,primer_chr ="",primer_loc=-1,primer_seq=None,add_non_primer_cut_targets=False,samtools_command='samtools',bowtie2_command='bowtie2',bowtie2_threads=1):
+def prep_primer_info(root, primer_site, primer_seq, bowtie2_command, bowtie2_genome, can_use_previous_analysis=False):
+    """
+    Prepares primer info by identifying genomic location if possible
+    Generally, primer_seq is genomic, and is used to amplify a region near the on-target cut site
+    In cases where an exogenous sequence is amplified (e.g. GUIDE-seq) primer_seq may not be genomic
+
+    params:
+        root: root for written files
+        primer_site: Site of genomic primer, of the form chr1:234
+        primer_seq: sequence of primer sequence.
+        bowtie2_command: location of bowtie2 to run
+        bowtie2_genome: bowtie2 genome to align to
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
+
+
+    returns:
+        primer_chr: chromosome location of primer
+        primer_loc: position of primer
+        primer_is_genomic: boolean, true if primer is genomic
+    """
+    logger = logging.getLogger('CRISPRlungo')
+    info_file = root + '.info'
+
+    if os.path.isfile(info_file) and can_use_previous_analysis:
+        unmapped_r1_count = 0
+        with open (info_file,'r') as fin:
+            head_line = fin.readline()
+            line_els = fin.readline().rstrip('\n').split("\t")
+            if len(line_els) == 4:
+                (primer_chr_str,primer_loc_str,primer_seq_str,primer_is_genomic_str) = line_els
+                primer_chr = None if primer_chr_str == "None" else primer_chr_str
+                primer_loc = None if primer_loc_str == "None" else int(primer_loc_str)
+                primer_is_genomic = primer_is_genomic_str == 'True'
+
+                logger.info('Using previously-prepared primer information')
+                return (primer_chr, primer_loc, primer_is_genomic)
+            else:
+                logger.info('Could not recover previously-created primer sequence information. Reanalyzing.')
+
+    logger.info('Preparing primer sequence information')
+
+    primer_is_genomic = False # Whether the primer is genomic (e.g. if priming off an exogenous sequence (GUIDE-seq) this would be false) This value is set below after aligning to the genome
+    primer_chr = ""
+    primer_loc = -1
+    if primer_site:
+        primer_info = primer_site.split("_")
+        primer_chr = primer_info[0]
+        primer_loc = int(primer_info[1])
+        primer_is_genomic = True
+
+    if primer_seq:
+        #attempt to align primer to genome
+        logger.info('Finding genomic coordinates of primer %s'%(primer_seq))
+        primer_aln_cmd = '%s --seed 2248 --end-to-end -x %s -c %s' %(bowtie2_command,bowtie2_genome,primer_seq)
+        primer_aln_results = subprocess.check_output(primer_aln_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
+        if len(primer_aln_results) > 5 and primer_aln_results[3].strip() == '1 (100.00%) aligned exactly 1 time' and len(primer_aln_results[-2].split("\t")) > 5:
+            sam_line_els = primer_aln_results[-2].split("\t")
+            primer_chr = sam_line_els[2]
+            primer_loc = int(sam_line_els[3])
+            logger.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
+            primer_is_genomic = True
+
+    with open(info_file,'w') as fout:
+        fout.write("\t".join(['primer_chr', 'primer_loc', 'primer_seq', 'primer_is_genomic'])+"\n")
+        fout.write("\t".join([str(x) for x in [primer_chr, primer_loc, primer_seq, primer_is_genomic]])+"\n")
+
+
+    logger.info('Finished preparing primer information')
+
+    return (primer_chr, primer_loc, primer_is_genomic)
+
+def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,target_padding,primer_chr ="",primer_loc=-1,primer_seq=None,add_non_primer_cut_targets=False,primer_is_genomic=False,samtools_command='samtools',bowtie2_command='bowtie2',bowtie2_threads=1,can_use_previous_analysis=False):
     """
     Generates fasta sequences surrounding cuts for alignment and bowtie2 index
     At each cut point, sequence of length target_length is generated
@@ -1050,9 +1165,11 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
         primer_loc: location of primer (if any)
         primer_seq: sequence of primer binding (if any) (e.g. for dsODN integration and priming). Normally either primer_seq or (primer_chr and primer_loc) are given
         add_non_primer_cut_targets: boolean for whether to add targets for cuts without a primer. If false, only primer-cut1 pairings will be added. If true, cut1-cut2 pairings will be added.
+        primer_is_genomic: boolean for whether the primer is genomic. If the primer is genomic, the artificial target will be created using the sequence from the primer site to the nearest cut. Otherwise (if false) the artificial target will be created using the given primer sequence.
         samtools_command: location of samtools to run
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
+        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
         custom_index_fasta: fasta of artificial targets
@@ -1075,7 +1192,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
     target_names = []
     target_info = {}
     info_file = root + '.info'
-    if os.path.isfile(info_file):
+    if os.path.isfile(info_file) and can_use_previous_analysis:
         target_count = -1
         with open (info_file,'r') as fin:
             head_line = fin.readline()
@@ -1121,7 +1238,9 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
     fasta_cache = {}
 
     #first, if the primer_seq is given (for dsODN) add targets between itself and all other cuts
-    if primer_seq is not None and primer_seq != "":
+    if (not primer_is_genomic and \
+            primer_seq is not None and \
+            primer_seq != ""):
         left_bit_A = primer_seq
 
         LALA = left_bit_A + reverse(left_bit_A)
@@ -1249,309 +1368,308 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
 
 
     #next, add targets for each cut and itself as well as between cuts
-    if add_non_primer_cut_targets:
-        for i,cut in enumerate(cuts):
-            chr_els = cut.split(":")
-            chr_A = chr_els[0]
-            site_A = int(chr_els[1])
-            cut_start_A = site_A - (target_length + target_padding)
-            cut_start_A_stop = site_A - 1
-            cut_end_A = site_A + (target_length + target_padding)
+    for i,cut in enumerate(cuts):
+        chr_els = cut.split(":")
+        chr_A = chr_els[0]
+        site_A = int(chr_els[1])
+        cut_start_A = site_A - (target_length + target_padding)
+        cut_start_A_stop = site_A - 1
+        cut_end_A = site_A + (target_length + target_padding)
 
-            primer_is_in_left_bit_A = (primer_chr != "" and primer_chr == chr_A and primer_loc >= cut_start_A and primer_loc <= cut_start_A_stop)
-            primer_is_in_right_bit_A = (primer_chr != "" and primer_chr == chr_A and primer_loc >= site_A and primer_loc <= cut_end_A)
+        primer_is_in_left_bit_A = (primer_chr != "" and primer_chr == chr_A and primer_loc >= cut_start_A and primer_loc <= cut_start_A_stop)
+        primer_is_in_right_bit_A = (primer_chr != "" and primer_chr == chr_A and primer_loc >= site_A and primer_loc <= cut_end_A)
 
-            left_bit_A_key = '%s %s %d %d'%(genome,chr_A,cut_start_A,cut_start_A_stop)
+        left_bit_A_key = '%s %s %d %d'%(genome,chr_A,cut_start_A,cut_start_A_stop)
 
-            if left_bit_A_key not in fasta_cache:
-                fasta_cache[left_bit_A_key] = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,cut_start_A,cut_start_A_stop),shell=True).decode(sys.stdout.encoding).strip()
-            left_bit_A = fasta_cache[left_bit_A_key]
+        if left_bit_A_key not in fasta_cache:
+            fasta_cache[left_bit_A_key] = subprocess.check_output(
+                '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,cut_start_A,cut_start_A_stop),shell=True).decode(sys.stdout.encoding).strip()
+        left_bit_A = fasta_cache[left_bit_A_key]
 
-            right_bit_A_key = '%s %s %d %d'%(genome,chr_A,site_A,cut_end_A)
-            if right_bit_A_key not in fasta_cache:
-                fasta_cache[right_bit_A_key] = subprocess.check_output(
-                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,site_A,cut_end_A),shell=True).decode(sys.stdout.encoding).strip()
-            right_bit_A = fasta_cache[right_bit_A_key]
+        right_bit_A_key = '%s %s %d %d'%(genome,chr_A,site_A,cut_end_A)
+        if right_bit_A_key not in fasta_cache:
+            fasta_cache[right_bit_A_key] = subprocess.check_output(
+                '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_A,site_A,cut_end_A),shell=True).decode(sys.stdout.encoding).strip()
+        right_bit_A = fasta_cache[right_bit_A_key]
 
-            #only add both sides if primer_chr is not given -- otherwise, every read has to originate on one end from the primer site.
-            wt_seq = left_bit_A + right_bit_A
-            if primer_chr == "" or primer_is_in_left_bit_A or primer_is_in_right_bit_A:
-                target_name = 'CRISPRlungo_WT'+str(i)
+        #only add both sides if primer_chr is not given -- otherwise, every read has to originate on one end from the primer site.
+        wt_seq = left_bit_A + right_bit_A
+        if primer_chr == "" or primer_is_in_left_bit_A or primer_is_in_right_bit_A or add_non_primer_cut_targets:
+            target_name = 'CRISPRlungo_WT'+str(i)
+            target_names.append(target_name)
+            target_info[target_name] = {
+                    'sequence': wt_seq,
+                    'class': 'Linear',
+                    'cut1_chr':chr_A,
+                    'cut1_site':site_A,
+                    'cut1_anno':cut_annotations[cut],
+                    'cut2_chr':chr_A,
+                    'cut2_site':site_A,
+                    'cut2_anno':cut_annotations[cut],
+                    'query_pos':cut_start_A,
+                    'target_cut_idx':target_padding + target_length,
+                    'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_A,site_A,chr_A,site_A)
+                    }
+
+        if primer_chr == "" or primer_is_in_left_bit_A or add_non_primer_cut_targets:
+            LALA = left_bit_A + reverse(left_bit_A)
+            target_name = 'CRISPRlungo_L' + str(i) + 'L' + str(i)
+            target_names.append(target_name)
+            target_info[target_name] = {
+                    'sequence': LALA,
+                    'class': 'Chimera',
+                    'cut1_chr':chr_A,
+                    'cut1_site':site_A,
+                    'cut1_anno':cut_annotations[cut],
+                    'cut2_chr':chr_A,
+                    'cut2_site':site_A,
+                    'cut2_anno':cut_annotations[cut],
+                    'query_pos':cut_start_A,
+                    'target_cut_idx':target_padding + target_length,
+                    'target_cut_str':"w-%s:%s~%s:%s-w"%(chr_A,site_A,chr_A,site_A)
+                    }
+
+
+            LALAc = left_bit_A + reverse_complement(left_bit_A)
+            target_name = 'CRISPRlungo_L' + str(i) + 'Lc' + str(i)
+            target_names.append(target_name)
+            target_info[target_name] = {
+                    'sequence': LALAc,
+                    'class': 'Chimera',
+                    'cut1_chr':chr_A,
+                    'cut1_site':site_A,
+                    'cut1_anno':cut_annotations[cut],
+                    'cut2_chr':chr_A,
+                    'cut2_site':site_A,
+                    'cut2_anno':cut_annotations[cut],
+                    'query_pos':cut_start_A,
+                    'target_cut_idx':target_padding + target_length,
+                    'target_cut_str':"w-%s:%s~%s:%s-c"%(chr_A,site_A,chr_A,site_A)
+                    }
+
+        if primer_chr == "" or primer_is_in_right_bit_A or add_non_primer_cut_targets:
+            RARA = right_bit_A + reverse(right_bit_A)
+            target_name = 'CRISPRlungo_R' + str(i) + 'R' + str(i)
+            target_names.append(target_name)
+            target_info[target_name] = {
+                    'sequence': RARA,
+                    'class': 'Chimera',
+                    'cut1_chr':chr_A,
+                    'cut1_site':site_A,
+                    'cut1_anno':cut_annotations[cut],
+                    'cut2_chr':chr_A,
+                    'cut2_site':site_A,
+                    'cut2_anno':cut_annotations[cut],
+                    'query_pos':cut_start_A,
+                    'target_cut_idx':target_padding + target_length,
+                    'target_cut_str':"w+%s:%s~%s:%s+w"%(chr_A,site_A,chr_A,site_A)
+                    }
+
+            RARAc = right_bit_A + reverse_complement(right_bit_A)
+            target_name = 'CRISPRlungo_R' + str(i) + 'Rc' + str(i)
+            target_names.append(target_name)
+            target_info[target_name] = {
+                    'sequence': RARAc,
+                    'class': 'Chimera',
+                    'cut1_chr':chr_A,
+                    'cut1_site':site_A,
+                    'cut1_anno':cut_annotations[cut],
+                    'cut2_chr':chr_A,
+                    'cut2_site':site_A,
+                    'cut2_anno':cut_annotations[cut],
+                    'query_pos':cut_start_A,
+                    'target_cut_idx':target_padding + target_length,
+                    'target_cut_str':"w+%s:%s~%s:%s+c"%(chr_A,site_A,chr_A,site_A)
+                    }
+
+
+        for j in range(i+1,len(cuts)):
+            chr_els = cuts[j].split(":")
+            chr_B = chr_els[0]
+            site_B = int(chr_els[1])
+            cut_start_B = site_B - (target_length + target_padding)
+            cut_start_B_stop = site_B - 1
+            cut_end_B = site_B + (target_length + target_padding)
+
+            primer_is_in_left_bit_B = (primer_chr != "" and primer_chr == chr_B and primer_loc >= cut_start_B and primer_loc <= cut_start_B_stop)
+            primer_is_in_right_bit_B = (primer_chr != "" and primer_chr == chr_B and primer_loc >= site_B and primer_loc <= cut_end_B)
+
+            left_bit_B_key = '%s %s %d %d'%(genome,chr_B,cut_start_B,cut_start_B_stop)
+            if left_bit_B_key not in fasta_cache:
+                fasta_cache[left_bit_B_key] = subprocess.check_output(
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,cut_start_B,cut_start_B_stop),shell=True).decode(sys.stdout.encoding).strip()
+            left_bit_B = fasta_cache[left_bit_B_key]
+
+            right_bit_B_key = '%s %s %d %d'%(genome,chr_B,site_B,cut_end_B)
+            if right_bit_B_key not in fasta_cache:
+                fasta_cache[right_bit_B_key] = subprocess.check_output(
+                    '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,site_B,cut_end_B),shell=True).decode(sys.stdout.encoding).strip()
+            right_bit_B = fasta_cache[right_bit_B_key]
+
+
+            if primer_chr == "" or primer_is_in_left_bit_A or primer_is_in_right_bit_B or add_non_primer_cut_targets:
+                LARB = left_bit_A + right_bit_B
+                target_name = 'CRISPRlungo_L' + str(i) + 'R' + str(j)
                 target_names.append(target_name)
                 target_info[target_name] = {
-                        'sequence': wt_seq,
-                        'class': 'Linear',
+                        'sequence': LARB,
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
-                        'cut1_anno':cut_annotations[cut],
-                        'cut2_chr':chr_A,
-                        'cut2_site':site_A,
-                        'cut2_anno':cut_annotations[cut],
+                        'cut1_anno':cut_annotations[cuts[i]],
+                        'cut2_chr':chr_B,
+                        'cut2_site':site_B,
+                        'cut2_anno':cut_annotations[cuts[j]],
                         'query_pos':cut_start_A,
                         'target_cut_idx':target_padding + target_length,
-                        'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_A,site_A,chr_A,site_A)
+                        'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
                         }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large deletion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
-            if primer_chr == "" or primer_is_in_left_bit_A:
-                LALA = left_bit_A + reverse(left_bit_A)
-                target_name = 'CRISPRlungo_L' + str(i) + 'L' + str(i)
+                LARBc = left_bit_A + complement(right_bit_B)
+                target_name = 'CRISPRlungo_L' + str(i) + 'Rc' + str(j)
                 target_names.append(target_name)
                 target_info[target_name] = {
-                        'sequence': LALA,
-                        'class': 'Chimera',
+                        'sequence': LARBc,
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
-                        'cut1_anno':cut_annotations[cut],
-                        'cut2_chr':chr_A,
-                        'cut2_site':site_A,
-                        'cut2_anno':cut_annotations[cut],
+                        'cut1_anno':cut_annotations[cuts[i]],
+                        'cut2_chr':chr_B,
+                        'cut2_site':site_B,
+                        'cut2_anno':cut_annotations[cuts[j]],
                         'query_pos':cut_start_A,
                         'target_cut_idx':target_padding + target_length,
-                        'target_cut_str':"w-%s:%s~%s:%s-w"%(chr_A,site_A,chr_A,site_A)
+                        'target_cut_str':"w-%s:%s~%s:%s+c"%(chr_A,site_A,chr_B,site_B)
                         }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large deletion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
-
-                LALAc = left_bit_A + reverse_complement(left_bit_A)
-                target_name = 'CRISPRlungo_L' + str(i) + 'Lc' + str(i)
+            if primer_chr == "" or primer_is_in_left_bit_B or primer_is_in_right_bit_A or add_non_primer_cut_targets:
+                LBRA = left_bit_B + right_bit_A
+                target_name = 'CRISPRlungo_L' + str(j) + 'R' + str(i)
                 target_names.append(target_name)
                 target_info[target_name] = {
-                        'sequence': LALAc,
-                        'class': 'Chimera',
-                        'cut1_chr':chr_A,
-                        'cut1_site':site_A,
-                        'cut1_anno':cut_annotations[cut],
+                        'sequence': LBRA,
+                        'cut1_chr':chr_B,
+                        'cut1_site':site_B,
+                        'cut1_anno':cut_annotations[cuts[j]],
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
-                        'cut2_anno':cut_annotations[cut],
-                        'query_pos':cut_start_A,
+                        'cut2_anno':cut_annotations[cuts[i]],
+                        'query_pos':cut_start_B,
                         'target_cut_idx':target_padding + target_length,
-                        'target_cut_str':"w-%s:%s~%s:%s-c"%(chr_A,site_A,chr_A,site_A)
+                        'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_B,site_B,chr_A,site_A)
                         }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large deletion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
-            if primer_chr == "" or primer_is_in_right_bit_A:
-                RARA = right_bit_A + reverse(right_bit_A)
-                target_name = 'CRISPRlungo_R' + str(i) + 'R' + str(i)
+                LBRAc = left_bit_B + complement(right_bit_A)
+                target_name = 'CRISPRlungo_L' + str(j) + 'Rc' + str(i)
                 target_names.append(target_name)
                 target_info[target_name] = {
-                        'sequence': RARA,
-                        'class': 'Chimera',
-                        'cut1_chr':chr_A,
-                        'cut1_site':site_A,
-                        'cut1_anno':cut_annotations[cut],
+                        'sequence': LBRAc,
+                        'cut1_chr':chr_B,
+                        'cut1_site':site_B,
+                        'cut1_anno':cut_annotations[cuts[j]],
                         'cut2_chr':chr_A,
                         'cut2_site':site_A,
-                        'cut2_anno':cut_annotations[cut],
-                        'query_pos':cut_start_A,
+                        'cut2_anno':cut_annotations[cuts[i]],
+                        'query_pos':cut_start_B,
                         'target_cut_idx':target_padding + target_length,
-                        'target_cut_str':"w+%s:%s~%s:%s+w"%(chr_A,site_A,chr_A,site_A)
+                        'target_cut_str':"w-%s:%s~%s:%s+c"%(chr_B,site_B,chr_A,site_A)
                         }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large deletion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
-                RARAc = right_bit_A + reverse_complement(right_bit_A)
-                target_name = 'CRISPRlungo_R' + str(i) + 'Rc' + str(i)
+            if primer_chr == "" or primer_is_in_left_bit_A or primer_is_in_left_bit_B or add_non_primer_cut_targets:
+                LALB = left_bit_A + reverse(left_bit_B)
+                target_name = 'CRISPRlungo_L' + str(i) + 'L' + str(j)
                 target_names.append(target_name)
                 target_info[target_name] = {
-                        'sequence': RARAc,
-                        'class': 'Chimera',
+                        'sequence': LALB,
                         'cut1_chr':chr_A,
                         'cut1_site':site_A,
-                        'cut1_anno':cut_annotations[cut],
-                        'cut2_chr':chr_A,
-                        'cut2_site':site_A,
-                        'cut2_anno':cut_annotations[cut],
+                        'cut1_anno':cut_annotations[cuts[i]],
+                        'cut2_chr':chr_B,
+                        'cut2_site':site_B,
+                        'cut2_anno':cut_annotations[cuts[j]],
                         'query_pos':cut_start_A,
                         'target_cut_idx':target_padding + target_length,
-                        'target_cut_str':"w+%s:%s~%s:%s+c"%(chr_A,site_A,chr_A,site_A)
+                        'target_cut_str':"w-%s:%s~%s:%s-w"%(chr_A,site_A,chr_B,site_B)
                         }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large inversion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
+                LALBc = left_bit_A + reverse_complement(left_bit_B)
+                target_name = 'CRISPRlungo_L' + str(i) + 'Lc' + str(j)
+                target_names.append(target_name)
+                target_info[target_name] = {
+                        'sequence': LALBc,
+                        'cut1_chr':chr_A,
+                        'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cuts[i]],
+                        'cut2_chr':chr_B,
+                        'cut2_site':site_B,
+                        'cut2_anno':cut_annotations[cuts[j]],
+                        'query_pos':cut_start_A,
+                        'target_cut_idx':target_padding + target_length,
+                        'target_cut_str':"w-%s:%s~%s:%s-c"%(chr_A,site_A,chr_B,site_B)
+                        }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large inversion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
-            for j in range(i+1,len(cuts)):
-                chr_els = cuts[j].split(":")
-                chr_B = chr_els[0]
-                site_B = int(chr_els[1])
-                cut_start_B = site_B - (target_length + target_padding)
-                cut_start_B_stop = site_B - 1
-                cut_end_B = site_B + (target_length + target_padding)
+            if primer_chr == "" or primer_is_in_right_bit_A or primer_is_in_right_bit_B or add_non_primer_cut_targets:
+                RARB = reverse(right_bit_A) + right_bit_B
+                target_name = 'CRISPRlungo_R' + str(i) + 'R' + str(j)
+                target_names.append(target_name)
+                target_info[target_name] = {
+                        'sequence': RARB,
+                        'cut1_chr':chr_A,
+                        'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cuts[i]],
+                        'cut2_chr':chr_B,
+                        'cut2_site':site_B,
+                        'cut2_anno':cut_annotations[cuts[j]],
+                        'query_pos':cut_start_A,
+                        'target_cut_idx':target_padding + target_length,
+                        'target_cut_str':"w+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
+                        }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large inversion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
-                primer_is_in_left_bit_B = (primer_chr != "" and primer_chr == chr_B and primer_loc >= cut_start_B and primer_loc <= cut_start_B_stop)
-                primer_is_in_right_bit_B = (primer_chr != "" and primer_chr == chr_B and primer_loc >= site_B and primer_loc <= cut_end_B)
-
-                left_bit_B_key = '%s %s %d %d'%(genome,chr_B,cut_start_B,cut_start_B_stop)
-                if left_bit_B_key not in fasta_cache:
-                    fasta_cache[left_bit_B_key] = subprocess.check_output(
-                        '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,cut_start_B,cut_start_B_stop),shell=True).decode(sys.stdout.encoding).strip()
-                left_bit_B = fasta_cache[left_bit_B_key]
-
-                right_bit_B_key = '%s %s %d %d'%(genome,chr_B,site_B,cut_end_B)
-                if right_bit_B_key not in fasta_cache:
-                    fasta_cache[right_bit_B_key] = subprocess.check_output(
-                        '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,chr_B,site_B,cut_end_B),shell=True).decode(sys.stdout.encoding).strip()
-                right_bit_B = fasta_cache[right_bit_B_key]
-
-
-                if primer_chr == "" or primer_is_in_left_bit_A or primer_is_in_right_bit_B:
-                    LARB = left_bit_A + right_bit_B
-                    target_name = 'CRISPRlungo_L' + str(i) + 'R' + str(j)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': LARB,
-                            'cut1_chr':chr_A,
-                            'cut1_site':site_A,
-                            'cut1_anno':cut_annotations[cuts[i]],
-                            'cut2_chr':chr_B,
-                            'cut2_site':site_B,
-                            'cut2_anno':cut_annotations[cuts[j]],
-                            'query_pos':cut_start_A,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
-
-                    LARBc = left_bit_A + complement(right_bit_B)
-                    target_name = 'CRISPRlungo_L' + str(i) + 'Rc' + str(j)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': LARBc,
-                            'cut1_chr':chr_A,
-                            'cut1_site':site_A,
-                            'cut1_anno':cut_annotations[cuts[i]],
-                            'cut2_chr':chr_B,
-                            'cut2_site':site_B,
-                            'cut2_anno':cut_annotations[cuts[j]],
-                            'query_pos':cut_start_A,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"w-%s:%s~%s:%s+c"%(chr_A,site_A,chr_B,site_B)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
-
-                if primer_chr == "" or primer_is_in_left_bit_B or primer_is_in_right_bit_A:
-                    LBRA = left_bit_B + right_bit_A
-                    target_name = 'CRISPRlungo_L' + str(j) + 'R' + str(i)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': LBRA,
-                            'cut1_chr':chr_B,
-                            'cut1_site':site_B,
-                            'cut1_anno':cut_annotations[cuts[j]],
-                            'cut2_chr':chr_A,
-                            'cut2_site':site_A,
-                            'cut2_anno':cut_annotations[cuts[i]],
-                            'query_pos':cut_start_B,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"w-%s:%s~%s:%s+w"%(chr_B,site_B,chr_A,site_A)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
-
-                    LBRAc = left_bit_B + complement(right_bit_A)
-                    target_name = 'CRISPRlungo_L' + str(j) + 'Rc' + str(i)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': LBRAc,
-                            'cut1_chr':chr_B,
-                            'cut1_site':site_B,
-                            'cut1_anno':cut_annotations[cuts[j]],
-                            'cut2_chr':chr_A,
-                            'cut2_site':site_A,
-                            'cut2_anno':cut_annotations[cuts[i]],
-                            'query_pos':cut_start_B,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"w-%s:%s~%s:%s+c"%(chr_B,site_B,chr_A,site_A)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large deletion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
-
-                if primer_chr == "" or primer_is_in_left_bit_A or primer_is_in_left_bit_B:
-                    LALB = left_bit_A + reverse(left_bit_B)
-                    target_name = 'CRISPRlungo_L' + str(i) + 'L' + str(j)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': LALB,
-                            'cut1_chr':chr_A,
-                            'cut1_site':site_A,
-                            'cut1_anno':cut_annotations[cuts[i]],
-                            'cut2_chr':chr_B,
-                            'cut2_site':site_B,
-                            'cut2_anno':cut_annotations[cuts[j]],
-                            'query_pos':cut_start_A,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"w-%s:%s~%s:%s-w"%(chr_A,site_A,chr_B,site_B)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large inversion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
-
-                    LALBc = left_bit_A + reverse_complement(left_bit_B)
-                    target_name = 'CRISPRlungo_L' + str(i) + 'Lc' + str(j)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': LALBc,
-                            'cut1_chr':chr_A,
-                            'cut1_site':site_A,
-                            'cut1_anno':cut_annotations[cuts[i]],
-                            'cut2_chr':chr_B,
-                            'cut2_site':site_B,
-                            'cut2_anno':cut_annotations[cuts[j]],
-                            'query_pos':cut_start_A,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"w-%s:%s~%s:%s-c"%(chr_A,site_A,chr_B,site_B)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large inversion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
-
-                if primer_chr == "" or primer_is_in_right_bit_A or primer_is_in_right_bit_B:
-                    RARB = reverse(right_bit_A) + right_bit_B
-                    target_name = 'CRISPRlungo_R' + str(i) + 'R' + str(j)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': RARB,
-                            'cut1_chr':chr_A,
-                            'cut1_site':site_A,
-                            'cut1_anno':cut_annotations[cuts[i]],
-                            'cut2_chr':chr_B,
-                            'cut2_site':site_B,
-                            'cut2_anno':cut_annotations[cuts[j]],
-                            'query_pos':cut_start_A,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"w+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large inversion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
-
-                    RARBc = reverse_complement(right_bit_A) + right_bit_B
-                    target_name = 'CRISPRlungo_Rc' + str(i) + 'R' + str(j)
-                    target_names.append(target_name)
-                    target_info[target_name] = {
-                            'sequence': RARBc,
-                            'cut1_chr':chr_A,
-                            'cut1_site':site_A,
-                            'cut1_anno':cut_annotations[cuts[i]],
-                            'cut2_chr':chr_B,
-                            'cut2_site':site_B,
-                            'cut2_anno':cut_annotations[cuts[j]],
-                            'query_pos':cut_start_A,
-                            'target_cut_idx':target_padding + target_length,
-                            'target_cut_str':"c+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
-                            }
-                    if chr_A == chr_B:
-                        target_info[target_name]['class'] = 'Large inversion'
-                    else:
-                        target_info[target_name]['class'] = 'Translocation'
+                RARBc = reverse_complement(right_bit_A) + right_bit_B
+                target_name = 'CRISPRlungo_Rc' + str(i) + 'R' + str(j)
+                target_names.append(target_name)
+                target_info[target_name] = {
+                        'sequence': RARBc,
+                        'cut1_chr':chr_A,
+                        'cut1_site':site_A,
+                        'cut1_anno':cut_annotations[cuts[i]],
+                        'cut2_chr':chr_B,
+                        'cut2_site':site_B,
+                        'cut2_anno':cut_annotations[cuts[j]],
+                        'query_pos':cut_start_A,
+                        'target_cut_idx':target_padding + target_length,
+                        'target_cut_str':"c+%s:%s~%s:%s+w"%(chr_A,site_A,chr_B,site_B)
+                        }
+                if chr_A == chr_B:
+                    target_info[target_name]['class'] = 'Large inversion'
+                else:
+                    target_info[target_name]['class'] = 'Translocation'
 
 
 
@@ -2128,7 +2246,7 @@ def reverse_complement_cut_str(target_cut_str):
 
     return('%s%s%s~%s%s%s'%(new_left_strand,right_dir,right_pos,left_pos,left_dir,new_right_strand))
 
-def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=10,arm_min_matched_start_bases=5,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
+def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_name,target_info,arm_min_seen_bases=10,arm_min_matched_start_bases=5,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',ignore_n=False,keep_intermediate=False,can_use_previous_analysis=False):
     """
     Aligns reads to the provided reference (either artificial targets or genome)
 
@@ -2145,6 +2263,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
         samtools_command: location of samtools to run
+        ignore_n: boolean whether to ignore N bases (if False, they count as mismatches)
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
@@ -2341,7 +2460,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         curr_annotation = ''
         curr_cut = 'NA'
         if line_chr in target_info: #if this aligned to a custom chromosome
-            (left_read_bases_count, left_ref_bases_count, left_all_match_count, left_start_match_count, right_read_bases_count, right_ref_bases_count, right_all_match_count, right_start_match_count) = getMatchLeftRightOfCut(target_info[line_chr]['sequence'],line,target_info[line_chr]['target_cut_idx'])
+            (left_read_bases_count, left_ref_bases_count, left_all_match_count, left_start_match_count, right_read_bases_count, right_ref_bases_count, right_all_match_count, right_start_match_count) = getMatchLeftRightOfCut(target_info[line_chr]['sequence'],line,target_info[line_chr]['target_cut_idx'],ignore_n=ignore_n)
 
             #if read doesn't sufficiently align to both parts of the artificial target, print it to unmapped and continue
             if left_read_bases_count < arm_min_seen_bases or right_read_bases_count < arm_min_seen_bases or left_start_match_count < arm_min_matched_start_bases or right_start_match_count < arm_min_matched_start_bases:
@@ -5231,7 +5350,7 @@ def sam2aln(ref_seq,sam_line,include_ref_surrounding_read = True):
 
     return(ref_str,aln_str,clipped_left_bp,clipped_right_bp)
 
-def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos,debug=False):
+def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos,ignore_n=False,debug=False):
     """
     Gets the number of mismatches at the beginning and the end of the read specified in the sam line. Left and right are defined by the cut position
 
@@ -5239,6 +5358,7 @@ def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos,debug=False):
         ref_seq: string, reference sequence
         sam_line: tab-sep string, sam line. Expected entries are alignment position (element 4) cigar (element 6), and sequence (element 10)
         cut_pos: the position of the cut that defines left and right. Technically, this cut happens after this many bases.
+        ignore_n: boolean whether to ignore N bases (if False, they count as mismatches)
         debug: boolean whether to print debug
 
     returns:
@@ -5276,7 +5396,7 @@ def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos,debug=False):
             seen_read = True
             left_read_bases_count += 1
         if seen_read:
-            if ref_str[aln_pos] == aln_str[aln_pos]:
+            if ref_str[aln_pos] == aln_str[aln_pos] or ignore_n:
                 left_all_match_count += 1
                 if not seen_mismatch:
                     left_start_match_count += 1
@@ -5308,7 +5428,7 @@ def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos,debug=False):
             seen_read = True
             right_read_bases_count += 1
         if seen_read:
-            if ref_str[aln_pos] == aln_str[aln_pos]:
+            if ref_str[aln_pos] == aln_str[aln_pos] or ignore_n:
                 right_all_match_count += 1
                 if not seen_mismatch:
                     right_start_match_count += 1
@@ -5340,6 +5460,79 @@ def getMatchLeftRightOfCut(ref_seq,sam_line,cut_pos,debug=False):
     return (left_read_bases_count, left_ref_bases_count, left_all_match_count, left_start_match_count,
         right_read_bases_count, right_ref_bases_count, right_all_match_count, right_start_match_count)
 
+
+def makeTxCountPlot(left_labs = [],
+        right_labs = [],
+        counts = [],
+        left_cols = None,
+        right_cols = None
+        ):
+    """
+    Make a count plot for the most common types of translocations
+
+    params:
+        left_labs: (list) labels for the left side translocations
+        right_labs: (list) labels for the right side of translocations
+        counts: (list) read counts for each translocation
+        left_cols: (list) colors for left side
+        right_cols: (list) colors for right side
+
+        The length of all params should be the same - one for each translocation to plot
+    """
+
+    num_boxes = len(left_labs)
+
+    if left_cols is None:
+        left_cols = 'b'*num_boxes
+
+    if right_cols is None:
+        right_cols = 'b'*num_boxes
+
+    x_width = 2 - 0.1
+    y_height = 1 - 0.1
+    ys = range(0,num_boxes)[::-1]
+    x1_start = 0
+    x2_start = 2
+    count_bar_ydiff = 0.3
+
+    fig, (ax1, ax2) = plt.subplots(1,2,sharey=True, figsize=(12,8))
+    left_boxes = [Rectangle((x1_start, y), x_width, y_height)
+                      for y in ys]
+    left_pc = PatchCollection(left_boxes, facecolor=left_cols, alpha=0.2)
+
+    right_boxes = [Rectangle((x2_start, y), x_width, y_height)
+                      for y in ys]
+
+    right_pc = PatchCollection(right_boxes, facecolor=right_cols, alpha=0.2)
+
+    # Add collection to axes
+    ax1.add_collection(left_pc)
+    ax1.add_collection(right_pc)
+    ax1.set_ylim(0,num_boxes)
+
+    max_right_len = max([len(lab) for lab in right_labs])
+
+    ax1.set_xlim(-2,10)
+
+    for ind in range(num_boxes):
+        ax1.text(-0.1,ys[ind]+y_height/2,left_labs[ind],ha='right',va='center')
+        ax1.text(4,ys[ind]+y_height/2,right_labs[ind],ha='left',va='center')
+
+    ax1.axis('off')
+
+    rects = []
+    for ind in range(num_boxes):
+        rects.append(Rectangle((0,ys[ind]+count_bar_ydiff),counts[ind],y_height-(count_bar_ydiff*2)))
+
+    pc = PatchCollection(rects)
+    ax2.add_collection(pc)
+    ax2.axes.get_yaxis().set_visible(False)
+    ax2.set_frame_on(False)
+
+    ax2.set_xlim(0,max(1,max(counts)))
+    ax2.set_xlabel('Number of reads')
+
+    return plt
 
 
 class PlotObject:
