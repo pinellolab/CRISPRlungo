@@ -7,6 +7,8 @@ import logging
 import matplotlib
 matplotlib.use('AGG')
 import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Rectangle,Patch
 import multiprocessing as mp
 import numpy as np
 import os
@@ -19,7 +21,7 @@ from CRISPResso2 import CRISPRessoShared
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.0.3"
+__version__ = "v0.0.4"
 
 def main():
     settings, logger = parse_settings(sys.argv)
@@ -46,17 +48,17 @@ def main():
     else:
         for cut_site in settings['cuts']:
             cut_annotations[cut_site] = 'Off-target'
-        cut_sites.extend(settings['on_target_cut_sites'])
-        for cut_site in settings['on_target_cut_sites']:
+        for cut_site in settings['on_target_cut_sites'][::-1]:
+            if cut_site not in cut_sites:
+                cut_sites.insert(0,cut_site)
             cut_annotations[cut_site] = 'On-target'
 
-
-    if settings['PAM'] is not None and settings['on-target_guides'] is not None:
+    if settings['PAM'] is not None and settings['on_target_guides'] is not None:
         casoffinder_cut_sites = get_cut_sites_casoffinder(
                 root = settings['root'],
                 genome=settings['genome'],
                 pam=settings['PAM'],
-                guides=settings['on-target_guides'],
+                guides=settings['on_target_guides'],
                 cleavage_offset=settings['cleavage_offset'],
                 num_mismatches=settings['casoffinder_num_mismatches'],
                 casoffinder_command=settings['casoffinder_command']
@@ -169,6 +171,7 @@ def main():
     frag_translocation_count = 0 # number of reads fragmented and classified as translocations
     frag_large_deletion_count = 0 # number of reads fragmented and classified as large deletions
     frag_large_inversion_count = 0 # number of reads fragmented and classified as large inversions
+    frag_large_insertion_count = 0 # number of reads fragmented and classified as large insertions
     frag_unidentified_count = 0 # number of reads fragmented and classified as unidentified
 
     #keep track of where every read is assigned
@@ -268,7 +271,6 @@ def main():
             curr_r2_file = custom_unmapped_r2
             curr_r2_description = "R2 reads not aligned to custom targets"
 
-        
             #if we haven't aligned to genome above..
             if not settings['perform_unbiased_analysis']:
                 (genome_r2_assignments,none_file,genome_unmapped_r2, none_file2, genome_r2_aligned_count, genome_r2_mapped_bam_file,genome_r2_chr_aln_plot_obj,genome_r2_tlen_plot_object
@@ -336,7 +338,7 @@ def main():
             r2_assignment_files.append(unmapped_r2_assignments)
 
 
-    (final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
+    (final_assignment_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r1_tx_count_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
         ) = make_final_read_assignments(
                 root = settings['root']+'.final',
                 r1_assignment_files = r1_assignment_files,
@@ -345,7 +347,7 @@ def main():
                 cut_annotations = cut_annotations,
                 target_info = target_info,
                 r1_r2_support_max_distance = settings['r1_r2_support_max_distance'],
-                cut_merge_dist = 20,
+                cut_merge_dist = settings['novel_cut_merge_distance'],
                 genome_map_resolution = 1000000,
                 dedup_based_on_aln_pos = settings['dedup_input_based_on_aln_pos_and_UMI'],
                 discard_reads_without_r2_support = settings['discard_reads_without_r2_support'],
@@ -358,6 +360,9 @@ def main():
     summary_plot_objects.append(r1_source_plot_obj)
     r1_classification_plot_obj.order=26
     summary_plot_objects.append(r1_classification_plot_obj)
+    if r1_tx_count_plot_obj is not None:
+        r1_tx_count_plot_obj.order=26.5
+        summary_plot_objects.append(r1_tx_count_plot_obj)
     if r2_source_plot_obj is not None:
         r2_source_plot_obj.order=27
         summary_plot_objects.append(r2_source_plot_obj)
@@ -430,8 +435,8 @@ def main():
         crispresso_classification_plot_obj.order=40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
-    labels = ["Input Reads","Aligned Custom Targets","Aligned Genome","Fragmented Linear","Fragmented Translocations","Fragmented Large Deletions","Fragmented Large Inversions","Fragmented Unidentified"]
-    values = [num_reads_input,custom_aligned_count,genome_aligned_count,frag_linear_count,frag_translocation_count,frag_large_deletion_count,frag_large_inversion_count,frag_unidentified_count]
+    labels = ["Input Reads","Aligned Custom Targets","Aligned Genome","Fragmented Linear","Fragmented Translocations","Fragmented Large Deletions","Fragmented Large Inversions","Fragmented Large Insertions","Fragmented Unidentified"]
+    values = [num_reads_input,custom_aligned_count,genome_aligned_count,frag_linear_count,frag_translocation_count,frag_large_deletion_count,frag_large_inversion_count,frag_large_insertion_count,frag_unidentified_count]
     alignment_summary_root = settings['root']+".alignmentSummary"
     with open(alignment_summary_root+".txt",'w') as summary:
         summary.write("\t".join(labels)+"\n")
@@ -549,6 +554,7 @@ def parse_settings(args):
     f_group.add_argument('--fragment_step_size', type=int, help='Step size (bp) between fragments for fragment creation', default=10)
     f_group.add_argument('--min_seen_frag_cutoff', type=int, help='Minimum number of fragments aligned to a location for the location to be considered as a possible alignment location for a read (e.g. if a read only has 3 fragments aligning to location A and 1 fragment aligning to location B, a min_seen_frag_cutoff of 2 would not allow position B', default=2)
     f_group.add_argument('--fragment_min_mapq', type=int, help='Minimum mapq (mapping quality) for a fragment to be considered. Increasing this value may reduce sensitivity for fragments aligned to repetitive regions. Any value greater than 1 will likely eliminate multi-mapped reads.', default=30)
+    f_group.add_argument('--novel_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) from each other will be merged into a single cut site. In discovery mode, putative cut sites (in addition to the provided cut sites) are discovered and reported. Variation in the cut sites or in the fragments produced may produce clusters of cut sites in a certain region. This parameter will merge novel cut sites within this distance into a single cut site. Additionally, novel cut sites within this distance of known/given cut sites will be assigned to the known/given cut site.', default=20)
 
     #umi settings
     u_group = parser.add_argument_group('UMI parameters')
@@ -794,6 +800,11 @@ def parse_settings(args):
         settings['fragment_min_mapq'] = int(settings_file_args['fragment_min_mapq'])
         settings_file_args.pop('fragment_min_mapq')
 
+    settings['novel_cut_merge_distance'] = cmd_args.novel_cut_merge_distance
+    if 'novel_cut_merge_distance' in settings_file_args:
+        settings['novel_cut_merge_distance'] = int(settings_file_args['novel_cut_merge_distance'])
+        settings_file_args.pop('novel_cut_merge_distance')
+
     settings['dedup_input_on_UMI'] = cmd_args.dedup_input_on_UMI
     if 'dedup_input_on_UMI' in settings_file_args:
         settings['dedup_input_on_UMI'] = (settings_file_args['dedup_input_on_UMI'].lower() == 'true')
@@ -889,7 +900,7 @@ def parse_settings(args):
         can_use_previous_analysis = True
         for setting in settings:
             if setting in ['debug','n_processes']:
-                next
+                continue
             if setting not in previous_settings:
                 can_use_previous_analysis = False
                 logger.info(('Not using previous analyses - got new setting %s (%s)')%(setting,settings[setting]))
@@ -1201,7 +1212,7 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
                 (custom_index_fasta,target_count_str,target_list_file) = line_els
                 target_count = int(target_count_str)
                 read_target_count = 0
-                if target_count > 0 and os.path.isfile(target_list_file):
+                if os.path.isfile(target_list_file):
                     target_cut_str_index = 0
                     with open(target_list_file,'r') as fin:
                         head_line = fin.readline().rstrip('\n')
@@ -1673,16 +1684,18 @@ def make_artificial_targets(root,cuts,cut_annotations,genome,target_length,targe
 
 
 
-    custom_index_fasta = root + '.fa'
-    logger.info('Printing ' + str(len(target_names)) + ' targets to custom index (' + custom_index_fasta + ')')
-    with open(custom_index_fasta,'w') as fout:
-        for i in range(len(target_names)):
-            fout.write('>'+target_names[i]+'\n'+target_info[target_names[i]]['sequence']+'\n')
+    custom_index_fasta = None
+    if len(target_names) > 0:
+        custom_index_fasta = root + '.fa'
+        logger.info('Printing ' + str(len(target_names)) + ' targets to custom index (' + custom_index_fasta + ')')
+        with open(custom_index_fasta,'w') as fout:
+            for i in range(len(target_names)):
+                fout.write('>'+target_names[i]+'\n'+target_info[target_names[i]]['sequence']+'\n')
 
-    logger.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
-    this_command = bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta
-    logger.debug('Bowtie build command: ' + this_command)
-    index_result = subprocess.check_output(this_command, shell=True,stderr=subprocess.STDOUT)
+        logger.info('Indexing custom targets using ' + bowtie2_command + '-build (' + custom_index_fasta + ')')
+        this_command = bowtie2_command + '-build --offrate 3 --threads ' + str(bowtie2_threads) + ' ' + custom_index_fasta + ' ' + custom_index_fasta
+        logger.debug('Bowtie build command: ' + this_command)
+        index_result = subprocess.check_output(this_command, shell=True,stderr=subprocess.STDOUT)
 
     target_list_file = root+".txt"
     with open (target_list_file,'w') as fout:
@@ -2646,7 +2659,7 @@ def align_reads(root,fastq_r1,fastq_r2,reads_name,bowtie2_reference,reference_na
         logger.info('Finished analysis of %d/%d %s (%d reads input) aligned to %s'%(r1_aln_count,r1_count,reads_name,read_count,reference_name.lower()))
     return(r1_assignments_file,r2_assignments_file,unmapped_fastq_r1_file,unmapped_fastq_r2_file,aligned_count,mapped_bam_file,chr_aln_plot_obj,tlen_plot_obj)
 
-def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,r1_r2_support_max_distance=100000,cut_merge_dist=20,genome_map_resolution=1000000,dedup_based_on_aln_pos=True,discard_reads_without_r2_support=True,can_use_previous_analysis=False):
+def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut_sites,cut_annotations,target_info,r1_r2_support_max_distance=100000,cut_merge_dist=150,genome_map_resolution=1000000,dedup_based_on_aln_pos=True,discard_reads_without_r2_support=False,can_use_previous_analysis=False):
     """
     Makes final read assignments after:
         Pairing R1 and R2 if they were processed in separate steps
@@ -2675,6 +2688,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         deduplication_plot_obj: plot showing how many reads were deuplicated
         r1_source_plot_obj: plot for R1 sources (genome/custom/frags)
         r1_classification_plot_obj: plot for R1 assignments (linear, translocation, etc)
+        r1_tx_count_plot_obj: plot for R1 translocations
         r2_source_plot_obj: plot for R2 sources (genome/custom/frags)
         r2_classification_plot_obj: plot for R2 assignments (linear, translocation, etc)
     """
@@ -2710,6 +2724,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             r1_classification_plot_obj = None
             if r1_classification_plot_obj_str != "" and r1_classification_plot_obj_str != "None":
                 r1_classification_plot_obj = PlotObject.from_json(r1_classification_plot_obj_str)
+
+            r1_tx_count_plot_obj_str = fin.readline().rstrip('\n')
+            r1_tx_count_plot_obj = None
+            if r1_tx_count_plot_obj_str != "" and r1_tx_count_plot_obj_str != "None":
+                r1_tx_count_plot_obj = PlotObject.from_json(r1_tx_count_plot_obj_str)
 
             r2_source_plot_obj_str = fin.readline().rstrip('\n')
             r2_source_plot_obj = None
@@ -2781,7 +2800,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
 
                 if previous_total_read_count == read_total_read_count:
                     logger.info('Using previously-processed assignments for ' + str(final_processed_count) + '/' + str(read_total_read_count) + ' total reads')
-                    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
+                    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r1_tx_count_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
                 else:
                     logger.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
 
@@ -3029,6 +3048,8 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             if i == len(these_cut_points) or abs(these_cut_points[i] - this_weighted_mean) > cut_merge_dist:
                 this_pos = int(this_weighted_mean)
                 min_dist = cut_merge_dist
+                #once we've selected a putative cut point, make sure it isn't within min_dist from known cut points
+                #and select the closest point (keep shrinking min_dist in case another one is found closer)
                 if cut_chr in known_cut_points_by_chr:
                     for known_cut_point in known_cut_points_by_chr[cut_chr]:
                         this_dist = abs(known_cut_point - this_weighted_mean)
@@ -3535,6 +3556,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,translocation_cut_counts[tx_key_1][tx_key_2]))
         logger.info('Wrote ' + read_num + ' translocation list ' + tx_list_report)
 
+
         tx_report = root + "." + read_num + "_translocation_table.txt"
         with open (tx_report,'w') as fout:
             fout.write('Translocations\t'+"\t".join(tx_keys)+"\n")
@@ -3543,7 +3565,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         logger.info('Wrote ' + read_num + ' translocation table ' + tx_report)
 
         tx_ontarget_report = root + '.' + read_num + "_ontarget_translocation_table.txt"
-        on_targets = sorted([x for x in cut_annotations if cut_annotations[x] == 'On-target'])
+        on_targets = sorted([x for x in tx_keys if x in cut_annotations and cut_annotations[x] == 'On-target'])
         if len(on_targets) > 0:
             on_to_off_target_set = set()
             for on_target in on_targets:
@@ -3562,9 +3584,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
             logger.info('Wrote ' + read_num + ' on-target translocation table ' + tx_ontarget_report)
 
         # fragment translocations
+        tx_counts = {}
         tx1_keys = sorted(fragment_translocation_cut_counts.keys())
         tx2_keys = defaultdict(int)
-        tx_list_report = root + '.' + read_num + "_fragment_translocation_list.txt"
+        tx_list_report_root = root + '.' + read_num + "_fragment_translocation_list"
+        tx_list_report = tx_list_report_root + '.txt'
         with open (tx_list_report,'w') as fout:
             fout.write('fragment_1\tfragment_1_anno\tfragment_2\tfragment_2_anno\tcount\tannotation\n')
             for tx_key_1 in tx1_keys:
@@ -3584,6 +3608,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     # only write if counts exist
                     if fragment_translocation_cut_counts[tx_key_1][tx_key_2] > 0:
                         fout.write("%s\t%s\t%s\t%s\t%s\t%s\n"%(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,fragment_translocation_cut_counts[tx_key_1][tx_key_2],tx_classification))
+                        tx_counts[(tx_key_1,cut_1_annotation,tx_key_2,cut_2_annotation,tx_classification)] = fragment_translocation_cut_counts[tx_key_1][tx_key_2]
                     tx2_keys[tx_key_2] += 1
         logger.info('Wrote ' + read_num + ' fragment translocation list ' + tx_list_report)
 
@@ -3596,7 +3621,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         logger.info('Wrote ' + read_num + ' fragment translocation table ' + tx_report)
 
         tx_ontarget_report = root + "." + read_num + "_ontarget_fragment_translocation_table.txt"
-        on_targets = sorted([x for x in cut_annotations if cut_annotations[x] == 'On-target'])
+        on_targets = sorted([x for x in tx1_keys if x in cut_annotations and cut_annotations[x] == 'On-target'])
         on_targets_1_to_report = defaultdict(int)
         on_targets_2_to_report = defaultdict(int)
         if len(on_targets) > 0:
@@ -3617,11 +3642,76 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                     fout.write(tx_key+"\t"+"\t".join([str(fragment_translocation_cut_counts[tx_key][x]) if tx_key in fragment_translocation_cut_counts else str(0) for x in on_targets_2_list])+"\n")
             logger.info('Wrote ' + read_num + ' on-target fragment translocation table ' + tx_ontarget_report)
 
+        sorted_tx_list = sorted(tx_counts, key=tx_counts.get,reverse=True)
+        sorted_tx_list = sorted_tx_list[:min(20,len(sorted_tx_list))]
+
+        tx_count_plot_obj = None
+        if len(sorted_tx_list) > 0:
+            left_pos_list = [x[0][2:] for x in sorted_tx_list if '*' not in x[0]]
+            right_pos_list = [x[2][:-2] for x in sorted_tx_list if '*' not in x[2]]
+            pos_list = sorted(list(set.union(set(left_pos_list),set(right_pos_list))))
+
+            cut_categories = ['On-target', 'Off-target', 'Known','Casoffinder','Novel']
+            cut_colors = plt.get_cmap('Set1',len(cut_categories))
+            cut_category_lookup = {}
+            for idx,cat in enumerate(cut_categories):
+                cut_category_lookup[cat] = cut_colors(idx/len(cut_categories))
+
+            color_grad = plt.get_cmap('viridis',len(pos_list))
+            color_lookup = {}
+            for idx,pos in enumerate(pos_list):
+                color_lookup[pos] = color_grad(idx/len(pos_list))
+
+            left_labs = []
+            right_labs = []
+            counts = []
+            left_cols = []
+            right_cols = []
+            left_outline_cols = []
+            right_outline_cols = []
+            for tx_count_obj in sorted_tx_list:
+                left_labs.append(tx_count_obj[4] + ": " + tx_count_obj[0])
+                right_labs.append(tx_count_obj[2])
+                counts.append(tx_counts[tx_count_obj])
+                this_left_col = 'k'
+                if '*' not in tx_count_obj[0]:
+                    this_left_col = color_lookup[tx_count_obj[0][2:]]
+                left_cols.append(this_left_col)
+                this_left_outline_col = 'None'
+                if tx_count_obj[1] in cut_category_lookup:
+                    this_left_outline_col = cut_category_lookup[tx_count_obj[1]]
+                left_outline_cols.append(this_left_outline_col)
+
+                this_right_col = 'k'
+                if '*' not in tx_count_obj[2]:
+                    this_right_col = color_lookup[tx_count_obj[2][:-2]]
+                right_cols.append(this_right_col)
+                this_right_outline_col = 'None'
+                if tx_count_obj[3] in cut_category_lookup:
+                    this_right_outline_col = cut_category_lookup[tx_count_obj[3]]
+                right_outline_cols.append(this_right_outline_col)
+
+            tx_plt = makeTxCountPlot(left_labs=left_labs, right_labs=right_labs, counts=counts, left_cols=left_cols, right_cols=right_cols, left_outline_cols=left_outline_cols, right_outline_cols=right_outline_cols,outline_cols=cut_colors.colors, outline_labs=cut_categories)
+            plot_name = tx_list_report_root
+            tx_plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
+            tx_plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
+
+            tx_count_plot_obj = PlotObject(plot_name = plot_name,
+                    plot_title = 'Translocation Summary',
+                    plot_label = 'Final translocation counts for %s.'%read_num,
+                    plot_datas = [('Fragment translocation list',tx_list_report_root + ".txt"),('Translocation table',tx_report)]
+                    )
+
+        return tx_count_plot_obj
+
+
+
     #r1 translocations
-    write_translocation_reports('r1',r1_translocation_cut_counts,r1_fragment_translocation_cut_counts)
+    r1_tx_count_plot_obj = write_translocation_reports('r1',r1_translocation_cut_counts,r1_fragment_translocation_cut_counts)
     #r2 translocations
+    r2_tx_count_plot_obj = None
     if sorted_r2_file is not None:
-        write_translocation_reports('r2',r2_translocation_cut_counts,r2_fragment_translocation_cut_counts)
+        r2_tx_count_plot_obj = write_translocation_reports('r2',r2_translocation_cut_counts,r2_fragment_translocation_cut_counts)
 
     #deduplication plot
     deduplication_plot_obj = None
@@ -3687,7 +3777,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
                         aln_pos_frag_counts_by_chr[chrom][pos]))
 
         source_labels = ['Genome','Custom targets','Fragmented','Unmapped']
-        classification_labels = ['Primed','Linear','Chimera','Large deletion','Large inversion','Translocation','Unidentified']
+        classification_labels = ['Primed','Linear','Chimera','Large deletion','Large inversion','Large insertion','Translocation','Unidentified']
 
         #check to make sure labels match
         for k in final_source_counts.keys():
@@ -3888,6 +3978,11 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         r1_classification_plot_obj_str = r1_classification_plot_obj.to_json()
         fout.write(r1_classification_plot_obj_str+"\n")
 
+        r1_tx_count_plot_obj_str = "None"
+        if r1_tx_count_plot_obj is not None:
+            r1_tx_count_plot_obj_str = r1_tx_count_plot_obj.to_json()
+        fout.write(r1_tx_count_plot_obj_str+"\n")
+
         r2_source_plot_obj_str = "None"
         if r2_source_plot_obj is not None:
             r2_source_plot_obj_str = r2_source_plot_obj.to_json()
@@ -3914,7 +4009,7 @@ def make_final_read_assignments(root,r1_assignment_files,r2_assignment_files,cut
         fout.write(r1_r2_no_support_dist_plot_obj_str+"\n")
 
 
-    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
+    return final_file,r1_read_ids_for_crispresso,r1_cut_counts_for_crispresso,r2_read_ids_for_crispresso,r2_cut_counts_for_crispresso,deduplication_plot_obj,r1_source_plot_obj,r1_classification_plot_obj,r1_tx_count_plot_obj,r2_source_plot_obj,r2_classification_plot_obj,r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj
 
 
 def read_command_output(command):
@@ -4839,7 +4934,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
     amp_half_length = av_read_length/1.5
     for i,cut in enumerate(printed_cuts):
         cut_els = cut.split(" ")
-        cut_type = " ".join(cut_els[0:-1]) #Large deltion is two words..
+        cut_type = " ".join(cut_els[0:-1]) #Large deletion is two words..
         cut_loc = cut_els[-1]
         cut_name = cut_names[cut]
         amp_seq = None
@@ -5138,7 +5233,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
         for line in f_assignments:
             line = line.rstrip('\n')
             f_assignments_line_els = line.split("\t")
-            crispresso_status = 'NA'
+            crispresso_status = '(not analyzed)'
             this_id = 'r1_' + f_assignments_line_els[0]
             if this_id in all_crispresso_read_modified_data:
                 if all_crispresso_read_modified_data[this_id] == 'M':
@@ -5172,7 +5267,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
     classification_plot_obj = PlotObject(
             plot_name = classification_plot_obj_root,
             plot_title = 'Read classification including CRISPResso analysis',
-            plot_label = 'CRISPResso classification<br>' + plot_count_str,
+            plot_label = 'CRISPResso classification<br>' + plot_count_str + '<brReads labeled (not analyzed) had to few reads for CRISPResso analysis. You can adjust the minimum number of reads to run CRISPResso with the parameter "crispresso_min_count".',
             plot_datas = [
                 ('CRISPResso classification summary',classification_plot_obj_root + ".txt")
                 ]
@@ -5465,7 +5560,11 @@ def makeTxCountPlot(left_labs = [],
         right_labs = [],
         counts = [],
         left_cols = None,
-        right_cols = None
+        right_cols = None,
+        left_outline_cols=None,
+        right_outline_cols=None,
+        outline_cols=None,
+        outline_labs=None
         ):
     """
     Make a count plot for the most common types of translocations
@@ -5476,17 +5575,29 @@ def makeTxCountPlot(left_labs = [],
         counts: (list) read counts for each translocation
         left_cols: (list) colors for left side
         right_cols: (list) colors for right side
+        left_outline_cols: (list) outline colors for left side
+        right_outline_cols: (list) outline colors for right side
+        outline_cols: (list) colors for outline color legend
+        outline_labs: (list) labels for outline color legend
 
         The length of all params should be the same - one for each translocation to plot
+    returns:
+        plt: matplotlib plot object
     """
 
     num_boxes = len(left_labs)
 
     if left_cols is None:
-        left_cols = 'b'*num_boxes
+        left_cols = ['b']*num_boxes
 
     if right_cols is None:
-        right_cols = 'b'*num_boxes
+        right_cols = ['b']*num_boxes
+
+    if left_outline_cols is None:
+        left_outline_cols = ['None']*num_boxes
+
+    if right_outline_cols is None:
+        right_outline_cols = ['None']*num_boxes
 
     x_width = 2 - 0.1
     y_height = 1 - 0.1
@@ -5498,12 +5609,12 @@ def makeTxCountPlot(left_labs = [],
     fig, (ax1, ax2) = plt.subplots(1,2,sharey=True, figsize=(12,8))
     left_boxes = [Rectangle((x1_start, y), x_width, y_height)
                       for y in ys]
-    left_pc = PatchCollection(left_boxes, facecolor=left_cols, alpha=0.2)
+    left_pc = PatchCollection(left_boxes, facecolor=left_cols, edgecolor=left_outline_cols, linewidth=2)
 
     right_boxes = [Rectangle((x2_start, y), x_width, y_height)
                       for y in ys]
 
-    right_pc = PatchCollection(right_boxes, facecolor=right_cols, alpha=0.2)
+    right_pc = PatchCollection(right_boxes, facecolor=right_cols, edgecolor=right_outline_cols, linewidth=2)
 
     # Add collection to axes
     ax1.add_collection(left_pc)
@@ -5520,16 +5631,24 @@ def makeTxCountPlot(left_labs = [],
 
     ax1.axis('off')
 
+    if outline_labs is not None:
+        legend_patches = []
+        for col,lab in zip(outline_cols,outline_labs):
+            legend_patches.append(Patch(facecolor='None',edgecolor=col,label=lab))
+        ax1.legend(handles=legend_patches,loc="lower center", bbox_to_anchor=(0.5, -0.2))
+
     rects = []
     for ind in range(num_boxes):
         rects.append(Rectangle((0,ys[ind]+count_bar_ydiff),counts[ind],y_height-(count_bar_ydiff*2)))
+        ax2.text(x=counts[ind],y=ys[ind]+y_height/2,s=" " + str(counts[ind]),ha='left',va='center')
 
     pc = PatchCollection(rects)
     ax2.add_collection(pc)
     ax2.axes.get_yaxis().set_visible(False)
     ax2.set_frame_on(False)
 
-    ax2.set_xlim(0,max(1,max(counts)))
+    ax2.set_xscale("log")
+    ax2.set_xlim(1,max(5,max(counts)))
     ax2.set_xlabel('Number of reads')
 
     return plt
