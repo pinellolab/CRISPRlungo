@@ -15,13 +15,14 @@ import os
 import re
 import subprocess
 import sys
+from Bio import pairwise2
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
 
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.0"
+__version__ = "v0.1.1"
 
 def main():
     settings, logger = parse_settings(sys.argv)
@@ -95,15 +96,20 @@ def main():
         curr_r1_file = dedup_r1
         curr_r2_file = dedup_r2
 
-
     filtered_on_primer_fastq_r1, filtered_on_primer_fastq_r2, post_filter_on_primer_read_count, filter_on_primer_plot_obj = filter_on_primer(
             root = settings['root']+'.trimPrimers',
             fastq_r1 = curr_r1_file,
             fastq_r2 = curr_r2_file,
             origin_seq = origin_seq,
+            min_primer_aln_score = settings['min_primer_aln_score'],
+            min_primer_length = settings['min_primer_length'],
+            min_read_length = settings['min_read_length'],
+            transposase_adapter_seq = settings['transposase_adapter_seq'],
             n_processes = settings['n_processes'],
             cutadapt_command = settings['cutadapt_command'],
-            can_use_previous_analysis = settings['can_use_previous_analysis']
+            use_cutadapt = settings['primer_filter_use_cutadapt'],
+            keep_intermediate = settings['keep_intermediate'],
+            can_use_previous_analysis = settings['can_use_previous_analysis'],
             )
     curr_r1_file = filtered_on_primer_fastq_r1
     curr_r2_file = filtered_on_primer_fastq_r2
@@ -288,14 +294,21 @@ def parse_settings(args):
     ot_group.add_argument('--casoffinder_num_mismatches', type=int, help='If greater than zero, the number of Cas-OFFinder mismatches for in-silico off-target search. If this value is zero, Cas-OFFinder is not run', default=0)
     ot_group.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
 
-    #specify primer information
-    p_group = parser.add_argument_group('Primer parameters and settings')
+    #specify primer filtering information
+    p_group = parser.add_argument_group('Primer and filtering parameters and settings')
+    p_group.add_argument('--suppress_primer_filtering', help='Whether to filter reads for the presence of the primer/origin sequence. If set, all reads will be considered (but alignments may not ', action='store_true')
     p_group.add_argument('--primer_seq', type=str, help='Sequence of primer',default=None)
+    p_group.add_argument('--min_primer_aln_score', type=int, help='Minimum primer/origin alignment score for trimming.',default=40)
+    p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=10)
+    p_group.add_argument('--primer_filter_use_cutadapt', help='Whether to use cutadapt to identify primer/origin sequence in reads. If true, cutadapt is used. If false, custom lookhead algorithm is used.', action='store_true')
+    p_group.add_argument('--min_read_length', type=int, help='Minimum length of read after all filtering',default=30)
+    p_group.add_argument('--transposase_adapter_seq', type=str, help='Transposase adapter sequence to be trimmed from reads',default='CTGTCTCTTATACACATCTGACGCTGCCGACGA')
+
 
     #min alignment cutoffs for alignment to each arm/side of read
     a_group = parser.add_argument_group('Alignment cutoff parameters')
     a_group.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of the alignment. E.g. if a read aligns to a genomic location, the first and last arm_min_matched_start_bases of the read would have to match exactly to the aligned location.', default=10)
-    a_group.add_argument('--ignore_n', type=bool, help='If set, "N" bases will be ignored. By default (False) N bases will count as mismatches in the number of bases required to match at each arm/side of the read', default=False)
+    a_group.add_argument('--ignore_n', help='If set, "N" bases will be ignored. By default (False) N bases will count as mismatches in the number of bases required to match at each arm/side of the read', action='store_true')
 
     #CRISPResso settings
     c_group = parser.add_argument_group('CRISPResso settings')
@@ -448,6 +461,31 @@ def parse_settings(args):
     if 'primer_seq' in settings_file_args:
         settings['primer_seq'] = settings_file_args['primer_seq']
         settings_file_args.pop('primer_seq')
+
+    settings['min_primer_aln_score'] = cmd_args.min_primer_aln_score
+    if 'min_primer_aln_score' in settings_file_args:
+        settings['min_primer_aln_score'] = int(settings_file_args['min_primer_aln_score'])
+        settings_file_args.pop('min_primer_aln_score')
+
+    settings['min_primer_length'] = cmd_args.min_primer_length
+    if 'min_primer_length' in settings_file_args:
+        settings['min_primer_length'] = int(settings_file_args['min_primer_length'])
+        settings_file_args.pop('min_primer_length')
+
+    settings['primer_filter_use_cutadapt'] = cmd_args.primer_filter_use_cutadapt
+    if 'primer_filter_use_cutadapt' in settings_file_args:
+        settings['primer_filter_use_cutadapt'] = (settings_file_args['primer_filter_use_cutadapt'].lower() == 'true')
+        settings_file_args.pop('primer_filter_use_cutadapt')
+
+    settings['min_read_length'] = cmd_args.min_read_length
+    if 'min_read_length' in settings_file_args:
+        settings['min_read_length'] = int(settings_file_args['min_read_length'])
+        settings_file_args.pop('min_read_length')
+
+    settings['transposase_adapter_seq'] = cmd_args.transposase_adapter_seq
+    if 'transposase_adapter_seq' in settings_file_args:
+        settings['transposase_adapter_seq'] = settings_file_args['transposase_adapter_seq']
+        settings_file_args.pop('transposase_adapter_seq')
 
     settings['arm_min_matched_start_bases'] = cmd_args.arm_min_matched_start_bases
     if 'arm_min_matched_start_bases' in settings_file_args:
@@ -912,6 +950,8 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
     logger.info('Preparing primer and cut-site information')
 
     primer_is_genomic = False # Whether the primer is genomic (e.g. if priming off an exogenous sequence (GUIDE-seq) this would be false) This value is set below after aligning to the genome
+    primer_chr = 'exogenous'
+    primer_loc = 'None'
     primer_is_rc = 0
     #attempt to align primer to genome
     logger.info('Finding genomic coordinates of primer %s'%(primer_seq))
@@ -960,7 +1000,7 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         else:
             raise Exception('Could not find unique genomic coordinates for guide %s'%guide_seq)
 
-    origin_seq = guide_seq
+    origin_seq = primer_seq
     if primer_is_genomic:
         logger.debug('Closest cut site to primer (%s:%s) is %s:%s'%(primer_chr, primer_loc, primer_chr, closest_cut_site_loc))
         origin_start = primer_loc
@@ -1297,7 +1337,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
     #done processing just plotting now
     return(fastq_r1_dedup,fastq_r2_dedup)
 
-def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',min_read_len=25,n_processes=1,cutadapt_command='cutadapt',can_use_previous_analysis=False,keep_intermediate=False):
+def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',use_cutadapt=False,keep_intermediate=False,can_use_previous_analysis=False):
     """
     Trims the primer from the input reads, only keeps reads with the primer present in R1
     Also trims the transposase adapter sequence from reads and filters reads that are too short
@@ -1307,10 +1347,14 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,transposase_adapter_seq='
         fastq_r1: R1 reads to trim
         fastq_r2: R2 reads to trim (or None)
         origin_seq: primer sequence to trim, if genomic, this includes the entire genomic sequence from the primer to the first cut site
+        min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
+        min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
+        min_read_len: minimum r1 read length to keep (shorter tagmented reads are filtered)
         transposase_adapter_seq: transposase adapter seq to trim from R1
         n_processes: Number of processes to run on
-        min_read_len: minimum r1 read length to keep (shorter tagmented reads are filtered
         cutadapt_command: command to run cutadapt
+        use_cutadapt: if true, use cutadapt to identify primer sequence. If false, custom lookhead search will be used.
+        keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
@@ -1351,42 +1395,52 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,transposase_adapter_seq='
 
     logger.info('Filtering and trimming primers from reads')
 
-    cutadapt_log = root + ".cutadapt.log"
-    if fastq_r2 is None:
-        filtered_on_primer_fastq_r1 = root + ".trimmed.fq.gz"
-        filtered_on_primer_fastq_r2 = None
-        trim_command = "%s -g primerSeq=%s -o %s --rename='{id} {comment} primer={match_sequence}' --discard-untrimmed --minimum-length %d --cores %s %s > %s"%(cutadapt_command,origin_seq,filtered_on_primer_fastq_r1,min_read_len,n_processes,fastq_r1,cutadapt_log)
-    else:
-        filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
-        filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
-        origin_seq_rc = reverse_complement(origin_seq)
-        trim_command = "%s -g primerSeq=%s -A %s -o %s -p %s --rename='{id} {comment} primer={match_sequence}' --discard-untrimmed --minimum-length %d --pair-filter=first --cores %s %s %s > %s"%(cutadapt_command,origin_seq,origin_seq_rc,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_read_len,n_processes,fastq_r1,fastq_r2,cutadapt_log)
-
-    logger.debug(trim_command)
-    trim_result = subprocess.check_output(trim_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
-
-    if not os.path.exists(cutadapt_log):
-        logger.error('Error found while running command:\n'+trim_command+"\nOutput: "+trim_result)
-
     post_trim_read_count = 'NA'
     too_short_read_count = 'NA'
     untrimmed_read_count = 'NA'
-    with open(cutadapt_log,'r') as fin:
-        for line in fin:
-            m = re.search(r'written \(passing filters\):\s+([\d,]+) \(\d.*%\)',line)
-            if m:
-                post_trim_read_count = int(m.group(1).replace(',',''))
+    if use_cutadapt:
+        cutadapt_log = root + ".cutadapt.log"
+        if fastq_r2 is None:
+            filtered_on_primer_fastq_r1 = root + ".trimmed.fq.gz"
+            filtered_on_primer_fastq_r2 = None
+            trim_command = "%s -g primerSeq=%s -o %s --rename='{id} {comment} primer={match_sequence}' --discard-untrimmed --minimum-length %d --cores %s %s > %s"%(cutadapt_command,origin_seq,filtered_on_primer_fastq_r1,min_read_length,n_processes,fastq_r1,cutadapt_log)
+        else:
+            filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
+            filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
+            origin_seq_rc = reverse_complement(origin_seq)
+            trim_command = "%s -g primerSeq=%s -A %s -o %s -p %s --rename='{id} {comment} primer={match_sequence}' --discard-untrimmed --minimum-length %d --pair-filter=first --cores %s %s %s > %s"%(cutadapt_command,origin_seq,origin_seq_rc,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_read_length,n_processes,fastq_r1,fastq_r2,cutadapt_log)
 
-            m = re.search(r'that were too short:\s+([\d,]+) \(\d.*%\)',line)
-            if m:
-                too_short_read_count = int(m.group(1).replace(',',''))
+        logger.debug(trim_command)
+        trim_result = subprocess.check_output(trim_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
 
-            m = re.search(r'discarded as untrimmed:\s+([\d,]+) \(\d.*%\)',line)
-            if m:
-                untrimmed_read_count = int(m.group(1).replace(',',''))
+        if not os.path.exists(cutadapt_log):
+            logger.error('Error found while running command:\n'+trim_command+"\nOutput: "+trim_result)
 
-    if post_trim_read_count == 'NA':
-        logger.error('Could not parse trim read count from file ' + cutadapt_log)
+        with open(cutadapt_log,'r') as fin:
+            for line in fin:
+                m = re.search(r'written \(passing filters\):\s+([\d,]+) \(\d.*%\)',line)
+                if m:
+                    post_trim_read_count = int(m.group(1).replace(',',''))
+
+                m = re.search(r'that were too short:\s+([\d,]+) \(\d.*%\)',line)
+                if m:
+                    too_short_read_count = int(m.group(1).replace(',',''))
+
+                m = re.search(r'discarded as untrimmed:\s+([\d,]+) \(\d.*%\)',line)
+                if m:
+                    untrimmed_read_count = int(m.group(1).replace(',',''))
+
+        if post_trim_read_count == 'NA':
+            logger.error('Could not parse trim read count from file ' + cutadapt_log)
+        
+    else: # if not use cutadapt for trimming reads
+        if fastq_r2 is None:
+            filtered_on_primer_fastq_r1 = root + ".trimmed.fq.gz"
+            filtered_on_primer_fastq_r2 = None
+        else:
+            filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
+            filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
+            trimPrimersPair(fastq_r1,fastq_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,origin_seq,min_primer_aln_score,min_primer_length)
 
     contain_adapter_count = 0
     filtered_too_short_adapter_count = 0
@@ -1397,11 +1451,11 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,transposase_adapter_seq='
         if fastq_r2 is None:
             filtered_for_adapters_fastq_r1 = root + ".trimmed.fq.gz"
             filtered_for_adapters_fastq_r2 = None
-            trim_command = "%s -a %s -o --minimum-length %d --cores %s %s > %s"%(cutadapt_command,transposase_adapter_seq,filtered_for_adapters_fastq_r1,min_read_len,n_processes,filtered_on_primer_fastq_r1,cutadapt_transposase_log)
+            trim_command = "%s -a %s -o --minimum-length %d --cores %s %s > %s"%(cutadapt_command,transposase_adapter_seq,filtered_for_adapters_fastq_r1,min_read_length,n_processes,filtered_on_primer_fastq_r1,cutadapt_transposase_log)
         else:
             filtered_for_adapters_fastq_r1 = root + ".r1.trimmed.fq.gz"
             filtered_for_adapters_fastq_r2 = root + ".r2.trimmed.fq.gz"
-            trim_command = "%s -a %s -o %s -p %s --minimum-length %d --pair-filter=first --cores %s %s %s > %s"%(cutadapt_command,transposase_adapter_seq,filtered_for_adapters_fastq_r1, filtered_for_adapters_fastq_r2,min_read_len,n_processes,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,cutadapt_transposase_log)
+            trim_command = "%s -a %s -o %s -p %s --minimum-length %d --pair-filter=first --cores %s %s %s > %s"%(cutadapt_command,transposase_adapter_seq,filtered_for_adapters_fastq_r1, filtered_for_adapters_fastq_r2,min_read_length,n_processes,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,cutadapt_transposase_log)
 
         logger.debug(trim_command)
         trim_result = subprocess.check_output(trim_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
@@ -2095,25 +2149,29 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
             this_str = chrom+":"+str(pos)
             if this_str in cut_annotations:
                 this_anno = cut_annotations[this_str]
-            if chrom != origin_chr:
-                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0]+' translocation'
-                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' translocation'
-            else:
-                if origin_direction == 'left':
-                    if pos == origin_cut_pos:
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = 'Linear'
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = 'Chimera'
-                    else:
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0] + ' large deletion'
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' large inversion'
+            if origin_direction is None: # guide seq primer
+                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0]+' off-target'
+                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' off-target'
+            else: #origin is genomic
+                if chrom != origin_chr:
+                    cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0]+' translocation'
+                    cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' translocation'
+                else:
+                    if origin_direction == 'left':
+                        if pos == origin_cut_pos:
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = 'Linear'
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = 'Chimera'
+                        else:
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0] + ' large deletion'
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' large inversion'
 
-                else: # origin direction is right
-                    if pos == origin_cut_pos:
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = 'Linear'
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = 'Chimera'
-                    else:
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0] + ' large deletion'
-                        cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' large inversion'
+                    else: # origin direction is right
+                        if pos == origin_cut_pos:
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = 'Linear'
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = 'Chimera'
+                        else:
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0] + ' large deletion'
+                            cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' large inversion'
 
     #add cut classifications from parameters
     for cut_classification_param in cut_classification_annotations:
@@ -2269,8 +2327,12 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
     if len(top_sorted_tx_list) > 0:
 
         # make tx order plot
-        left_label = origin_chr+':'+str(origin_cut_pos)+':'+origin_direction
-        left_pos = origin_chr+':'+str(origin_cut_pos)
+        if origin_chr is None:
+            left_label = 'Exogenous'
+            left_pos = 'None'
+        else:
+            left_label = origin_chr+':'+str(origin_cut_pos)+':'+origin_direction
+            left_pos = origin_chr+':'+str(origin_cut_pos)
         pos_list = [':'.join(x.split(':')[0:2]) for x in top_sorted_tx_list]
         pos_list.append(left_pos)
         pos_list = sorted(list(set(pos_list)))
@@ -3548,5 +3610,142 @@ body {
     with open(report_file,'w') as fo:
         fo.write(html_str)
     logger.info('Wrote ' + report_file)
+
+def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,origin_seq,min_primer_aln_score,min_primer_length):
+    """
+    Trims the primer from paired input reads, only keeps reads with the primer present in R1
+
+    params:
+        root: root for written files
+        fastq_r1: R1 reads to trim
+        fastq_r2: R2 reads to trim
+        fastq_r1_trimmed: output file to write R1 to
+        fastq_r2_trimmed: output file to write R2 to
+        origin_seq: primer sequence to trim, if genomic, this includes the entire genomic sequence from the primer to the first cut site
+        min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
+        min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
+
+    returns:
+        post_trim_read_count: number of reads after trimming (primer found)
+        too_short_read_count: number of reads where primer seq found was too short
+        untrimmed_read_count: number of reads untrimmed (no primer found)
+    """
+    if fastq_r1.endswith('.gz'):
+        f1_in = gzip.open(fastq_r1,'rt')
+    else:
+        f1_in = open(fastq_r1,'rt')
+
+    if fastq_r2.endswith('.gz'):
+        f2_in = gzip.open(fastq_r2,'rt')
+    else:
+        f2_in = open(fastq_r2,'rt')
+
+    f1_out = gzip.open(fastq_r1_trimmed, 'wt')
+
+    f1_out = gzip.open(fastq_r2_trimmed, 'wt')
+
+    tot_read_count = 0
+    post_trim_read_count = 0
+    too_short_read_count = 0
+    untrimmed_read_count = 0
+
+    rc_origin_seq = reverse_complement(origin_seq)
+
+    while (1):
+        f1_id_line   = f1_in.readline().strip()
+        f1_seq_line  = f1_in.readline().strip()
+        f1_plus_line = f1_in.readline()
+        f1_qual_line = f1_in.readline().strip()
+
+        if not f1_qual_line : break
+        if not f1_plus_line.startswith("+"):
+            raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+        tot_read_count += 1
+
+
+
+        f2_id_line   = f2_in.readline().strip()
+        f2_seq_line  = f2_in.readline().strip()
+        f2_plus_line = f2_in.readline()
+        f2_qual_line = f2_in.readline().strip()
+
+        primer_seq, trimmed_seq = trimLeftPrimerFromRead(origin_seq,f1_seq_line,min_primer_aln_score)
+        if len(primer_seq) > min_primer_length: 
+            post_trim_read_count += 1
+            new_f1_qual_line = f1_qual_line[len(primer_seq):]
+            new_f1_id_line = f1_id_line + ' primer=' + primer_seq
+
+            f2_trimmed_seq, f2_primer_seq = trimRightPrimerFromRead(rc_origin_seq,f2_seq_line,min_primer_aln_score)
+            new_f2_qual_line = f1_qual_line[len(primer_seq):]
+            f1_out.write(
+                            f1_id_line + "\n" + trimmed_seq + "\n" + f1_plus_line + new_f1_qual_line + \
+                            f2_id_line + "\n" + f2_trimmed_seq + "\n" + f2_plus_line + new_f2_qual_line)
+        elif len(primer_seq) > 0:
+            too_short_read_count += 1
+        else:
+            untrimmed_read_count += 1
+
+    #finished iterating through fastq file
+    f1_in.close()
+    f2_in.close()
+    return(post_trim_read_count, too_short_read_count, untrimmed_read_count)
+
+def trimLeftPrimerFromRead(primer, read, min_score=40, match_score=2, mismatch_score=-5):
+    """
+    Trims a primer from a given read
+    E.g. for --primer--read-- returns the portion that aligns to the primer (and before) as the trimmed_primer_seq and to the right as the trimmed_read_seq
+
+    params:
+        primer: string
+        read: string
+        min_score: minimum alignment score between primer and sequence
+        match_score: match score for alignment
+        mismatch_score: mismatch/gap score for alignment
+    
+    returns:
+        trimmed_primer_seq: portion of read that was aligned to the primer
+        trimmed_read_seq: portion of the read after the primer
+
+    """    
+
+    #ms: match: 2
+    #    mismatch: 5
+    #    gap open: 5
+    #    gap extend: 5
+    a = pairwise2.align.localms(primer,read,match_score,mismatch_score,mismatch_score,mismatch_score)[0]
+    if a.score < min_score:
+        return '',read
+    trimmed_primer_seq = a.seqB[:a.end].replace('-','')
+    trimmed_read_seq = a.seqB[a.end:].replace('-','')
+    return trimmed_primer_seq,trimmed_read_seq
+
+def trimRightPrimerFromRead(primer, read, min_score=40, match_score=2, mismatch_score=-5):
+    """
+    Trims a primer from a given read
+    E.g. for --read--primer-- returns the portion that aligns to the primer (and after) as the trimmed_primer_seq and to the left as the trimmed_read_seq
+
+    params:
+        primer: string
+        read: string
+        min_score: minimum alignment score between primer and sequence
+        match_score: match score for alignment
+        mismatch_score: mismatch/gap score for alignment
+    
+    returns:
+        trimmed_read_seq: portion of the read after the primer
+        trimmed_primer_seq: portion of read that was aligned to the primer
+
+    """    
+
+    #ms: match: 2
+    #    mismatch: 5
+    #    gap open: 5
+    #    gap extend: 5
+    a = pairwise2.align.localms(primer,read,match_score,mismatch_score,mismatch_score,mismatch_score)[0]
+    if a.score < min_score:
+        return read,''
+    trimmed_read_seq = a.seqB[:a.start].replace('-','')
+    trimmed_primer_seq = a.seqB[a.start:].replace('-','')
+    return trimmed_read_seq,trimmed_primer_seq
 
 main()
