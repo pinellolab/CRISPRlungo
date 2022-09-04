@@ -1,5 +1,6 @@
 import argparse
 from collections import defaultdict
+import ctypes
 import gzip
 import io
 import json
@@ -15,7 +16,7 @@ import os
 import re
 import subprocess
 import sys
-from Bio import pairwise2
+from lib import ssw_lib
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
 
@@ -299,7 +300,7 @@ def parse_settings(args):
     p_group.add_argument('--suppress_primer_filtering', help='Whether to filter reads for the presence of the primer/origin sequence. If set, all reads will be considered (but alignments may not ', action='store_true')
     p_group.add_argument('--primer_seq', type=str, help='Sequence of primer',default=None)
     p_group.add_argument('--min_primer_aln_score', type=int, help='Minimum primer/origin alignment score for trimming.',default=40)
-    p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=10)
+    p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=30)
     p_group.add_argument('--primer_filter_use_cutadapt', help='Whether to use cutadapt to identify primer/origin sequence in reads. If true, cutadapt is used. If false, custom lookhead algorithm is used.', action='store_true')
     p_group.add_argument('--min_read_length', type=int, help='Minimum length of read after all filtering',default=30)
     p_group.add_argument('--transposase_adapter_seq', type=str, help='Transposase adapter sequence to be trimmed from reads',default='CTGTCTCTTATACACATCTGACGCTGCCGACGA')
@@ -1432,15 +1433,25 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
 
         if post_trim_read_count == 'NA':
             logger.error('Could not parse trim read count from file ' + cutadapt_log)
-        
+
     else: # if not use cutadapt for trimming reads
+        #prep for alignments using ssw
+
+        sLibPath = os.path.dirname(os.path.abspath(__file__))+"/lib"
+        ssw_primer = ssw_lib.CSsw(sLibPath)
+        ssw_align_primer = SSWPrimerAlign(ssw_primer,origin_seq)
+
         if fastq_r2 is None:
             filtered_on_primer_fastq_r1 = root + ".trimmed.fq.gz"
             filtered_on_primer_fastq_r2 = None
+            post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersSingle(fastq_r1,filtered_on_primer_fastq_r1,min_primer_aln_score,min_primer_length,ssw_align_primer)
         else:
             filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
             filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
-            trimPrimersPair(fastq_r1,fastq_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,origin_seq,min_primer_aln_score,min_primer_length)
+            rc_origin_seq = reverse_complement(origin_seq)
+            ssw_primer_rc = ssw_lib.CSsw(sLibPath)
+            ssw_align_primer_rc = SSWPrimerAlign(ssw_primer_rc,rc_origin_seq)
+            post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersPair(fastq_r1,fastq_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc)
 
     contain_adapter_count = 0
     filtered_too_short_adapter_count = 0
@@ -1475,7 +1486,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
                 if m:
                     adapter_too_short_read_count = int(m.group(1).replace(',',''))
 
-        if post_trim_read_count == 'NA':
+        if post_trim_read_count == 'NA' or adapter_too_short_read_count == 'NA':
             logger.error('Could not parse trim read count from file ' + cutadapt_log)
         too_short_read_count += adapter_too_short_read_count
 
@@ -3611,7 +3622,144 @@ body {
         fo.write(html_str)
     logger.info('Wrote ' + report_file)
 
-def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,origin_seq,min_primer_aln_score,min_primer_length):
+class SSWPrimerAlign:
+    """
+    Class for storing objects for SSW alignment
+
+    Attributes:
+        ssw_obj: ssw object for alignment
+        list_letters: list of possible letters for alignment
+        dict_letter_lookup: lookup of letter>number
+        matrix: alignment matrix scores for matches/mismatches
+        qProfile: profile of primer sequence for ssw alignment
+        nFlag: flag for ssw alignment
+        match_score: match score for ssw alignment (should be positive int)
+        mismatch_penalty: mismatch score for ssw alignment (should be positive int)
+        gap_open_penalty: gap open score for ssw alignment (should be positive int)
+        gap_extend_penalty: gap extend score for ssw alignment (should be positive int)
+        primer_seq: primer seq to look for
+    
+    """
+    def __init__(self,ssw_obj,primer_seq,list_letters=['A','C','G','T','N'],nFlag=1,match_score=2,mismatch_penalty=5,gap_open_penalty=5,gap_extend_penalty=5):
+        """
+        args:
+            ssw_obj: ssw object for alignment
+            primer_seq: primer sequence which will be searched for in reads
+            list_letters: list of possible letters for alignment
+            nFlag: flag for ssw alignment - 0 returns starts only, 1 returns both starts and ends
+            match_score: match score for ssw alignment (should be positive int)
+            mismatch_penalty: mismatch score for ssw alignment (should be positive int)
+            gap_open_penalty: gap open score for ssw alignment (should be positive int)
+            gap_extend_penalty: gap extend score for ssw alignment (should be positive int)
+        """        
+        list_letters = ['A', 'C', 'G', 'T', 'N']
+        dict_letter_lookup = {}
+        for i,letter in enumerate(list_letters):
+            dict_letter_lookup[letter] = i
+            dict_letter_lookup[letter.lower()] = i
+        num_letters = len(list_letters)
+        lScore = [0 for i in range(num_letters**2)]
+        for i in range(num_letters-1):
+            for j in range(num_letters-1):
+                if list_letters[i] == list_letters[j]:
+                    lScore[i*num_letters+j] = match_score
+                else:
+                    lScore[i*num_letters+j] = -mismatch_penalty
+
+        # translate score matrix to ctypes
+        matrix = (len(lScore) * ctypes.c_int8) ()
+        matrix[:] = lScore
+
+        qNum = to_int(primer_seq, list_letters, dict_letter_lookup)
+        score_size = 2 #estimated Smith-Waterman score; if your estimated best alignment score is surely < 255 please set 0; if your estimated best alignment score >= 255, please set 1; if you don't know, please set 2
+        qProfile = ssw_obj.ssw_init(qNum, ctypes.c_int32(len(primer_seq)), matrix, len(list_letters), score_size)
+
+        self.ssw_obj = ssw_obj
+        self.list_letters = list_letters
+        self.dict_letter_lookup = dict_letter_lookup
+        self.nFlag = nFlag
+        self.matrix = matrix
+        self.qProfile = qProfile
+        self.match_score = match_score
+        self.mismatch_penalty = mismatch_penalty
+        self.gap_open_penalty = gap_open_penalty
+        self.gap_extend_penalty = gap_extend_penalty
+        self.primer_seq = primer_seq
+        self.qNum = qNum
+        self.c_primer_seq_len = ctypes.c_int32(len(primer_seq))
+        self.len_list_letters = len(list_letters)
+        self.score_size = score_size
+
+
+    def align(self,read):
+        rNum = to_int(read, self.list_letters, self.dict_letter_lookup)
+        qProfile = self.ssw_obj.ssw_init(self.qNum, self.c_primer_seq_len, self.matrix, self.len_list_letters, self.score_size)
+
+        # the last three parameters to this function are not used (limits on scores returned, limits on location, mask length for second-best alignments)
+        ssw_res = self.ssw_obj.ssw_align(self.qProfile, rNum, ctypes.c_int32(len(read)), self.gap_open_penalty, self.gap_extend_penalty, self.nFlag, 0, 0, 0)
+        return ssw_res
+
+    def destroy(self,ssw_res):
+        self.ssw_obj.align_destroy(ssw_res)
+
+def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc):
+    """
+    Trims the primer from single-end input reads, only keeps reads with the primer present in R1
+
+    params:
+        root: root for written files
+        fastq_r1: R1 reads to trim
+        fastq_r1_trimmed: output file to write R1 to
+        min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
+        min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
+        ssw_align_primer: SSWPrimerAlignment object for ssw alignment of primer
+
+    returns:
+        post_trim_read_count: number of reads after trimming (primer found)
+        too_short_read_count: number of reads where primer seq found was too short
+        untrimmed_read_count: number of reads untrimmed (no primer found)
+    """
+    if fastq_r1.endswith('.gz'):
+        f1_in = gzip.open(fastq_r1,'rt')
+    else:
+        f1_in = open(fastq_r1,'rt')
+
+    f1_out = gzip.open(fastq_r1_trimmed, 'wt')
+
+    tot_read_count = 0
+    post_trim_read_count = 0
+    too_short_read_count = 0
+    untrimmed_read_count = 0
+
+    while (1):
+        f1_id_line   = f1_in.readline().strip()
+        f1_seq_line  = f1_in.readline().strip()
+        f1_plus_line = f1_in.readline()
+        f1_qual_line = f1_in.readline().strip()
+
+        if not f1_qual_line : break
+        if not f1_plus_line.startswith("+"):
+            raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
+        tot_read_count += 1
+
+        primer_seq, trimmed_seq = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
+        if len(primer_seq) > min_primer_length:
+            post_trim_read_count += 1
+            new_f1_qual_line = f1_qual_line[len(primer_seq):]
+            new_f1_id_line = f1_id_line + ' primer=' + primer_seq
+
+            f1_out.write(new_f1_id_line + "\n" + trimmed_seq + "\n" + f1_plus_line + new_f1_qual_line + "\n")
+        elif len(primer_seq) > 0:
+            too_short_read_count += 1
+        else:
+            untrimmed_read_count += 1
+
+    #finished iterating through fastq file
+    f1_in.close()
+    f1_out.close()
+    return(post_trim_read_count, too_short_read_count, untrimmed_read_count)
+
+def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc):
     """
     Trims the primer from paired input reads, only keeps reads with the primer present in R1
 
@@ -3621,9 +3769,10 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,origin_s
         fastq_r2: R2 reads to trim
         fastq_r1_trimmed: output file to write R1 to
         fastq_r2_trimmed: output file to write R2 to
-        origin_seq: primer sequence to trim, if genomic, this includes the entire genomic sequence from the primer to the first cut site
         min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
         min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
+        ssw_align_primer: SSWPrimerAlignment object for ssw alignment of primer
+        ssw_align_primer_rc: SSWPrimerAlignment object for ssw alignment of reverse complement primer (to r2)
 
     returns:
         post_trim_read_count: number of reads after trimming (primer found)
@@ -3641,15 +3790,12 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,origin_s
         f2_in = open(fastq_r2,'rt')
 
     f1_out = gzip.open(fastq_r1_trimmed, 'wt')
-
-    f1_out = gzip.open(fastq_r2_trimmed, 'wt')
+    f2_out = gzip.open(fastq_r2_trimmed, 'wt')
 
     tot_read_count = 0
     post_trim_read_count = 0
     too_short_read_count = 0
     untrimmed_read_count = 0
-
-    rc_origin_seq = reverse_complement(origin_seq)
 
     while (1):
         f1_id_line   = f1_in.readline().strip()
@@ -3662,24 +3808,21 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,origin_s
             raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
         tot_read_count += 1
 
-
-
         f2_id_line   = f2_in.readline().strip()
         f2_seq_line  = f2_in.readline().strip()
         f2_plus_line = f2_in.readline()
         f2_qual_line = f2_in.readline().strip()
 
-        primer_seq, trimmed_seq = trimLeftPrimerFromRead(origin_seq,f1_seq_line,min_primer_aln_score)
-        if len(primer_seq) > min_primer_length: 
+        primer_seq, trimmed_seq = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
+        if len(primer_seq) > min_primer_length:
             post_trim_read_count += 1
             new_f1_qual_line = f1_qual_line[len(primer_seq):]
             new_f1_id_line = f1_id_line + ' primer=' + primer_seq
 
-            f2_trimmed_seq, f2_primer_seq = trimRightPrimerFromRead(rc_origin_seq,f2_seq_line,min_primer_aln_score)
-            new_f2_qual_line = f1_qual_line[len(primer_seq):]
-            f1_out.write(
-                            f1_id_line + "\n" + trimmed_seq + "\n" + f1_plus_line + new_f1_qual_line + \
-                            f2_id_line + "\n" + f2_trimmed_seq + "\n" + f2_plus_line + new_f2_qual_line)
+            f2_trimmed_seq, f2_primer_seq = trimRightPrimerFromRead(f2_seq_line,ssw_align_primer_rc,min_primer_aln_score)
+            new_f2_qual_line = f2_qual_line[len(f2_primer_seq):]
+            f1_out.write(new_f1_id_line + "\n" + trimmed_seq + "\n" + f1_plus_line + new_f1_qual_line + "\n")
+            f2_out.write(f2_id_line + "\n" + f2_trimmed_seq + "\n" + f2_plus_line + new_f2_qual_line + "\n")
         elif len(primer_seq) > 0:
             too_short_read_count += 1
         else:
@@ -3688,9 +3831,11 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,origin_s
     #finished iterating through fastq file
     f1_in.close()
     f2_in.close()
+    f1_out.close()
+    f2_out.close()
     return(post_trim_read_count, too_short_read_count, untrimmed_read_count)
 
-def trimLeftPrimerFromRead(primer, read, min_score=40, match_score=2, mismatch_score=-5):
+def trimLeftPrimerFromRead(read, ssw_align, min_score=40):
     """
     Trims a primer from a given read
     E.g. for --primer--read-- returns the portion that aligns to the primer (and before) as the trimmed_primer_seq and to the right as the trimmed_read_seq
@@ -3698,54 +3843,83 @@ def trimLeftPrimerFromRead(primer, read, min_score=40, match_score=2, mismatch_s
     params:
         primer: string
         read: string
+        ssw_align: ssw alignment object
         min_score: minimum alignment score between primer and sequence
-        match_score: match score for alignment
-        mismatch_score: mismatch/gap score for alignment
-    
+
     returns:
         trimmed_primer_seq: portion of read that was aligned to the primer
         trimmed_read_seq: portion of the read after the primer
 
-    """    
+    """
 
-    #ms: match: 2
-    #    mismatch: 5
-    #    gap open: 5
-    #    gap extend: 5
-    a = pairwise2.align.localms(primer,read,match_score,mismatch_score,mismatch_score,mismatch_score)[0]
-    if a.score < min_score:
+    ssw_res = ssw_align.align(read)
+    if ssw_res.contents.nScore < min_score:
+        ssw_align.destroy(ssw_res)
         return '',read
-    trimmed_primer_seq = a.seqB[:a.end].replace('-','')
-    trimmed_read_seq = a.seqB[a.end:].replace('-','')
-    return trimmed_primer_seq,trimmed_read_seq
+    else:
+        trimmed_primer_seq = read[:ssw_res.contents.nQryEnd+1]
+        trimmed_read_seq = read[ssw_res.contents.nQryEnd+1:]
+        ssw_align.destroy(ssw_res)
+        return trimmed_primer_seq,trimmed_read_seq
 
-def trimRightPrimerFromRead(primer, read, min_score=40, match_score=2, mismatch_score=-5):
+def trimRightPrimerFromRead(read, ssw_align, min_score=40):
     """
     Trims a primer from a given read
     E.g. for --read--primer-- returns the portion that aligns to the primer (and after) as the trimmed_primer_seq and to the left as the trimmed_read_seq
 
     params:
-        primer: string
         read: string
-        min_score: minimum alignment score between primer and sequence
-        match_score: match score for alignment
+        ssw_align: ssw alignment object
         mismatch_score: mismatch/gap score for alignment
-    
+
     returns:
         trimmed_read_seq: portion of the read after the primer
         trimmed_primer_seq: portion of read that was aligned to the primer
 
-    """    
+    """
 
-    #ms: match: 2
-    #    mismatch: 5
-    #    gap open: 5
-    #    gap extend: 5
-    a = pairwise2.align.localms(primer,read,match_score,mismatch_score,mismatch_score,mismatch_score)[0]
-    if a.score < min_score:
+    ssw_res = ssw_align.align(read)
+#    print('================')
+#    print(f'{min_score=}')
+#    print(f'{read=}')
+#    print(f'{ssw_align.primer_seq=}')
+#    print(f'{ssw_res.contents.nScore=}')
+#    print(f'{ssw_res.contents.nRefBeg=}')
+#    print(f'{ssw_res.contents.nRefEnd=}')
+#    print(f'{ssw_res.contents.nQryBeg=}')
+#    print(f'{ssw_res.contents.nQryEnd=}')
+
+    if ssw_res.contents.nScore < min_score:
+        ssw_align.destroy(ssw_res)
         return read,''
-    trimmed_read_seq = a.seqB[:a.start].replace('-','')
-    trimmed_primer_seq = a.seqB[a.start:].replace('-','')
-    return trimmed_read_seq,trimmed_primer_seq
+    else:
+        trimmed_read_seq = read[:ssw_res.contents.nQryBeg]
+        trimmed_primer_seq = read[ssw_res.contents.nQryBeg:]
+        ssw_align.destroy(ssw_res)
+        return trimmed_read_seq,trimmed_primer_seq
+
+def to_int(seq, list_letters, dict_letter_lookup):
+    """
+    Translate a letter sequence into numbers for ssw alignment
+    params:
+        seq: string, letters to translate
+        list_letters: list of all letters
+        dict_letter_lookup: dict of letter > number for lookup
+
+    returns:
+        array of numbers representing sequence
+    """
+    num_decl = len(seq) * ctypes.c_int8
+    num = num_decl()
+    for i,letter in enumerate(seq):
+        try:
+            n = dict_letter_lookup[letter]
+        except KeyError:
+            n = dict_letter_lookup[list_letters[-1]]
+        finally:
+            num[i] = n
+
+    return num
+
 
 main()
