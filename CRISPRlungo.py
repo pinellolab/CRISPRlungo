@@ -19,6 +19,7 @@ import sys
 from lib import ssw_lib
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
+from CRISPResso2 import CRISPResso2Align
 
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
@@ -39,7 +40,7 @@ def main():
 #            casoffinder_command=settings['casoffinder_command']
 #            )
 #
-    origin_seq, cut_sites, cut_site_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = prep_input(
+    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = prep_input(
             root = settings['root']+'.primerInfo',
             primer_seq = settings['primer_seq'],
             guide_seqs = settings['guide_sequences'],
@@ -53,8 +54,8 @@ def main():
             )
     logger.info('%d reads in input'%num_reads_input)
 
-    if settings['PAM'] is not None and settings['cassoffinder_num_mismatches'] > 0:
-        casoffinder_cut_sites = get_cut_sites_casoffinder(
+    if settings['PAM'] is not None and settings['casoffinder_num_mismatches'] > 0:
+        casoffinder_cut_sites,casoffinder_cut_annotations = get_cut_sites_casoffinder(
                 root = settings['root'],
                 genome=settings['genome'],
                 pam=settings['PAM'],
@@ -64,12 +65,13 @@ def main():
                 casoffinder_command=settings['casoffinder_command'],
                 can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
-        cut_sites.extend(casoffinder_cut_sites)
         for cut_site in casoffinder_cut_sites:
-            cut_site_annotations[cut_site] = 'Casoffinder'
+            if cut_site not in cut_cut_sites:
+                cut_sites.append(cut_site)
+                cut_annotations[cut_site] = casoffinder_cut_annotations[cut_site]
 
 
-    curr_r1_file = settings['fastq_r1'] #if alignment to genome happens first, the input for artificial target mapping will be reads that don't align to the genome
+    curr_r1_file = settings['fastq_r1'] #keep track of current input files (through trimming, etc.)
     curr_r2_file = settings['fastq_r2']
 
     #if umis are provided, add them to the fastqs
@@ -136,25 +138,30 @@ def main():
         if os.path.exists(filtered_on_primer_fastq_r1):
             logger.debug('Deleting intermediate file ' + filtered_on_primer_fastq_r1)
             os.remove(filtered_on_primer_fastq_r1)
-        if os.path.exists(filtered_on_primer_fastq_r2):
+        if filtered_on_primer_fastq_r2 is not None and os.path.exists(filtered_on_primer_fastq_r2):
             logger.debug('Deleting intermediate file ' + filtered_on_primer_fastq_r2)
             os.remove(filtered_on_primer_fastq_r2)
 
     (final_assignment_file,final_read_ids_for_cuts,final_cut_counts,cut_classification_lookup,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
-        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,
+        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj) = make_final_read_assignments(
                 root = settings['root']+'.final',
                 genome_mapped_bam = genome_mapped_bam,
                 origin_seq = origin_seq,
                 cut_sites = cut_sites,
-                cut_annotations = cut_site_annotations,
+                cut_annotations = cut_annotations,
                 cut_classification_annotations = settings['cut_classification_annotations'],
+                guide_seqs = settings['guide_sequences'],
+                cleavage_offset = settings['cleavage_offset'],
+                min_primer_length = settings['min_primer_length'],
+                genome = settings['genome'],
                 r1_r2_support_max_distance = settings['r1_r2_support_max_distance'],
                 cut_merge_dist = settings['novel_cut_merge_distance'],
+                collapse_to_homology_dist = settings['homology_cut_merge_distance'],
                 arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
                 genome_map_resolution = 1000000,
-                dedup_input_based_on_aln_pos_and_UMI = settings['dedup_input_based_on_aln_pos_and_UMI'],
+                suppress_dedup_input_based_on_aln_pos_and_UMI = settings['suppress_dedup_input_based_on_aln_pos_and_UMI'],
                 discard_reads_without_r2_support = settings['discard_reads_without_r2_support'],
                 samtools_command = settings['samtools_command'],
                 keep_intermediate = settings['keep_intermediate'],
@@ -187,16 +194,20 @@ def main():
         summary_plot_objects.append(tx_count_plot_obj)
 
     if origin_indel_hist_plot_obj is not None:
-        origin_indel_hist_plot_obj.order=29
+        origin_indel_hist_plot_obj.order=25
         summary_plot_objects.append(origin_indel_hist_plot_obj)
 
     if origin_inversion_hist_plot_obj is not None:
-        origin_inversion_hist_plot_obj.order=29
+        origin_inversion_hist_plot_obj.order=26
         summary_plot_objects.append(origin_inversion_hist_plot_obj)
 
     if origin_deletion_hist_plot_obj is not None:
-        origin_deletion_hist_plot_obj.order=29
+        origin_deletion_hist_plot_obj.order=27
         summary_plot_objects.append(origin_deletion_hist_plot_obj)
+
+    if origin_indel_depth_plot_obj is not None:
+        origin_indel_depth_plot_obj.order=28
+        summary_plot_objects.append(origin_indel_depth_plot_obj)
 
     if r1_r2_support_plot_obj is not None:
         r1_r2_support_plot_obj.order=29
@@ -215,8 +226,10 @@ def main():
                 read_ids_for_crispresso = final_read_ids_for_cuts,
                 cut_counts_for_crispresso = final_cut_counts,
                 cut_classification_lookup = cut_classification_lookup,
+                cut_annotations = cut_annotations,
                 av_read_length = av_read_length,
                 origin_seq = origin_seq,
+                cleavage_offset = settings['cleavage_offset'],
                 genome = settings['genome'],
                 genome_len_file = settings['genome']+'.fai',
                 crispresso_min_count = settings['crispresso_min_count'],
@@ -284,7 +297,8 @@ def parse_settings(args):
     parser.add_argument('--fastq_r2', help='Input fastq r2 file', default=None)
     parser.add_argument('--fastq_umi', help='Input fastq umi file', default=None)
 
-    parser.add_argument('--novel_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) from each other will be merged into a single cut site. Variation in the cut sites or in the fragments produced may produce clusters of cut sites in a certain region. This parameter will merge novel cut sites within this distance into a single cut site. Additionally, novel cut sites within this distance of known/given cut sites will be assigned to the known/given cut site.', default=100)
+    parser.add_argument('--novel_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) from each other (and not within homology_cut_merge_distance to a known/provided cut site or a site with homology to guide_sequences) will be merged into a single cut site. Variation in the cut sites or in the fragments produced may produce clusters of cut sites in a certain region. This parameter will merge novel cut sites within this distance into a single cut site.', default=100)
+    parser.add_argument('--homology_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) with a known/provided/homologous site will be merged to that site. Homologous sites are defined as those that have homology to guide_sequences. Novel cut sites farther than homology_cut_merge_distance will be merged into novel cut sites based on the parameter novel_cut_merge_distance.', default=10000)
 
     custom_group = parser.add_argument_group('Custom reference settings')
     custom_group.add_argument('--alignment_extension', type=int, help='Number of bp to extend beyond av read length around cut site for custom reference', default=50)
@@ -331,7 +345,7 @@ def parse_settings(args):
     #umi settings
     u_group = parser.add_argument_group('UMI parameters')
     u_group.add_argument('--dedup_input_on_UMI', help='If set, input reads will be deduplicated based on UMI before alignment', action='store_true')
-    u_group.add_argument('--dedup_input_based_on_aln_pos_and_UMI', help='If set, input reads will be deduplicated based on alignment position and UMI', action='store_true')
+    u_group.add_argument('--suppress_dedup_input_based_on_aln_pos_and_UMI', help='Suppress deduplication based on alignment position and UMI. If not set, input reads will be deduplicated based on alignment position and UMI', action='store_true')
     u_group.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match', default='NNWNNWNNN')
 
     #R1/R2 support settings
@@ -359,6 +373,8 @@ def parse_settings(args):
                         raise Exception('Cannot parse line "' + line + '"\nA tab must separate the key and value in the settings file')
                     key = line_els[0].strip()
                     val = line_els[1].strip()
+                    if key in settings_file_args and settings_file_args[key] != val:
+                        raise Exception('The parameter ' + key + ' is provided twice')
                     settings_file_args[key] = val
 
     settings['root'] = cmd_args.root
@@ -558,15 +574,20 @@ def parse_settings(args):
         settings['novel_cut_merge_distance'] = int(settings_file_args['novel_cut_merge_distance'])
         settings_file_args.pop('novel_cut_merge_distance')
 
+    settings['homology_cut_merge_distance'] = cmd_args.homology_cut_merge_distance
+    if 'homology_cut_merge_distance' in settings_file_args:
+        settings['homology_cut_merge_distance'] = int(settings_file_args['homology_cut_merge_distance'])
+        settings_file_args.pop('homology_cut_merge_distance')
+
     settings['dedup_input_on_UMI'] = cmd_args.dedup_input_on_UMI
     if 'dedup_input_on_UMI' in settings_file_args:
         settings['dedup_input_on_UMI'] = (settings_file_args['dedup_input_on_UMI'].lower() == 'true')
         settings_file_args.pop('dedup_input_on_UMI')
 
-    settings['dedup_input_based_on_aln_pos_and_UMI'] = cmd_args.dedup_input_based_on_aln_pos_and_UMI
-    if 'dedup_input_based_on_aln_pos_and_UMI' in settings_file_args:
-        settings['dedup_input_based_on_aln_pos_and_UMI'] = (settings_file_args['dedup_input_based_on_aln_pos_and_UMI'].lower() == 'true')
-        settings_file_args.pop('dedup_input_based_on_aln_pos_and_UMI')
+    settings['suppress_dedup_input_based_on_aln_pos_and_UMI'] = cmd_args.suppress_dedup_input_based_on_aln_pos_and_UMI
+    if 'suppress_dedup_input_based_on_aln_pos_and_UMI' in settings_file_args:
+        settings['suppress_dedup_input_based_on_aln_pos_and_UMI'] = (settings_file_args['suppress_dedup_input_based_on_aln_pos_and_UMI'].lower() == 'true')
+        settings_file_args.pop('suppress_dedup_input_based_on_aln_pos_and_UMI')
 
     settings['umi_regex'] = cmd_args.umi_regex
     if 'umi_regex' in settings_file_args:
@@ -818,7 +839,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
                 for line in fin:
                     line_els = line.rstrip('\n').split("\t")
                     casoffinder_cut_sites.append(line_els[0])
-                    casoffinder_cut_annotations[line_els[0]] = line_els[1]
+                    casoffinder_cut_annotations[line_els[0]] = line_els[1].split(",")
                     sites_read_count += 1
                 if sites_found_count == sites_read_count:
                     logger.info('Using %d previously-run Cas-OFFinder off-targets'%sites_found_count)
@@ -865,6 +886,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     with open (casoffinder_output_file,'r') as cin:
         for line in cin:
             line_els = line.strip().split("\t")
+            seq = line_els[0][0:-pam_len]
             chrom = line_els[1]
             loc = line_els[2]
             strand = line_els[4]
@@ -874,17 +896,19 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
 
             if strand == "+":
                 cut_loc = int(loc) + guide_len + 1 + cleavage_offset
+                cut_rc_str = "FW"
             else: #neg strand
                 cut_loc = int(loc) - cleavage_offset + 1 + pam_len
+                cut_rc_str = "RC"
             this_key = chrom+":"+str(cut_loc)
             casoffinder_cut_sites.append(this_key)
-            casoffinder_cut_annotations[this_key] = 'OB ' + mismatch_count
+            casoffinder_cut_annotations[this_key] = ['Cas-OFFinder OB ' + mismatch_count,'Not-origin',cut_rc_str,seq]
     logger.info('Found %d off-target sites using Cas-OFFinder'%(len(casoffinder_cut_sites)))
 
     with open (info_file,'w') as fout:
         fout.write('Cas-OFFinder sites\t%d\n'%len(casoffinder_cut_sites))
         for site in casoffinder_cut_sites:
-            fout.write(site+"\t"+casoffinder_cut_annotations[site]+"\n")
+            fout.write(site+"\t"+",".join(casoffinder_cut_annotations[site])+"\n")
 
     return casoffinder_cut_sites, casoffinder_cut_annotations
 
@@ -912,7 +936,8 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
     returns:
         origin_seq: common amplified region at primer to be removed from input sequences
         cut_sites: list of cut locations for input guides
-        cut_site_annotations: dict of info for cut sites
+        cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
+            (type=On-target, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
         primer_chr: chromosome location of primer
         primer_loc: position of primer
         primer_is_genomic: boolean, true if primer is genomic
@@ -935,17 +960,17 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
                 av_read_length = float(av_read_length_str)
                 num_reads_input = int(num_reads_input_str)
                 cut_sites = []
-                cut_site_annotations = {}
+                cut_annotations = {}
                 read_cut_site_count = 0
                 for line in fin:
                     line_els = line.rstrip('\n').split("\t")
                     cut_sites.append(line_els[0])
-                    cut_site_annotations[line_els[0]] = line_els[1].split(",")
+                    cut_annotations[line_els[0]] = line_els[1].split(",")
                     read_cut_site_count += 1
 
                 if read_cut_site_count == cut_site_count:
                     logger.info('Using previously-prepared primer, cut-site, and sequencing information')
-                    return (origin_seq, cut_sites, cut_site_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input)
+                    return (origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input)
         logger.info('Could not recover previously-created primer, cut-site, and sequencing information. Reanalyzing.')
 
     logger.info('Preparing primer and cut-site information')
@@ -956,9 +981,10 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
     primer_is_rc = 0
     #attempt to align primer to genome
     logger.info('Finding genomic coordinates of primer %s'%(primer_seq))
-    primer_aln_cmd = '%s --seed 2248 --end-to-end -x %s -c %s' %(bowtie2_command,bowtie2_genome,primer_seq)
+    primer_aln_cmd = '%s --no-sq --seed 2248 --end-to-end -x %s -c %s' %(bowtie2_command,bowtie2_genome,primer_seq)
     logger.debug(primer_aln_cmd)
     primer_aln_results = subprocess.check_output(primer_aln_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
+    logger.debug(primer_aln_results)
     if len(primer_aln_results) > 5 and primer_aln_results[3].strip() == '1 (100.00%) aligned exactly 1 time' and len(primer_aln_results[-2].split("\t")) > 5:
         sam_line_els = primer_aln_results[-2].split("\t")
         primer_chr = sam_line_els[2]
@@ -968,16 +994,28 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
             primer_loc = primer_loc + len(primer_seq)
         logger.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
         primer_is_genomic = True
+    #sometimes alignments are reported by bowtie as ambiguous (e.g. TTGCAATGAAAATAAATGTTT in hg38)
+    elif len(primer_aln_results) > 5 and primer_aln_results[4].strip() == '1 (100.00%) aligned >1 times' and len(primer_aln_results[-2].split("\t")) > 5:
+        sam_line_els = primer_aln_results[-2].split("\t")
+        primer_chr = sam_line_els[2]
+        primer_loc = int(sam_line_els[3])
+        primer_is_rc = int(sam_line_els[1]) & 0x10
+        if primer_is_rc:
+            primer_loc = primer_loc + len(primer_seq)
+        logger.warning('Primer alignment resulted in an ambiguous alignment')
+        logger.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
+        primer_is_genomic = True
 
     cut_sites = []
-    cut_site_annotations = {}
+    cut_annotations = {}
     closest_cut_site_loc = -1
     closest_cut_site_dist = 99**99
     for guide_seq in guide_seqs:
         logger.info('Finding genomic coordinates of guide %s'%(guide_seq))
-        guide_aln_cmd = '%s --seed 2248 --end-to-end -x %s -c %s' %(bowtie2_command,bowtie2_genome,guide_seq)
+        guide_aln_cmd = '%s --no-sq --seed 2248 --end-to-end -x %s -c %s' %(bowtie2_command,bowtie2_genome,guide_seq)
         logger.debug(guide_aln_cmd)
         guide_aln_results = subprocess.check_output(guide_aln_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
+        logger.debug(guide_aln_results)
         if len(guide_aln_results) > 5 and guide_aln_results[3].strip() == '1 (100.00%) aligned exactly 1 time' and len(guide_aln_results[-2].split("\t")) > 5:
             sam_line_els = guide_aln_results[-2].split("\t")
             guide_chr = sam_line_els[2]
@@ -985,12 +1023,37 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
             guide_is_rc = int(sam_line_els[1]) & 0x10
             if not guide_is_rc:
                 cut_loc = guide_loc + len(guide_seq) + cleavage_offset
+                guide_is_rc_str = "FW"
             else: #neg strand
                 cut_loc = guide_loc - cleavage_offset
+                guide_is_rc_str = "RC"
             logger.info('Setting cut site for guide %s to %s:%s'%(guide_seq,guide_chr,cut_loc))
             key = guide_chr + ":" + str(cut_loc)
             cut_sites.append(key)
-            cut_site_annotations[key] = ['On-target','Not-origin']
+            cut_annotations[key] = ['On-target','Not-origin',guide_is_rc_str,guide_seq]
+            if primer_is_genomic and primer_chr == guide_chr:
+                if closest_cut_site_loc == -1:
+                    closest_cut_site_dist = abs(primer_loc - cut_loc)
+                    closest_cut_site_loc = cut_loc
+                elif abs(primer_loc - cut_loc) < closest_cut_site_dist:
+                    closest_cut_site_dist = abs(primer_loc - cut_loc)
+                    closest_cut_site_loc = cut_loc
+        elif len(guide_aln_results) > 5 and guide_aln_results[4].strip() == '1 (100.00%) aligned >1 times' and len(guide_aln_results[-2].split("\t")) > 5:
+            sam_line_els = guide_aln_results[-2].split("\t")
+            guide_chr = sam_line_els[2]
+            guide_loc = int(sam_line_els[3])
+            guide_is_rc = int(sam_line_els[1]) & 0x10
+            if not guide_is_rc:
+                cut_loc = guide_loc + len(guide_seq) + cleavage_offset
+                guide_is_rc_str = "FW"
+            else: #neg strand
+                cut_loc = guide_loc - cleavage_offset
+                guide_is_rc_str = "RC"
+            logger.warning('Guide alignment resulted in an ambiguous alignment')
+            logger.info('Setting cut site for guide %s to %s:%s'%(guide_seq,guide_chr,cut_loc))
+            key = guide_chr + ":" + str(cut_loc)
+            cut_sites.append(key)
+            cut_annotations[key] = ['On-target','Not-origin',guide_is_rc_str,guide_seq]
             if primer_is_genomic and primer_chr == guide_chr:
                 if closest_cut_site_loc == -1:
                     closest_cut_site_dist = abs(primer_loc - cut_loc)
@@ -1006,11 +1069,11 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         logger.debug('Closest cut site to primer (%s:%s) is %s:%s'%(primer_chr, primer_loc, primer_chr, closest_cut_site_loc))
         origin_start = primer_loc
         origin_end = closest_cut_site_loc
-        cut_site_annotations[primer_chr + ":" + str(closest_cut_site_loc)][1] = 'Origin:left' #add annotation noting that this cut is the origin, and the primer is to the left
+        cut_annotations[primer_chr + ":" + str(closest_cut_site_loc)][1] = 'Origin:left' #add annotation noting that this cut is the origin, and the primer is to the left
         if primer_is_rc:
             origin_start = closest_cut_site_loc
             origin_end = primer_loc
-            cut_site_annotations[primer_chr + ":" + str(closest_cut_site_loc)][1] = 'Origin:right'
+            cut_annotations[primer_chr + ":" + str(closest_cut_site_loc)][1] = 'Origin:right'
         if origin_start > origin_end:
             raise Exception('Primer does not point toward the closest cut site. Please check the orientation of the primer sequence parameter')
 
@@ -1028,11 +1091,11 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         fout.write("\t".join(['origin_seq','primer_chr','primer_loc','primer_seq','primer_is_genomic','cut_site_count','av_read_length','num_reads_input'])+"\n")
         fout.write("\t".join([str(x) for x in [origin_seq,primer_chr,primer_loc,primer_seq,primer_is_genomic,cut_site_count,av_read_length,num_reads_input]])+"\n")
         for cut_site in cut_sites:
-            fout.write(cut_site + "\t" + ",".join(cut_site_annotations[cut_site])+"\n")
+            fout.write(cut_site + "\t" + ",".join(cut_annotations[cut_site])+"\n")
 
     logger.info('Finished preparing primer, cut-site, and sequencing information')
 
-    return (origin_seq, cut_sites, cut_site_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input)
+    return (origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input)
 
 def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False,can_use_previous_analysis=False):
     """
@@ -1185,7 +1248,6 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
 
     umi_list = sorted(umi_key_counts, key=lambda k: umi_key_counts[k])
     umi_count = len(umi_list)
-#    print("umi_list: " + str(umi_list))
 
     logger.info('Read %d reads'%tot_read_count)
     logger.info("Processed " + str(umi_count) + " UMIs")
@@ -1442,7 +1504,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         ssw_align_primer = SSWPrimerAlign(ssw_primer,origin_seq)
 
         if fastq_r2 is None:
-            filtered_on_primer_fastq_r1 = root + ".trimmed.fq.gz"
+            filtered_on_primer_fastq_r1 = root + ".has_primer.fq.gz"
             filtered_on_primer_fastq_r2 = None
             post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersSingle(fastq_r1,filtered_on_primer_fastq_r1,min_primer_aln_score,min_primer_length,ssw_align_primer)
         else:
@@ -1456,13 +1518,13 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
     contain_adapter_count = 0
     filtered_too_short_adapter_count = 0
 
-    if transposase_adapter_seq is not None:
+    if post_trim_read_count > 0 and transposase_adapter_seq is not None:
         logger.info('Trimming transposase sequence from reads')
         cutadapt_transposase_log = root + ".cutadapt.transposase_adapter.log"
         if fastq_r2 is None:
             filtered_for_adapters_fastq_r1 = root + ".trimmed.fq.gz"
             filtered_for_adapters_fastq_r2 = None
-            trim_command = "%s -a %s -o --minimum-length %d --cores %s %s > %s"%(cutadapt_command,transposase_adapter_seq,filtered_for_adapters_fastq_r1,min_read_length,n_processes,filtered_on_primer_fastq_r1,cutadapt_transposase_log)
+            trim_command = "%s -a %s -o %s --minimum-length %d --cores %s %s > %s"%(cutadapt_command,transposase_adapter_seq,filtered_for_adapters_fastq_r1,min_read_length,n_processes,filtered_on_primer_fastq_r1,cutadapt_transposase_log)
         else:
             filtered_for_adapters_fastq_r1 = root + ".r1.trimmed.fq.gz"
             filtered_for_adapters_fastq_r2 = root + ".r2.trimmed.fq.gz"
@@ -1493,7 +1555,8 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         if not keep_intermediate:
             logger.debug('Deleting intermediate fastq files trimmed for primers')
             os.remove(filtered_on_primer_fastq_r1)
-            os.remove(filtered_on_primer_fastq_r2)
+            if fastq_r2 is not None:
+                os.remove(filtered_on_primer_fastq_r2)
 
         filtered_on_primer_fastq_r1 = filtered_for_adapters_fastq_r1
         filtered_on_primer_fastq_r2 = filtered_for_adapters_fastq_r2
@@ -1629,8 +1692,10 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
     logger.info('Finished genome alignment')
     return(mapped_bam_file)
 
-def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_annotations,cut_classification_annotations,r1_r2_support_max_distance=100000,
-    cut_merge_dist=100,arm_min_matched_start_bases=10,genome_map_resolution=1000000,dedup_input_based_on_aln_pos_and_UMI=True,
+def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
+    cut_sites,cut_annotations,cut_classification_annotations,guide_seqs,cleavage_offset,min_primer_length,genome,r1_r2_support_max_distance=100000,
+    cut_merge_dist=100,collapse_to_homology_dist=10000,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
+    arm_min_matched_start_bases=10,genome_map_resolution=1000000,suppress_dedup_input_based_on_aln_pos_and_UMI=False,
     discard_reads_without_r2_support=False,samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
     """
     Makes final read assignments (after deduplicating based on UMI and alignment location)
@@ -1640,10 +1705,18 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         genome_mapped_bam: bam of reads aligned to genome
         origin_seq: common amplified region at primer (to first cut site)
         cut_sites: array of known/input cut sites
-        cut_annotations: dict of cut_chr:cut_site->annotation for description of cut (e.g. either On-target, Off-target, Known, Casoffinder, etc)
+        cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
+            (type=On-target, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
         cut_classification_annotations: dict of cut_chr:cut_site:direction -> annotation (as provided by users as parameters)
+        guide_seqs: sequences of guides used in experiment (required here for finding homology at novel cut sites)
+        cleavage_offset: position where cleavage occurs (relative to end of spacer seq -- for Cas9 this is -3)
+        min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
+        genome: path to genome fa file (required here for finding genome sequences for guide homology)
         r1_r2_support_max_distance: max distance between r1 and r2 for the read pair to be classified as 'supported' by r2
         cut_merge_dist: cuts within this distance (bp) will be merged
+        collapse_to_homology_dist: novel cuts within this distance to a site with homology to a given guide. Novel cuts are first merged to the nearest site with homology (within collapse_to_homology_dist), and remaining cuts are merged with eachother (specified by the 'cut_merge_dist' parameter).
+        guide_homology_max_gaps: when searching a sequence for homology to a guide sequence, it will be homologous if his has this number of gaps or fewer in the alignment of the guide to a sequence
+        guide_homology_max_mismatches: when searching a sequence for homology to a guide sequence, it will be homologous if his has this number of mismatches or fewer in the alignment of the guide to a sequence
         arm_min_matched_start_bases: number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each 'side' a read.
         genome_map_resolution: window size (bp) for reporting number of reads aligned
         dedup_based_on_aln_pos: if true, reads with the same UMI and alignment positions will be removed from analysis
@@ -1661,11 +1734,13 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         tlen_plot_object: plot showing distribution of template lengths
         deduplication_plot_obj: plot showing how many reads were deuplicated using UMI + location
         classification_plot_obj: plot showing assignments (linear, translocation, etc)
+        classification_indel_plot_obj: plot showing assignments (linear, translocation, etc) with indel classification (short indels)
         tx_order_plot_obj: plot showing ordered translocations and counts
         tx_count_plot_obj: plot showing translocations and counts
         origin_indel_hist_plot_obj: plot of indel lenghts for origin
         origin_inversion_hist_plot_obj: plot of inversion lengths at origin (reads pointing opposite directions)
         origin_deletion_hist_plot_obj: plot of deletion lengths for ontarget (reads pointing same direction/away from the primer)
+        origin_indel_depth_plot_obj: plot of read depth around origin
         r1_r2_support_plot_obj: plot of how many reads for which r1 and r2 support each other
         r1_r2_support_dist_plot_obj: plot of how far apart the r1/r2 supporting reads were aligned from each other
         r1_r2_no_support_dist_plot_obj: plot of how far apart the r1/r2 reads that did NOT support each other (but were on the same chromosome)
@@ -1719,6 +1794,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                 if classification_plot_obj_str != "" and classification_plot_obj_str != "None":
                     classification_plot_obj = PlotObject.from_json(classification_plot_obj_str)
 
+                classification_indel_plot_obj_str = fin.readline().rstrip('\n')
+                classification_indel_plot_obj = None
+                if classification_indel_plot_obj_str != "" and classification_indel_plot_obj_str != "None":
+                    classification_indel_plot_obj = PlotObject.from_json(classification_indel_plot_obj_str)
+
                 origin_indel_hist_plot_obj_str = fin.readline().rstrip('\n')
                 origin_indel_hist_plot_obj = None
                 if origin_indel_hist_plot_obj_str != "" and origin_indel_hist_plot_obj_str != "None":
@@ -1733,6 +1813,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                 origin_deletion_hist_plot_obj = None
                 if origin_deletion_hist_plot_obj_str != "" and origin_deletion_hist_plot_obj_str != "None":
                     origin_deletion_hist_plot_obj = PlotObject.from_json(origin_deletion_hist_plot_obj_str)
+
+                origin_indel_depth_plot_obj_str = fin.readline().rstrip('\n')
+                origin_indel_depth_plot_obj = None
+                if origin_indel_depth_plot_obj_str != "" and origin_indel_depth_plot_obj_str != "None":
+                    origin_indel_depth_plot_obj = PlotObject.from_json(origin_indel_depth_plot_obj_str)
 
                 r1_r2_support_plot_obj_str = fin.readline().rstrip('\n')
                 r1_r2_support_plot_obj = None
@@ -1770,8 +1855,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                 if final_total_count == read_total_read_count:
                     logger.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' total reads')
                     return (final_file,final_read_ids_for_cuts,final_cut_counts,cut_classification_lookup,
-                        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,
-                        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,
+                        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
+                        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
                         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj)
                 else:
                     logger.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
@@ -1836,7 +1921,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
             key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
             if key in seen_reads_for_dedup:
                 seen_reads_for_dedup[key] += 1
-                if dedup_input_based_on_aln_pos_and_UMI:
+                if not suppress_dedup_input_based_on_aln_pos_and_UMI:
                     dups_removed += 1
                     continue
             else:
@@ -2060,8 +2145,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         plt.savefig(deduplication_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
         dedup_note = ""
-        if not dedup_input_based_on_aln_pos_and_UMI:
-            dedup_note = ". Note that deduplication of reads for final counts is off by default but can be turned on by running with the parameter --dedup_input_based_on_aln_pos_and_UMI."
+        if suppress_dedup_input_based_on_aln_pos_and_UMI:
+            dedup_note = ". Note that deduplication of reads for final counts has been turned off by with the parameter --suppress_dedup_input_based_on_aln_pos_and_UMI."
 
         deduplication_plot_obj = PlotObject(
                 plot_name = deduplication_plot_obj_root,
@@ -2099,15 +2184,109 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         cut_points_by_chr[cut_chr][int(cut_pos)] += 1
 
     #the counts in this file include only reads that weren't marked as duplicates
-    final_cut_points_by_chr = {} #dict of final cut points by chromosome, contains count of reads with that cut point
+    final_cut_points_by_chr = defaultdict(lambda: defaultdict(int)) #dict of final cut points by chromosome, contains count of reads with that cut point
     final_cut_point_lookup = {} #dict from old(fuzzy/imprecise) position to new
-    r1_translocation_cut_counts = {} #dict of counts for translocations between cut1 and cut2 e.g. r1_translcoation_cut_counts[cut1][cut2] = 5
 
-    r1_fragment_translocation_cut_counts = {} #dict of counts for translocations as in r1_translocation_cut_counts except the keys have a the watson/crick and direction annotation (e.g. w-chr2:60455)
-    r1_fragment_translocation_classifications = {} #classification for each cut
-    r1_fragment_translocation_cut_counts['u+*'] = defaultdict(int)
+    cut_point_homology_info = {} #dict containing cut points with sufficient homology
+    with open(root+".cut_homology",'w') as fout:
+        fout.write("\t".join([str(x) for x in ['guide_seq','cut_chr','cut_point','is_valid_homology_site','potential_guide','best_score','match_direction','n_matches','n_mismatches','n_gaps','aln_guide','aln_ref']])+"\n")
+        aln_match_score = 5
+        aln_gap_extend_score = -1
+        aln_gap_open_score = -5
+        aln_matrix = CRISPResso2Align.make_matrix(match_score=aln_match_score)
+        padded_seq_len = 25 #how many bp to extend around cut to search for guide
+        guide_homology_max_gaps = 2
+        guide_homology_max_mismatches = 5
+        for guide_seq in guide_seqs:
+            for cut_chr in cut_points_by_chr:
+                these_cut_points = sorted(cut_points_by_chr[cut_chr])
+                for cut_point in these_cut_points:
+                    faidx_cmd = '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,cut_point-padded_seq_len,cut_point+padded_seq_len)
+                    logger.debug('Searching for homology. Getting sequence around cut site ' + cut_chr + ':' + str(cut_point) + ': ' + str(faidx_cmd))
+                    cut_padded_seq = subprocess.check_output(faidx_cmd,shell=True).decode(sys.stdout.encoding).strip()
+                    potential_guide = None
+                    amp_incentive = np.zeros(len(cut_padded_seq)+1,dtype=int)
+                    f1,f2,fw_score=CRISPResso2Align.global_align(guide_seq.upper(),cut_padded_seq.upper(),matrix=aln_matrix,gap_incentive=amp_incentive,gap_open=aln_gap_open_score,gap_extend=aln_gap_extend_score)
+                    r1,r2,rv_score=CRISPResso2Align.global_align(reverse_complement(guide_seq.upper()),cut_padded_seq.upper(),matrix=aln_matrix,gap_incentive=amp_incentive,gap_open=aln_gap_open_score,gap_extend=aln_gap_extend_score)
+
+                    is_rc = False
+                    best_score = fw_score
+                    best_1 = f1
+                    best_2 = f2
+                    if fw_score > rv_score:
+                        n_matches,n_mismatches,n_gaps,cleavage_ind,potential_guide = get_guide_match_from_aln(f1,f2,len(guide_seq)+cleavage_offset-1) #cleavage ind returns
+                    else:
+                        is_rc = True
+                        best_score = rv_score
+                        best_1 = r1
+                        best_2 = r2
+                        n_matches,n_mismatches,n_gaps,cleavage_ind,potential_guide = get_guide_match_from_aln(r1,r2,-1*cleavage_offset-1) #cleavage ind returns 
+                        potential_guide = reverse_complement(potential_guide)
+
+                    cut_key = cut_chr+":"+str(cut_point-padded_seq_len+cleavage_ind+1)
+                    is_rc_string = 'Reverse' if is_rc else 'Forward'
+                    is_valid_homology = False
+                    
+                    if n_gaps <= guide_homology_max_gaps and n_mismatches <= guide_homology_max_mismatches:
+                        is_valid_homology = True
+                        cut_key = cut_chr+":"+str(cut_point-padded_seq_len+cleavage_ind+1)
+                        if cut_key not in cut_point_homology_info:
+                            cut_point_homology_info[cut_key] = (best_score,potential_guide,n_matches,n_mismatches,n_gaps,is_rc)
+                        elif best_score > cut_point_homology_info[cut_key][0]: #sometimes a suboptimal alignment (guide is aligned partially beyond the amplicon) could already identify this cut, so take the one with the better alignment score
+                            cut_point_homology_info[cut_key] = (best_score,potential_guide,n_matches,n_mismatches,n_gaps,is_rc)
+
+                    fout.write("\t".join([str(x) for x in [guide_seq,cut_chr,cut_point,is_valid_homology,potential_guide,best_score,is_rc_string,n_matches,n_mismatches,n_gaps,best_1,best_2]])+"\n")
+
+    #create dict of cut_point > closest cut point with homology
+    closest_cut_point_with_homology_lookup = {}
+
+    #first create dict with known sites and sites with homology
+    cut_points_with_homology_by_chr = defaultdict(list)
+    #add known sites
+    for cut_chr in known_cut_points_by_chr:
+        cut_points_with_homology_by_chr[cut_chr] = known_cut_points_by_chr[cut_chr][:]
+    #split cut points with homology by chr to allow sorting
+    for cut_point in cut_point_homology_info:
+        cut_chr,cut_pos = cut_point.split(":")
+        if int(cut_pos) not in cut_points_with_homology_by_chr[cut_chr]:
+            cut_points_with_homology_by_chr[cut_chr].append(int(cut_pos))
+
+    #assign each cut point to the closest site with homology if possible
+    for cut_chr in cut_points_by_chr:
+        these_cut_points = sorted(cut_points_by_chr[cut_chr])
+
+        these_cut_points_with_homology = sorted(cut_points_with_homology_by_chr[cut_chr])
+        #if no cut points on this chr
+        if len(these_cut_points_with_homology) == 0:
+            for cut_point in these_cut_points:
+                closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
+        else:
+            curr_ind = 0
+            for cut_point in these_cut_points:
+                dist_to_curr = abs(cut_point - these_cut_points_with_homology[curr_ind])
+                #if curr_ind is at last item, choose it
+                if curr_ind + 1 >= len(these_cut_points_with_homology):
+                    if dist_to_curr <= collapse_to_homology_dist:
+                        closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_with_homology[curr_ind])
+                    else:
+                        closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
+                #otherwise choose closest of curr or next
+                else:
+                    dist_to_next = abs(cut_point - these_cut_points_with_homology[curr_ind+1])
+                    if dist_to_curr <= dist_to_next:
+                        if dist_to_curr <= collapse_to_homology_dist:
+                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_with_homology[curr_ind])
+                        else:
+                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
+                    else:
+                        curr_ind += 1
+                        if dist_to_next <= collapse_to_homology_dist:
+                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_with_homology[curr_ind])
+                        else:
+                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
 
     found_cut_point_total = 0
+    closest_cut_point_lookup = {}
     for cut_chr in cut_points_by_chr:
         found_cut_point_total += len(cut_points_by_chr[cut_chr])
         these_cut_points = sorted(cut_points_by_chr[cut_chr])
@@ -2135,15 +2314,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                             this_pos = known_cut_point
                             min_dist = this_dist
 
-                read_counts_at_curr_point = 0
                 #add this assignment to the lookup
                 for curr_point in curr_points:
-                    final_cut_point_lookup[cut_chr+":"+str(curr_point)] = cut_chr+":"+str(this_pos)
-                    read_counts_at_curr_point += cut_points_by_chr[cut_chr][curr_point]
-
-                if cut_chr not in final_cut_points_by_chr:
-                    final_cut_points_by_chr[cut_chr] = {}
-                final_cut_points_by_chr[cut_chr][this_pos] = read_counts_at_curr_point
+                    closest_cut_point_lookup[cut_chr+":"+str(curr_point)] = cut_chr+":"+str(this_pos)
 
                 #reset current points
                 curr_points = []
@@ -2151,14 +2324,35 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
             if i < len(these_cut_points):
                 curr_points.append(these_cut_points[i])
 
+    #make final assignments - either to the next homologous site (if available), or to the next closest site
+    all_cut_points_count = 0
+    all_cut_points_assigned_to_homology_count = 0 #how many cut sites were assigned to their nearest homologous site
+    all_cut_points_collapsed_count = 0 #how many cut sites were collapsed (not assigned to homologous sites)
+    for cut_chr in cut_points_by_chr:
+        for cut_point in cut_points_by_chr[cut_chr]:
+            all_cut_points_count += 1
+            cut_key = cut_chr+":"+str(cut_point)
+            if closest_cut_point_with_homology_lookup[cut_key] is not None:
+                cut_assignment = closest_cut_point_with_homology_lookup[cut_key]
+                all_cut_points_assigned_to_homology_count += 1
+            else:
+                cut_assignment = closest_cut_point_lookup[cut_key]
+                all_cut_points_collapsed_count += 1
+
+            cut_assignment_pos = int(cut_assignment.split(":")[1])
+            final_cut_point_lookup[cut_key] = cut_assignment
+            final_cut_points_by_chr[cut_chr][cut_assignment_pos] += cut_points_by_chr[cut_chr][cut_point]
+
     final_cut_point_total = 0
     cut_classification_lookup = {}
     for chrom in sorted(final_cut_points_by_chr.keys()):
         final_cut_point_total += len(final_cut_points_by_chr[chrom])
         for pos in sorted(final_cut_points_by_chr[chrom]):
-            this_anno=['Novel','Not-origin']
+            this_anno=['Novel','Not-origin','NA']
             this_str = chrom+":"+str(pos)
-            if this_str in cut_annotations:
+            if this_str in cut_point_homology_info:
+                this_anno = ['Homologous','Not-origin','NA']
+            if this_str in cut_annotations: #overwrite homology annotation if present in cut_annotations
                 this_anno = cut_annotations[this_str]
             if origin_direction is None: # guide seq primer
                 cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0]+' off-target'
@@ -2184,6 +2378,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                             cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0] + ' large deletion'
                             cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' large inversion'
 
+    logger.info('Processed ' + str(all_cut_points_count) + ' observed cut points')
+    logger.info(str(all_cut_points_assigned_to_homology_count) + ' cut points were collapsed to known/given/homologous cut sites')
+    logger.info(str(all_cut_points_collapsed_count) + ' cut points were collapsed to nearby cut sites')
+    logger.info(str(final_cut_point_total) + ' final cut points after collapsing')
+
     #add cut classifications from parameters
     for cut_classification_param in cut_classification_annotations:
         cut_classification_els = cut_classification_param.split(":")
@@ -2199,9 +2398,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         fout.write('chr\tpos\tcount\tannotation\n')
         for chrom in sorted(final_cut_points_by_chr.keys()):
             for pos in sorted(final_cut_points_by_chr[chrom]):
-                this_anno=['Novel','Not-origin']
+                this_anno=['Novel','Not-origin','NA']
                 this_str = chrom+":"+str(pos)
-                if this_str in cut_annotations:
+                if this_str in cut_point_homology_info:
+                    this_anno = ['Homologous','Not-origin','NA']
+                if this_str in cut_annotations: #overwrite homology annotation if present in cut_annotations
                     this_anno = cut_annotations[this_str]
                 fout.write("%s\t%d\t%d\t%s\n"%(chrom,pos,final_cut_points_by_chr[chrom][pos],",".join(this_anno)))
 
@@ -2209,9 +2410,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         fout.write('discovered cut point\tfinal mapped cut point\tcount\tannotation\n');
         for key in sorted(final_cut_point_lookup.keys(),key=lambda k: (k.split(":")[0],int(k.split(":")[1]))):
             (chrom,pos)=key.split(":")
-            this_anno=['Novel','Not-origin']
+            this_anno=['Novel','Not-origin','NA']
             this_final = final_cut_point_lookup[key]
-            if this_final in cut_annotations:
+            if this_final in cut_point_homology_info:
+                this_anno = ['Homologous','Not-origin','NA']
+            if this_final in cut_annotations: # overwrite homology annotation if present in cut_annotations
                 this_anno = cut_annotations[this_final]
             fout.write("%s\t%s\t%d\t%s\n"%(key,final_cut_point_lookup[key],cut_points_by_chr[chrom][int(pos)],",".join(this_anno)))
 
@@ -2232,6 +2435,13 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
     origin_indel_lengths = defaultdict(int) # dict indel_len -> count
     origin_inversion_lengths = defaultdict(int) # dict inversion_len -> count of reads on same chr as primer and same orientation with specified distance between origin and read (primer is to the genomic left of the cut site, this read is oriented to the genomic left side)
     origin_deletion_lengths = defaultdict(int) # dict deletion_len -> count of reads on same chr as primer and opposite direction with specified distance between origin and read (primer is to the genomic left of the cut site, this read is oriented to the genomic right side)
+    origin_depth_counts_100bp = np.zeros(101) #100bp count the number of reads with deletions covering each position
+    origin_depth_counts_100bp_primer = np.zeros(len(origin_seq)) #count deletions covering each base of primer (for those with deletions within 100bp)
+    origin_depth_counts_100bp_total = 0 #count of total reads
+
+    origin_depth_counts_2500bp = np.zeros(2501) #2500bp count of the number of reads with deletions covering that position
+    origin_depth_counts_2500bp_primer = np.zeros(len(origin_seq)) #count reads covering each base of primer (for those with deletions within 2500bp)
+    origin_depth_counts_2500bp_total = 0 #count of total reads
 
     read_id_ind = 0
     aln_ind = 1
@@ -2278,7 +2488,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
 
             final_classification = cut_classification_lookup[final_cut_point_and_direction]
             final_classification_counts[final_classification] += 1
-            
+
             indel_str = ''
             if final_cut_indel != 0:
                 indel_str = ' short indels'
@@ -2298,6 +2508,17 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                 else:
                     origin_deletion_lengths[this_dist_to_origin] += 1
 
+                if aln_start >= origin_cut_pos:
+                    this_del_len = aln_start - origin_cut_pos
+                    if this_del_len <= 100:
+                        origin_depth_counts_100bp_total += 1
+                        origin_depth_counts_100bp[0:this_del_len+1] += 1
+                        origin_depth_counts_100bp_primer[0:del_primer+1] += 1
+                    if this_del_len <= 2500:
+                        origin_depth_counts_2500bp_total += 1
+                        origin_depth_counts_2500bp[0:this_del_len+1] += 1
+                        origin_depth_counts_2500bp_primer[0:del_primer+1] += 1
+
             #finish iterating through read ids
         #close final file
     logger.info('Processed %d reads.'%(final_total_count))
@@ -2309,10 +2530,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         for tx_key in tx_keys:
             this_cut_annotation = 'Novel'
             if tx_key in cut_annotations:
-                this_cut_annotation = cut_annotations[tx_key]
+                this_cut_annotation = cut_annotations[tx_key][0]
                 fout.write("%s\t%s\t%s\n"%(tx_key,this_cut_annotation,final_cut_counts[tx_key]))
     logger.debug('Wrote translocation list ' + tx_list_report)
-
 
     # fragment translocations
     tx_list_report_root = root + '.fragment_translocation_list'
@@ -2323,7 +2543,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
             cut_annotation = 'Novel'
             tx_cut = ':'.join(tx_key.split(":")[0:2])
             if tx_cut in cut_annotations:
-                    cut_annotation = cut_annotations[tx_cut]
+                    cut_annotation = cut_annotations[tx_cut][0]
             tx_classification = 'Unknown'
             if tx_key in cut_classification_lookup:
                 tx_classification = cut_classification_lookup[tx_key]
@@ -2499,9 +2719,6 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                         ax.annotate("Primer", xy=(origin_mapped_pos+width/2, chrom_max_count/10), xytext=(origin_mapped_pos+width, chrom_max_count/10),
                             arrowprops=dict(arrowstyle="->"),va='center')
 
-
-
-
         plot_name = tx_list_report_root + ".counts"
         plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
@@ -2514,7 +2731,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
 
         classification_labels = ['Linear'] #linear goes first in order
         for key in sorted(final_classification_counts.keys()):
-            if key not in classification_labels:
+            if key not in classification_labels and final_classification_counts[key] > 0:
                 classification_labels.append(key)
 
         #assignment plot
@@ -2528,9 +2745,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
         pie_values = []
         pie_labels = []
         for i in range(len(classification_labels)):
-            if values[i] > 0:
-                pie_values.append(values[i])
-                pie_labels.append(classification_labels[i]+"\n("+str(values[i])+")")
+            pie_values.append(values[i])
+            pie_labels.append(classification_labels[i]+"\n("+str(values[i])+")")
         ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
         ax.set_title('Read classifications')
         plt.savefig(classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -2546,33 +2762,44 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                     ('Read assignments',final_file)
                     ]
                 )
+        noindel_pie_labels = pie_labels #for use below
+        noindel_pie_values = pie_values
 
         #assignment (with indels) plot
 
-        classification_indel_labels = ['Linear','Linear short indels'] #linear goes first in order
-        for key in sorted(final_classification_indel_counts.keys()):
-            if key not in classification_indel_labels:
-                classification_indel_labels.append(key)
+        short_indel_categories = ['',' short indels']
+        classification_indel_labels = []
+        classification_indel_counts = []
+        for label in classification_labels:
+            for short_indel_category in short_indel_categories:
+                new_label = label + short_indel_category
+                classification_indel_labels.append(new_label)
+                classification_indel_counts.append(final_classification_indel_counts[new_label])
 
-        values = [final_classification_indel_counts[x] for x in classification_indel_labels]
         classification_indel_plot_obj_root = root + ".classifications_with_indels"
         with open(classification_indel_plot_obj_root+".txt",'w') as summary:
             summary.write("\t".join(classification_indel_labels)+"\n")
-            summary.write("\t".join([str(x) for x in values])+"\n")
+            summary.write("\t".join([str(x) for x in classification_indel_counts])+"\n")
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
-        pie_values = []
-        pie_labels = []
-        for i in range(len(classification_indel_labels)):
-            if values[i] > 0:
-                pie_values.append(values[i])
-                pie_labels.append(classification_indel_labels[i]+"\n("+str(values[i])+")")
-        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+        width = 0.1
+        inner_wedge_properties = {"edgecolor":"w",'linewidth': 2}
+        wedge_properties = {"width":width, "edgecolor":"w",'linewidth': 2}
+
+        ax.pie(noindel_pie_values, labels=noindel_pie_labels,
+            wedgeprops=inner_wedge_properties,autopct="%1.2f%%",radius=1-width, labeldistance=0.50,pctdistance=0.25)
+        ax.pie(classification_indel_counts, labels=None,
+            wedgeprops=wedge_properties,autopct="%1.2f%%",colors=['silver','crimson'],pctdistance=1)
+        patch1 = Patch(color='silver', label='No indels')
+        patch2 = Patch(color='crimson', label='Short indels')
+
+        plt.legend(handles=[patch1, patch2])
+
         ax.set_title('Read classifications')
         plt.savefig(classification_indel_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(classification_indel_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(classification_indel_labels,values)])
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(classification_indel_labels,classification_indel_counts)])
         classification_indel_plot_obj = PlotObject(
                 plot_name = classification_indel_plot_obj_root,
                 plot_title = 'Read Classification including short indels',
@@ -2687,6 +2914,81 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
                 plot_label = plot_label,
                 plot_datas = [('Deletion distance relative to origin cut (all values)',origin_deletion_hist_plot_obj_root + ".txt")]
                 )
+
+    # plot of coverage of 100bp after cut
+    origin_indel_depth_plot_obj_root = root + ".origin_depth_counts"
+    origin_depth_counts_100bp = origin_depth_counts_100bp_total - origin_depth_counts_100bp
+    origin_depth_counts_100bp_primer = origin_depth_counts_100bp_total - origin_depth_counts_100bp_primer
+
+    xs_primer = list(np.arange(-1*(len(origin_depth_counts_100bp_primer)-1),0,1))
+    ys_primer = list(np.flip(origin_depth_counts_100bp_primer[1:]))
+    xs_post = list(np.arange(1,len(origin_depth_counts_100bp)))
+    ys_post = list(origin_depth_counts_100bp[1:])
+
+    xs = xs_primer + xs_post
+    ys = ys_primer + ys_post
+
+    with open(origin_indel_depth_plot_obj_root+"_100bp.txt","w") as summary:
+        summary.write('bpFromOriginCut\treadDepth\n')
+        for (xval, yval) in zip(xs,ys):
+            summary.write(str(xval)+"\t"+str(yval)+"\n")
+
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(211)
+    if len(origin_depth_counts_100bp) > 0:
+        ax.bar(xs_primer+xs_post,ys_primer+ys_post)
+        ax.set_ymargin(0.05)
+    else:
+        ax.bar(0,0)
+    ax.set_ylabel('Read depth (Number of reads)')
+    ax.set_title('Read depth of 100bp after origin')
+    line1 = ax.axvline(xs_primer[min_primer_length]+0.5,color='k',ls='dotted')
+    line2 = ax.axvline(0,color='r',ls='dotted')
+    ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
+
+    # plot of coverage of 2500bp after cut
+    origin_depth_counts_2500bp_plot_obj_root = root + ".origin_depth_counts_2500bp"
+    origin_depth_counts_2500bp = origin_depth_counts_2500bp_total - origin_depth_counts_2500bp
+    origin_depth_counts_2500bp_primer = origin_depth_counts_2500bp_total - origin_depth_counts_2500bp_primer
+
+    xs_primer = list(np.arange(-1*(len(origin_depth_counts_2500bp_primer)-1),0,1))
+    ys_primer = list(np.flip(origin_depth_counts_2500bp_primer[1:]))
+    xs_post = list(np.arange(1,len(origin_depth_counts_2500bp)))
+    ys_post = list(origin_depth_counts_2500bp[1:])
+
+    xs = xs_primer + xs_post
+    ys = ys_primer + ys_post
+    ax = plt.subplot(212)
+    if len(origin_depth_counts_2500bp) > 0:
+        ax.bar(xs_primer+xs_post,ys_primer+ys_post)
+        ax.set_ymargin(0.05)
+    else:
+        ax.bar(0,0)
+    ax.set_ylabel('Read depth (Number of reads)')
+    ax.set_title('Read depth of 2500bp after origin')
+    line1 = ax.axvline(xs_primer[min_primer_length]+0.5,color='k',ls='dotted')
+    line2 = ax.axvline(0,color='r',ls='dotted')
+    ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
+
+    with open(origin_indel_depth_plot_obj_root+"_2500bp.txt","w") as summary:
+        summary.write('bpFromOriginCut\treadDepth\n')
+        for (xval, yval) in zip(xs,ys):
+            summary.write(str(xval)+"\t"+str(yval)+"\n")
+
+    plt.savefig(origin_indel_depth_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(origin_indel_depth_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+    plot_label = 'Read depth surround origin. The top plot shows reads with deletions smaller than 100bp (N='+str(origin_depth_counts_100bp_total)+'). The bottom plot shows reads with deletions smaller than 2500bp (N='+str(origin_depth_counts_2500bp_total)+') . The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos)+'. The vertical red dotted line shows the origin location. The vertical black dotted line shows the minimum requred length (' + str(min_primer_length)+'bp) set by the parameter --min_primer_length.'
+    if sum(ys) < 0:
+        plot_label = '(No reads found at origin)'
+
+    origin_indel_depth_plot_obj = PlotObject(
+            plot_name = origin_indel_depth_plot_obj_root,
+            plot_title = 'Read depth around origin',
+            plot_label = plot_label,
+            plot_datas = [('Depth around origin (100bp)',origin_indel_depth_plot_obj_root + "_100.txt"),
+                        ('Depth around origin (2500bp)',origin_indel_depth_plot_obj_root + "_2500.txt")]
+            )
 
     #make r1/r2/support plots
     r1_r2_support_plot_obj = None # plot of how many reads for which r1 and r2 support each other
@@ -2843,6 +3145,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
             origin_deletion_hist_plot_obj_str = origin_deletion_hist_plot_obj.to_json()
         fout.write(origin_deletion_hist_plot_obj_str+"\n")
 
+        origin_indel_depth_plot_obj_str = "None"
+        if origin_indel_depth_plot_obj is not None:
+            origin_indel_depth_plot_obj_str = origin_indel_depth_plot_obj.to_json()
+        fout.write(origin_indel_depth_plot_obj_str+"\n")
+
         r1_r2_support_plot_obj_str = "None"
         if r1_r2_support_plot_obj is not None:
             r1_r2_support_plot_obj_str = r1_r2_support_plot_obj.to_json()
@@ -2871,7 +3178,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,cut_sites,cut_
 
     return (final_file,final_read_ids_for_cuts,final_cut_counts,cut_classification_lookup,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
-        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,
+        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj)
 
 
@@ -2895,7 +3202,9 @@ def read_command_output(command):
     return iter(p.stdout.readline, b'')
 
 
-def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,cut_classification_lookup,av_read_length,origin_seq,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,crispresso_quant_window_size,run_crispresso_on_novel_sites,samtools_command,crispresso_command,n_processes=1):
+def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,cut_classification_lookup,cut_annotations,
+        av_read_length,origin_seq,cleavage_offset,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,crispresso_quant_window_size,
+        run_crispresso_on_novel_sites,samtools_command,crispresso_command,n_processes=1):
     """
     Prepares reads for analysis by crispresso2
     Frequently-aligned locations with a min number of reads (crispresso_min_count) are identified
@@ -2907,8 +3216,11 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         read_ids_for_crispresso: dict of readID=>cut assignment
         cut_counts_for_crispresso: dict of cut=>count for # reads assigned to each cut
         cut_classification_lookup: dict of cutID=> type (e.g. Linear, Translocation, etc)
+        cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
+            (type=On-target, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
         av_read_length: average read length (used to calculate reference region size for CRISPResso)
         origin_seq: common amplified region at primer (to first cut site)
+        cleavage_offset: position where cleavage occurs (relative to end of spacer seq -- for Cas9 this is -3)
         genome: path to genome fa file
         genome_len_file: path to tab-sep file with lengths of chrs in genome (ends with .fai)
         crispresso_min_count: min number of reads at site for crispresso2 processing
@@ -2996,12 +3308,25 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         cut_pos = int(cut_pos)
         cut_name = cut_names[cut]
 
+        cut_guide_annotation = ['Novel','Not-origin','NA']
+        cut_str = cut_chr+':'+str(cut_pos)
+        if cut_str in cut_annotations:
+            cut_guide_annotation = cut_annotations[cut_str]
+
         if cut_direction == "right":
             cut_amp_start = cut_pos
             cut_amp_end = cut_pos + amp_half_length
             faidx_cmd = '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,cut_amp_start,cut_amp_end)
-            cut_amp_seq = subprocess.check_output(faidx_cmd,shell=True).decode(sys.stdout.encoding).strip()
             logger.debug('Getting sequence on right for cut ' + str(cut) + ': ' + str(faidx_cmd))
+            cut_amp_seq = subprocess.check_output(faidx_cmd,shell=True).decode(sys.stdout.encoding).strip()
+
+            # I had attempted to recover the actual guide on each side of the cut, but sometimes it is only 6bp long and not unique within the amplicon sequence
+#            if cut_guide_annotation[2] == 'FW':
+#                cut_guide_seq = cut_guide_annotation[3][cleavage_offset:]
+#            elif cut_guide_annotation[2] == 'RV':
+#                cut_guide_seq = cut_guide_annotation[3][0:-cleavage_offset]
+#            else:
+#                cut_guide_seq = cut_amp_seq[0:10]
 
 
         elif cut_direction == "left":
@@ -3009,14 +3334,24 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             cut_amp_start = cut_pos - amp_half_length
 
             faidx_cmd = '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,cut_amp_start,cut_amp_end - 1)
-            cut_amp_seq = subprocess.check_output(faidx_cmd,shell=True).decode(sys.stdout.encoding).strip()
             logger.debug('Getting sequence on left for cut ' + str(cut) + ': ' + str(faidx_cmd))
+            cut_amp_seq = subprocess.check_output(faidx_cmd,shell=True).decode(sys.stdout.encoding).strip()
             cut_amp_seq = reverse_complement(cut_amp_seq)
+
+#            if cut_guide_annotation[2] == 'FW':
+#                cut_guide_seq = cut_guide_annotation[3][0:-cleavage_offset]
+#            elif cut_guide_annotation[2] == 'RV':
+#                cut_guide_seq = cut_guide_annotation[3][cleavage_offset:]
+#            else:
+#                cut_guide_seq = cut_amp_seq[0:10]
 
         else:
             raise Exception('Got unexpected cut direction: ' + cut_direction + ' from cut ' + cut)
 
+
         amp_seq = origin_seq + cut_amp_seq
+        post_cut_seq = cut_amp_seq[0:15] #3bp + 3bp is sometimes too short to uniquely identify the location so we'll just use 15bp on each side. 
+        guide_seq = origin_seq[-15:] + post_cut_seq
         quant_window_start = len(origin_seq) - crispresso_quant_window_size
         quant_window_coords = "%d-%d"%(quant_window_start, quant_window_start + 2*(crispresso_quant_window_size) - 1)
 
@@ -3025,8 +3360,9 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         if n_processes > 4:
             processes_str = "--n_processes 4"
         output_folder = os.path.join(data_dir,'CRISPResso_on_'+cut_names[cut])
-        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -r1 %s --fastq_output --quantification_window_coordinates %s %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,amp_seq,reads_file,quant_window_coords,processes_str,reads_file)
-
+        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -g %s -wc %s -w %s -r1 %s --fastq_output --quantification_window_coordinates %s %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,
+            amp_seq,guide_seq,-15,crispresso_quant_window_size,reads_file,quant_window_coords,processes_str,reads_file)
+        
         run_this_one = 'True'
         if not run_crispresso_on_novel_sites and 'Novel' in cut_classification_lookup[cut]:
             run_this_one = 'False: novel location'
@@ -3209,40 +3545,39 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
                     if n_aligned > 0:
                         unmod_pct = 100*n_unmod/float(n_aligned)
                         mod_pct = 100*n_mod/float(n_aligned)
+
+                    if 'fastq_output' not in run_data:
+                        raise Exception('Cannot read fastq output for ' + crispresso_info['name'])
+                    else:
+                        mod_read_count = 0
+                        unmod_read_count = 0
+                        fastq_output = run_data['fastq_output']
+                        if fastq_output.endswith('.gz'):
+                            fq_in = gzip.open(fastq_output,'rt')
+                        else:
+                            fq_in = open(fastq_output,'rt')
+
+                        while (1):
+                            fq_id_line   = fq_in.readline().strip()
+                            fq_seq_line  = fq_in.readline().strip()
+                            fq_plus_line = fq_in.readline()
+                            fq_qual_line = fq_in.readline().strip()
+
+                            if not fq_qual_line: break
+
+                            read_id = fq_id_line[1:]
+                            if 'CLASS=Reference_MODIFIED' in fq_plus_line:
+                                all_crispresso_read_modified_data[read_id] = 'M'
+                                mod_read_count += 1
+                            else:
+                                all_crispresso_read_modified_data[read_id] = 'U'
+                                unmod_read_count += 1
+                        fq_in.close()
+
+                        if n_mod != mod_read_count:
+                            raise Exception("Couldn't get correct number of modified reads from the fastq_output file " + fastq_output)
             new_vals = [name,cut,cut_type,cut_loc,ref_name,run_status,n_printed,n_total,n_aligned,n_unmod,n_mod,n_discarded,n_insertion,n_deletion,n_substitution,n_only_insertion,n_only_deletion,n_only_substitution,n_insertion_and_deletion,n_insertion_and_substitution,n_deletion_and_substitution,n_insertion_and_deletion_and_substitution,cut_amp_seq]
             crispresso_info_fh.write("\t".join([str(x) for x in new_vals])+"\n")
-
-            if run_status == 'True':
-                if 'fastq_output' not in run_data:
-                    raise Exception('Cannot read fastq output for ' + crispresso_info['name'])
-                else:
-                    mod_read_count = 0
-                    unmod_read_count = 0
-                    fastq_output = run_data['fastq_output']
-                    if fastq_output.endswith('.gz'):
-                        fq_in = gzip.open(fastq_output,'rt')
-                    else:
-                        fq_in = open(fastq_output,'rt')
-
-                    while (1):
-                        fq_id_line   = fq_in.readline().strip()
-                        fq_seq_line  = fq_in.readline().strip()
-                        fq_plus_line = fq_in.readline()
-                        fq_qual_line = fq_in.readline().strip()
-
-                        if not fq_qual_line: break
-
-                        read_id = fq_id_line[1:]
-                        if 'CLASS=Reference_MODIFIED' in fq_plus_line:
-                            all_crispresso_read_modified_data[read_id] = 'M'
-                            mod_read_count += 1
-                        else:
-                            all_crispresso_read_modified_data[read_id] = 'U'
-                            unmod_read_count += 1
-                    fq_in.close()
-
-                    if n_mod != mod_read_count:
-                        raise Exception("Couldn't get correct number of modified reads from the fastq_output file " + fastq_output)
 
     annotated_final_assignments_file = root + ".annotated_final_assignments"
     annotated_final_class_counts = defaultdict(int)
@@ -3702,7 +4037,7 @@ class SSWPrimerAlign:
     def destroy(self,ssw_res):
         self.ssw_obj.align_destroy(ssw_res)
 
-def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc):
+def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_length,ssw_align_primer):
     """
     Trims the primer from single-end input reads, only keeps reads with the primer present in R1
 
@@ -3920,6 +4255,67 @@ def to_int(seq, list_letters, dict_letter_lookup):
             num[i] = n
 
     return num
+
+def get_guide_match_from_aln(guide_seq_aln, ref_seq_aln, cut_ind):
+    """
+    Count the number of matches and mismatches from two alignment strings, as well as the index of the cut site
+
+    params:
+        guide_seq_aln (str): The guide aligned sequence e.g.     --ATTA-
+        ref_seq_aln (str): The reference aligned sequence e.g.   AAATTGGGG
+        cut_ind (int): The zero-based index in the the guide seq string of the base to the left where a cut would occur (e.g. for Cas9 and reverse-complement guide PAMGGGGGGGGGGG the cut_ind would be given as 5)
+
+    returns:
+        match_count: number of bp in longest match
+        mismatch_count: number of bp that mismatch
+        gap_count: number of gaps in longest match
+        aln_cut_ind: the base in the reference corresponding to the cut_ind in the guide
+    """
+
+    if len(guide_seq_aln) != len(ref_seq_aln):
+        raise Exception('Sequence lengths must be the same')
+    first_nongap_ind = -1
+    last_nongap_ind = -1
+    guide_ind = 0
+    ref_ind = 0
+    ref_ind_cut_site = -1
+    for i in range(len(guide_seq_aln)):
+        if guide_seq_aln[i] == '-':
+            pass
+        else:
+            guide_ind += 1
+            last_nongap_ind = i
+            if first_nongap_ind == -1:
+                first_nongap_ind = i
+        if ref_seq_aln[i] != '-':
+            ref_ind += 1
+        if guide_ind == cut_ind:
+            ref_ind_cut_site = ref_ind
+    
+    match_count = 0
+    mismatch_count = 0
+    gap_count = 0
+    guide_ind = 0
+    for i in range(first_nongap_ind,last_nongap_ind+1):
+        if guide_seq_aln[i] == '-' or ref_seq_aln[i] == '-':
+            gap_count += 1
+        elif guide_seq_aln[i] == ref_seq_aln[i]:
+            match_count += 1
+        else:
+            mismatch_count += 1
+
+#    print(f'{guide_seq_aln=}')
+#    print(f'{ref_seq_aln=}')
+#    print('guide_seq_aln sub: ' + guide_seq_aln[first_nongap_ind:last_nongap_ind+1])
+#    print('ref_seq_aln sub: ' + ref_seq_aln[first_nongap_ind:last_nongap_ind+1])
+#    print(f'{match_count=}')
+#    print(f'{mismatch_count=}')
+#    print(f'{gap_count=}')
+#    print(f'{ref_ind_cut_site=}')
+    potential_guide_in_ref = ref_seq_aln[first_nongap_ind:last_nongap_ind+1].replace("-","")
+
+    return match_count, mismatch_count, gap_count, ref_ind_cut_site,potential_guide_in_ref
+
 
 
 main()
