@@ -24,7 +24,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.1"
+__version__ = "v0.1.2"
 
 def main(settings, logger):
 
@@ -55,7 +55,7 @@ def main(settings, logger):
 
     if settings['PAM'] is not None and settings['casoffinder_num_mismatches'] > 0:
         casoffinder_cut_sites,casoffinder_cut_annotations = get_cut_sites_casoffinder(
-                root = settings['root'],
+                root = settings['root']+'.casoffinder',
                 genome=settings['genome'],
                 pam=settings['PAM'],
                 guides=settings['guide_sequences'],
@@ -847,9 +847,9 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     os.symlink(genome,linked_genome)
 
 
-    casoffinder_input_file = root + '.casoffinder_input.txt'
-    casoffinder_output_file = root + '.casoffinder_output.txt'
-    casoffinder_log_file = root + '.casoffinder.log'
+    casoffinder_input_file = root + '.input.txt'
+    casoffinder_output_file = root + '.output.txt'
+    casoffinder_log_file = root + '.log'
     guide_len = max([len(x) for x in guides])
     pam_len = len(pam)
     with open (casoffinder_input_file,'w') as cout:
@@ -1071,6 +1071,7 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
             origin_seq = reverse_complement(origin_seq)
         logger.debug('Got origin sequence: ' + origin_seq)
 
+    logger.debug('Getting read length and number of total reads')
     av_read_length = get_av_read_len(fastq_r1)
     num_reads_input = get_num_reads_fastq(fastq_r1)
 
@@ -2793,6 +2794,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 plot_title = 'Read Classification including short indels',
                 plot_label = 'Read classification including annotations for presence of short indels<br>'+plot_count_str,
                 plot_datas = [
+                    ('Alignment classifications with indels',classification_indel_plot_obj_root + ".txt"),
                     ('Alignment classifications',classification_plot_obj_root + ".txt"),
                     ('Read assignments',final_file)
                     ]
@@ -2974,8 +2976,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             plot_name = origin_indel_depth_plot_obj_root,
             plot_title = 'Read depth around origin',
             plot_label = plot_label,
-            plot_datas = [('Depth around origin (100bp)',origin_indel_depth_plot_obj_root + "_100.txt"),
-                        ('Depth around origin (2500bp)',origin_indel_depth_plot_obj_root + "_2500.txt")]
+            plot_datas = [('Depth around origin (100bp)',origin_indel_depth_plot_obj_root + "_100bp.txt"),
+                        ('Depth around origin (2500bp)',origin_indel_depth_plot_obj_root + "_2500bp.txt")]
             )
 
     #make r1/r2/support plots
@@ -4292,14 +4294,6 @@ def get_guide_match_from_aln(guide_seq_aln, ref_seq_aln, cut_ind):
         else:
             mismatch_count += 1
 
-#    print(f'{guide_seq_aln=}')
-#    print(f'{ref_seq_aln=}')
-#    print('guide_seq_aln sub: ' + guide_seq_aln[first_nongap_ind:last_nongap_ind+1])
-#    print('ref_seq_aln sub: ' + ref_seq_aln[first_nongap_ind:last_nongap_ind+1])
-#    print(f'{match_count=}')
-#    print(f'{mismatch_count=}')
-#    print(f'{gap_count=}')
-#    print(f'{ref_ind_cut_site=}')
     potential_guide_in_ref = ref_seq_aln[first_nongap_ind:last_nongap_ind+1].replace("-","")
 
     return match_count, mismatch_count, gap_count, ref_ind_cut_site,potential_guide_in_ref
