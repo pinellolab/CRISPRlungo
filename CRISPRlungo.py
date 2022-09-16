@@ -26,8 +26,7 @@ mpl.rcParams['pdf.fonttype'] = 42
 
 __version__ = "v0.1.1"
 
-def main():
-    settings, logger = parse_settings(sys.argv)
+def main(settings, logger):
 
     #data structures for plots for report
     summary_plot_objects=[]  # list of PlotObjects for plotting
@@ -66,7 +65,7 @@ def main():
                 can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
         for cut_site in casoffinder_cut_sites:
-            if cut_site not in cut_cut_sites:
+            if cut_site not in cut_sites:
                 cut_sites.append(cut_site)
                 cut_annotations[cut_site] = casoffinder_cut_annotations[cut_site]
 
@@ -289,6 +288,7 @@ def parse_settings(args):
     parser.add_argument('--cuts','--cut_sites', nargs='*', help='Cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
     parser.add_argument('--on_target_cut_sites', nargs='*', help='On-target cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
     parser.add_argument('--cut_classification_annotations', nargs='*', help='User-customizable annotations for cut products in the form: chr1:234:left:Custom_label (multiple annotations are separated by spaces)', default=[])
+    parser.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
 
     parser.add_argument('--genome', help='Genome sequence file for alignment. This should point to a file ending in ".fa", and the accompanying index file (".fai") should exist.', default=None)
     parser.add_argument('--bowtie2_genome', help='Bowtie2-indexed genome file.',default=None)
@@ -300,14 +300,10 @@ def parse_settings(args):
     parser.add_argument('--novel_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) from each other (and not within homology_cut_merge_distance to a known/provided cut site or a site with homology to guide_sequences) will be merged into a single cut site. Variation in the cut sites or in the fragments produced may produce clusters of cut sites in a certain region. This parameter will merge novel cut sites within this distance into a single cut site.', default=100)
     parser.add_argument('--homology_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) with a known/provided/homologous site will be merged to that site. Homologous sites are defined as those that have homology to guide_sequences. Novel cut sites farther than homology_cut_merge_distance will be merged into novel cut sites based on the parameter novel_cut_merge_distance.', default=10000)
 
-    custom_group = parser.add_argument_group('Custom reference settings')
-    custom_group.add_argument('--alignment_extension', type=int, help='Number of bp to extend beyond av read length around cut site for custom reference', default=50)
-
     #for finding offtargets with casoffinder
     ot_group = parser.add_argument_group('In silico off-target search parameters')
     ot_group.add_argument('--PAM', type=str, help='PAM for in-silico off-target search', default=None)
     ot_group.add_argument('--casoffinder_num_mismatches', type=int, help='If greater than zero, the number of Cas-OFFinder mismatches for in-silico off-target search. If this value is zero, Cas-OFFinder is not run', default=0)
-    ot_group.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
 
     #specify primer filtering information
     p_group = parser.add_argument_group('Primer and filtering parameters and settings')
@@ -419,12 +415,6 @@ def parse_settings(args):
     if 'keep_intermediate' in settings_file_args:
         settings['keep_intermediate'] = (settings_file_args['keep_intermediate'].lower() == 'true')
         settings_file_args.pop('keep_intermediate')
-
-
-    settings['alignment_extension'] = cmd_args.alignment_extension
-    if 'alignment_extension' in settings_file_args:
-        settings['alignment_extension'] = int(settings_file_args['alignment_extension'])
-        settings_file_args.pop('alignment_extension')
 
     settings['cuts'] = cmd_args.cuts
     if 'cuts' in settings_file_args:
@@ -828,12 +818,12 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     info_file = root + '.info'
 
     casoffinder_cut_sites = []
-    casoffinder_cut_annotations = []
+    casoffinder_cut_annotations = {}
     if os.path.isfile(info_file) and can_use_previous_analysis:
         sites_found_count = -1
         with open (info_file,'r') as fin:
             sites_found_line_els = fin.readline().rstrip('\n').split("\t")
-            if sites_found_line_els == 2:
+            if len(sites_found_line_els) == 2:
                 sites_found_count = int(sites_found_line_els[1])
                 sites_read_count = 0
                 for line in fin:
@@ -848,7 +838,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
 
 
     casoffinder_cut_sites = []
-    casoffinder_cut_annotations = []
+    casoffinder_cut_annotations = {}
 
     #link in genome -- it throws a seg fault if it's in the bowtie directory
     linked_genome = root + '.genome.fa'
@@ -876,7 +866,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
 
     logger.debug(casoffinder_cmd)
     if not os.path.exists(casoffinder_output_file):
-        casoffinder_result = subprocess.check_output(casoffinder_cmd,shell=True,stderr=subprocess.STDOUT)
+        casoffinder_result = subprocess.check_output(casoffinder_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
         logger.debug('Casoffinder output:' + casoffinder_result)
     else:
         logger.debug('Using previously-calculated offtargets')
@@ -891,8 +881,6 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
             loc = line_els[2]
             strand = line_els[4]
             mismatch_count = line_els[5]
-            if mismatch_count == 0:
-                continue
 
             if strand == "+":
                 cut_loc = int(loc) + guide_len + 1 + cleavage_offset
@@ -4318,4 +4306,13 @@ def get_guide_match_from_aln(guide_seq_aln, ref_seq_aln, cut_ind):
 
 
 
-main()
+if __name__ == "__main__":
+    settings, logger = parse_settings(sys.argv)
+    try:
+        main(settings,logger)
+    except Exception as e:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.error(e, exc_info=True)
+        else:
+            logger.error(e)
+        raise e
