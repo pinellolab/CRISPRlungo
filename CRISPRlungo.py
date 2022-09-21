@@ -31,14 +31,14 @@ def main(settings, logger):
     #data structures for plots for report
     summary_plot_objects=[]  # list of PlotObjects for plotting
 
-#    assert_dependencies(
-#            cutadapt_command=settings['cutadapt_command'],
-#            samtools_command=settings['samtools_command'],
-#            bowtie2_command=settings['bowtie2_command'],
-#            crispresso_command=settings['crispresso_command'],
-#            casoffinder_command=settings['casoffinder_command']
-#            )
-#
+    assert_dependencies(
+            cutadapt_command=settings['cutadapt_command'],
+            samtools_command=settings['samtools_command'],
+            bowtie2_command=settings['bowtie2_command'],
+            crispresso_command=settings['crispresso_command'],
+            casoffinder_command=settings['casoffinder_command']
+            )
+
     origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = prep_input(
             root = settings['root']+'.primerInfo',
             primer_seq = settings['primer_seq'],
