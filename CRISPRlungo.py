@@ -175,7 +175,7 @@ def main(settings, logger):
         summary_plot_objects.append(tlen_plot_obj)
 
     if tlen_plot_obj is not None:
-        deduplication_plot_obj.order=10
+        deduplication_plot_obj.order=16
         summary_plot_objects.append(deduplication_plot_obj)
 
     classification_plot_obj.order=36
@@ -712,10 +712,8 @@ def assert_dependencies(cutadapt_command='cutadapt',samtools_command='samtools',
 
     # check cutadapt
     try:
-        cutadapt_result = subprocess.check_output('%s'%cutadapt_command, stderr=subprocess.STDOUT,shell=True)
+        cutadapt_result = subprocess.check_output('%s --version'%cutadapt_command, stderr=subprocess.STDOUT,shell=True)
     except Exception:
-        raise Exception('Error: cutadapt is required')
-    if not 'This is cutadapt ' in str(cutadapt_result):
         raise Exception('Error: cutadapt is required')
 
     # check faidx
@@ -728,7 +726,15 @@ def assert_dependencies(cutadapt_command='cutadapt',samtools_command='samtools',
 
     #check bowtie2
     try:
-        bowtie_result = subprocess.check_output('%s --version'%bowtie2_command, stderr=subprocess.STDOUT,shell=True)
+        bowtie_result = subprocess.check_output('%s --version'%bowtie2_command, stderr=subprocess.STDOUT,shell=True).decode(sys.stdout.encoding)
+        m = re.search(r'bowtie2-align-s version (\d+)\.(\d+)\S+',bowtie_result)
+        if m:
+            bowtie_major_version = int(m.group(1))
+            bowtie_minor_version = int(m.group(2))
+            if bowtie_major_version < 2 or bowtie_minor_version < 4:
+                    raise Exception('Bowtie version > 2.4 is required (version %s.%s found)'%(bowtie_major_version,bowtie_minor_version))
+        else:
+            raise Exception('Bowtie2 version cannot be found')
     except Exception:
         raise Exception('Error: bowtie2 is required')
 
@@ -1338,9 +1344,9 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
             umi_in = open(fastq_umi,'r')
 
         fastq_r1_dedup = root + '.r1.gz'
-        f1_out = gzip.open(fastq_r1_dedup, 'wb')
+        f1_out = gzip.open(fastq_r1_dedup, 'wt')
         fastq_r2_dedup = root + '.r2.gz'
-        f2_out = gzip.open(fastq_r2_dedup, 'wb')
+        f2_out = gzip.open(fastq_r2_dedup, 'wt')
 
         #now iterate through f1/f2/umi files
         while (1):
@@ -1550,7 +1556,6 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         filtered_on_primer_fastq_r1 = filtered_for_adapters_fastq_r1
         filtered_on_primer_fastq_r2 = filtered_for_adapters_fastq_r2
 
-
     #plot summary
     filter_labels = ['Filtered: too short','Filtered: no primer','Retained']
     values = [too_short_read_count,untrimmed_read_count,post_trim_read_count]
@@ -1567,24 +1572,24 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
             pie_values.append(values[i])
             pie_labels.append(filter_labels[i]+"\n("+str(values[i])+")")
     ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
-    ax.set_title('Read filtering based on primer presence')
+    ax.set_title('Read filtering based on primer/origin presence')
     plt.savefig(filter_on_primer_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(filter_on_primer_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
     plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
     plot_label = "Reads were filtered to contain primer origin sequence <pre>" + origin_seq +"</pre>"
+    plot_label += "Reads must contain at least " + str(min_primer_length) + " bases that match the primer/origin sequence<br>"
+    plot_label += "Reads containing the primer/origin sequence but shorter than " + str(min_read_length) + " were filtered as too short."
     filter_on_primer_plot_obj = PlotObject(
             plot_name = filter_on_primer_plot_obj_root,
-            plot_title = 'Read filtering based on primer presence',
+            plot_title = 'Read filtering based on primer/origin presence',
             plot_label = plot_label + '<br>'+plot_count_str,
             plot_datas = [
-                ('Primer filter summary',filter_on_primer_plot_obj_root + ".txt")
+                ('Primer/origin information',trim_primer_stats_file),
+                ('Primer filtering statistics',filter_on_primer_plot_obj_root + ".txt")
                 ]
             )
 
-
-
-    logger.info('Keeping %d reads with primer sequence'%post_trim_read_count)
 
     with open(trim_primer_stats_file,'w') as fout:
         fout.write("\t".join(["filtered_on_primer_fastq_r1","filtered_on_primer_fastq_r2","post_trim_read_count"])+"\n")
@@ -1594,6 +1599,10 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         if filter_on_primer_plot_obj is not None:
             filter_on_primer_plot_obj_str = filter_on_primer_plot_obj.to_json()
         fout.write(filter_on_primer_plot_obj_str+"\n")
+
+
+    logger.info('Keeping %d reads with primer sequence'%post_trim_read_count)
+
 
     return(filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,post_trim_read_count,filter_on_primer_plot_obj)
 
