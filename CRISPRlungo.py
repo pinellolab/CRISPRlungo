@@ -114,7 +114,7 @@ def main(settings, logger):
             )
 
     if filter_on_primer_plot_obj is not None:
-        filter_on_primer_plot_obj.order = 1
+        filter_on_primer_plot_obj.order = 3
         summary_plot_objects.append(filter_on_primer_plot_obj)
 
     #perform alignment
@@ -182,7 +182,7 @@ def main(settings, logger):
     classification_plot_obj.order=36
     summary_plot_objects.append(classification_plot_obj)
 
-    classification_indel_plot_obj.order=37
+    classification_indel_plot_obj.order=2
     summary_plot_objects.append(classification_indel_plot_obj)
 
     if tx_order_plot_obj is not None:
@@ -217,7 +217,7 @@ def main(settings, logger):
         summary_plot_objects.append(r1_r2_support_dist_plot_obj)
 
     if discarded_reads_plot_obj is not None:
-        discarded_reads_plot_obj.order=35
+        discarded_reads_plot_obj.order=3
         summary_plot_objects.append(discarded_reads_plot_obj)
 
     #crispresso_infos: dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
@@ -253,6 +253,10 @@ def main(settings, logger):
         crispresso_classification_plot_obj.order=40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
+    final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts)
+    final_summary_plot_obj.order= 1
+    summary_plot_objects.append(final_summary_plot_obj)
+
     make_report(report_file=settings['root']+".html",
             report_name = 'Report',
             crisprlungo_folder = '',
@@ -261,68 +265,6 @@ def main(settings, logger):
             summary_plot_objects = summary_plot_objects,
             )
 
-    final_summary_str = 'Total input reads: ' + str(num_reads_input) + '\n'
-    final_summary_head = ['total_input_reads']
-    final_summary_vals = [num_reads_input]
-
-    post_dedup_count_pct = None
-    if num_reads_input > 0:
-        post_dedup_count_pct=round(100*post_dedup_count/num_reads_input,2)
-    final_summary_str += '\tSurvived initial UMI deduplication: %d/%d (%s%%)\n'%(post_dedup_count,num_reads_input,post_dedup_count_pct)
-    final_summary_head.append('post_dedup_reads')
-    final_summary_vals.append(post_dedup_count)
-
-    post_filter_on_primer_read_count_pct = None
-    if post_dedup_count > 0:
-        post_filter_on_primer_read_count_pct =round(100* post_filter_on_primer_read_count/post_dedup_count,2)
-    final_summary_str += '\tSurvived filtering for primer/origin presence: %d/%d (%s%%)\n'%(post_filter_on_primer_read_count,post_dedup_count,post_filter_on_primer_read_count_pct)
-    final_summary_head.append('post_primer_filter_reads')
-    final_summary_vals.append(post_filter_on_primer_read_count)
-    
-    discarded_total = sum([x[1] for x in discarded_read_counts])
-    survived_filtering_count = post_filter_on_primer_read_count - discarded_total
-
-    survived_filtering_count_pct = None
-    if post_filter_on_primer_read_count > 0:
-        survived_filtering_count_pct =round(100* survived_filtering_count/post_filter_on_primer_read_count,2)
-    final_summary_str += '\tSurvived quality filtering: %d/%d (%s%%)\n'%(survived_filtering_count,post_filter_on_primer_read_count,survived_filtering_count_pct)
-    final_summary_head.append('post_quality_filter_reads')
-    final_summary_vals.append(survived_filtering_count)
-
-    discarded_total_pct = None
-    if post_filter_on_primer_read_count > 0:
-        discarded_total_pct =round(100* discarded_total/post_filter_on_primer_read_count,2)
-    final_summary_str += '\tFailed quality filtering: %d/%d (%s%%)\n'%(discarded_total,post_filter_on_primer_read_count,discarded_total_pct)
-    final_summary_head.append('discarded_quality_filter_reads')
-    final_summary_vals.append(discarded_total)
-
-    for (category,category_count) in discarded_read_counts:
-        category_pct = None
-        if final_read_count > 0:
-            category_pct =round(100* category_count/final_read_count,2)
-        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
-        final_summary_head.append(category)
-        final_summary_vals.append(category_count)
-
-    final_read_count_pct = None
-    if post_filter_on_primer_read_count > 0:
-        final_read_count_pct =round(100* final_read_count/post_filter_on_primer_read_count,2)
-    final_summary_str += '\tReads used for final analysis: %d/%d (%s%%)\n'%(final_read_count,post_filter_on_primer_read_count,final_read_count_pct)
-    final_summary_head.append('analyzed_read_count')
-    final_summary_vals.append(final_read_count)
-
-    for (category,category_count) in classification_read_counts:
-        category_pct = None
-        if final_read_count > 0:
-            category_pct =round(100* category_count/final_read_count,2)
-        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
-        final_summary_head.append(category)
-        final_summary_vals.append(category_count)
-
-    with open(settings['root']+".summary.txt","w") as fout:
-        fout.write("\t".join(final_summary_head)+"\n")
-        fout.write("\t".join([str(x) for x in final_summary_vals])+"\n")
-        fout.write(final_summary_str + "\n")
     logger.info('Successfully completed!')
 
     # FINISHED
@@ -332,10 +274,10 @@ def parse_settings(args):
     Parses settings from the command line
         First parses from the settings file, then parses from command line
 
-    param:
+    Args:
         args: command line arguments
 
-    returns:
+    Returns:
         settings: dict of parsed settings
     """
     parser = argparse.ArgumentParser(description='CRISPRlungo: Analyzing unidirectional sequencing of genome editing', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -780,7 +722,7 @@ def assert_dependencies(cutadapt_command='cutadapt',samtools_command='samtools',
     """
     Asserts the presence of required software (faidx, bowtie2, casoffinder)
 
-    params:
+    Args:
         samtools_command: location of samtools to run
         bowtie2_command: location of bowtie2 to run
         crispresso_command: location of crispresso to run
@@ -847,11 +789,11 @@ def get_av_read_len(fastq,number_reads_to_check=50):
     """
     Reads the first few reads of a file to determine read length
 
-    param:
+    Args:
         fastq: read1 file
         number_reads_to_check: the number of reads to read in
 
-    returns:
+    Returns:
         av_read_len: average read length
     """
     sum_len = 0
@@ -866,10 +808,10 @@ def get_num_reads_fastq(fastq):
     """
     Counts the number of reads in the specified fastq file
 
-    param:
+    Args:
         fastq: fastq file
 
-    returns:
+    Returns:
         num_reads: number of reads in the fastq file
     """
 
@@ -886,7 +828,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     """
     Gets off-target locations using casoffinder
 
-    params:
+    Args:
         root: root for written files
         genome: location of genome to use
         pam: PAM sequence of guide
@@ -895,7 +837,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
         num_mismatches: number of mismatches to find
         casoffinder_command: location of casoffinder to run
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
-    returns:
+    Returns:
         casoffinder_cut_sites: list of off-target cleavage positions
         casoffinder_cut_annotations: dict of off-target cleavage information
     """
@@ -995,7 +937,7 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
     In cases where an exogenous sequence is amplified (e.g. GUIDE-seq) primer_seq may not be genomic
     The origin sequence is determined, and trimmed from input reads
 
-    params:
+    Args:
         root: root for written files
         primer_seq: sequence of primer sequence.
         guide_seqs: sequences of guides used in experiment
@@ -1008,7 +950,7 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
 
-    returns:
+    Returns:
         origin_seq: common amplified region at primer to be removed from input sequences
         cut_sites: list of cut locations for input guides
         cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
@@ -1177,7 +1119,7 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
     """
     Deduplicates fastq files based on UMI (UMI is assumed to be the last part of the read ID after the ':'
 
-    params:
+    Args:
         root: root for written files
         fastq_r1: R1 reads to dedup
         fastq_r2: R2 reads to dedup
@@ -1185,7 +1127,7 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
         min_umi_seen_to_keep_read: min number of times a umi must be seen to keep the umi and read (e.g. if set to 2, a read-UMI pair that is only seen once will be discarded)
         write_UMI_counts: if True, writes a file with the UMI counts
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
-    returns:
+    Returns:
         fastq_r1_dedup: fastq_r1 file of deduplicated reads
         fastq_r2_dedup: fastq_r2 file of deduplicated reads
         tot_read_count: number of total reads read
@@ -1375,13 +1317,13 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
     """
     Adds the UMI to the read ID from a UMI file (a third file with the UMI sequences per read)
 
-    params:
+    Args:
         root: root for written files
         fastq_r1: R1 reads to dedup
         fastq_r2: R2 reads to dedup
         fastq_umi: UMI fastq to dedup on
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
-    returns:
+    Returns:
         fastq_r1_umi: fastq_r1 with umi added
         fastq_r2_umi: fastq_r2 with umi added
         tot_read_count: number of total reads read
@@ -1481,7 +1423,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
     Trims the primer from the input reads, only keeps reads with the primer present in R1
     Also trims the transposase adapter sequence from reads and filters reads that are too short
 
-    params:
+    Args:
         root: root for written files
         fastq_r1: R1 reads to trim
         fastq_r2: R2 reads to trim (or None)
@@ -1495,7 +1437,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
-    returns:
+    Returns:
         filtered_on_primer_fastq_r1: fastq_r1 containing reads with primer
         filtered_on_primer_fastq_r2: fastq_r2 containing reasd with primer in r1 (or None)
         post_filter_on_primer_read_count: number of reads kept with primer
@@ -1654,7 +1596,7 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
     """
     Aligns reads to the provided reference
 
-    params:
+    Args:
         root: root for written files
         fastq_r1: fastq_r1 to align
         fastq_r2: fastq_r2 to align
@@ -1666,7 +1608,7 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
-    returns:
+    Returns:
         mapped_bam_file: aligned reads in bam format
     """
 
@@ -1749,7 +1691,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     """
     Makes final read assignments (after deduplicating based on UMI and alignment location)
 
-    params:
+    Args:
         root: root for written files
         genome_mapped_bam: bam of reads aligned to genome
         origin_seq: common amplified region at primer (to first cut site)
@@ -1778,7 +1720,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
-    returns:
+    Returns:
         final_assignment_filename: filename of final assignments for each read
         final_read_ids_for_crispresso: dict of readID=>cut
         final_cut_counts: dict of cutID=>count how many times each cut was seen -- when we iterate through the reads (fastq) in the next step, we check to see that the cut was seen above a threshold before printing those reads. The count is stored in this dict.
@@ -2038,11 +1980,11 @@ k
 
             seq = line_els[9]
             is_rc = int(line_els[1]) & 0x10
-
+        
             if discard_reads_with_poor_alignment and \
-                    (start_clipped > arm_max_clipped_bases and end_clipped > arm_max_clipped_bases) or \
+                    ((start_clipped > arm_max_clipped_bases and end_clipped > arm_max_clipped_bases) or \
                     left_matches < arm_min_matched_start_bases or \
-                    right_matches < arm_min_matched_start_bases:
+                    right_matches < arm_min_matched_start_bases):
 
                 discarded_reads_poor_alignment += 1
                 if write_discarded_read_info:
@@ -2179,7 +2121,7 @@ k
             for key in keys:
                 fout.write(str(key) + '\t' + str(aligned_tlens[key]) + '\n')
 
-        fig = plt.figure(figsize=(12,12))
+        fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(111)
         if len(vals) > 0:
             ax.bar(keys,vals)
@@ -2884,11 +2826,37 @@ k
         short_indel_categories = ['',' short indels']
         classification_indel_labels = []
         classification_indel_counts = []
+        inner_pie_values = []
+        inner_pie_labels = []
+        outer_pie_values = []
+        inner_other_count = 0
+        outer_other_mod_count = 0
+        outer_other_unmod_count = 0
+        sum_inner = sum(noindel_pie_values)
+        cutoff_pct = 0.10 #counts < this percent are shown as 'other'
         for label in classification_labels:
+            this_counts = []
             for short_indel_category in short_indel_categories:
                 new_label = label + short_indel_category
                 classification_indel_labels.append(new_label)
                 classification_indel_counts.append(final_classification_indel_counts[new_label])
+                this_counts.append(final_classification_indel_counts[new_label])
+
+            this_sum = sum(this_counts)
+            print('label: ' + str(label))
+            if this_sum/sum_inner > cutoff_pct:
+                inner_pie_labels.append(label+"\n("+str(final_classification_counts[label])+")")
+                inner_pie_values.append(final_classification_counts[label])
+                outer_pie_values.extend(this_counts)
+            else:
+                inner_other_count += this_sum
+                outer_other_unmod_count += this_counts[0]
+                outer_other_mod_count += this_counts[1]
+        if inner_other_count > 0:
+            inner_pie_labels.append('Other\n('+str(inner_other_count) + ')')
+            inner_pie_values.append(inner_other_count)
+            outer_pie_values.append(outer_other_unmod_count)
+            outer_pie_values.append(outer_other_mod_count)
 
         classification_indel_plot_obj_root = root + ".classifications_with_indels"
         with open(classification_indel_plot_obj_root+".txt",'w') as summary:
@@ -2900,9 +2868,9 @@ k
         inner_wedge_properties = {"edgecolor":"w",'linewidth': 2}
         wedge_properties = {"width":width, "edgecolor":"w",'linewidth': 2}
 
-        ax.pie(noindel_pie_values, labels=noindel_pie_labels,
+        ax.pie(inner_pie_values, labels=inner_pie_labels, # plot categories without indels
             wedgeprops=inner_wedge_properties,autopct="%1.2f%%",radius=1-width, labeldistance=0.50,pctdistance=0.25)
-        ax.pie(classification_indel_counts, labels=None,
+        ax.pie(outer_pie_values, labels=None,
             wedgeprops=wedge_properties,autopct="%1.2f%%",colors=['silver','crimson'],pctdistance=1)
         patch1 = Patch(color='silver', label='No indels')
         patch2 = Patch(color='crimson', label='Short indels')
@@ -3141,7 +3109,7 @@ k
         r1_r2_support_plot_obj = PlotObject(
                 plot_name = r1_r2_support_plot_obj_root,
                 plot_title = 'R1/R2 Support Classification',
-                plot_label = 'R1/R2 support classification<br>'+plot_count_str,
+                plot_label = 'R1/R2 support classification<br>'+plot_count_str+'<br>'+discard_str,
                 plot_datas = [
                     ('R1/R2 support classifications',r1_r2_support_plot_obj_root + ".txt")
                     ]
@@ -3223,10 +3191,25 @@ k
 
     discarded_count = discarded_reads_not_primary_aln+discarded_reads_duplicates+discarded_reads_poor_alignment+discarded_reads_not_supported_by_R2
 
+    discard_r1r2_str = '(Reads without R1/R2 support are currently included in the final analyses. Set the --discard_reads_without_r2_support flag to discard these reads.)'
+    if discard_reads_without_r2_support:
+        discard_r2r1_str = '(Reads without R1/R2 support are currently excluded from the final analyses because the --discard_reads_without_r2_support flag is set.)'
+
+    discard_dup_str = '(Reads that may be duplicates based on UMI/alignment position are currently included in the final analyses. Set the --dedup_input_based_on_aln_pos_and_UMI flag to discard these reads.)'
+    if discard_reads_without_r2_support:
+        discard_dup_str = '(Duplicate reads based on UMI/alignment position are currently excluded from the final analyses because the --dedup_input_based_on_aln_pos_and_UMI flag is set.)'
+
+    discard_poor_aln_str = '(Reads with poor alignment are currently included in the final analyses. Set the --discard_reads_with_poor_alignment flag to discard these reads.)'
+    if discard_reads_without_r2_support:
+        discard_poor_aln_str = '(Reads with poor alignment are currently excluded from the final analyses because the --discard_reads_with_poor_alignment flag is set.)'
+
+
     discarded_reads_plot_obj = PlotObject(
             plot_name = discarded_reads_plot_obj_root,
-            plot_title = 'Discarded_read count summary',
-            plot_label = str(discarded_count) + '/'+str(total_r1_processed) + ' reads were discarded.<br>'+str(final_total_count) + ' R1 reads were used for the final analysis. <br>' + plot_count_str + '<br>Poor alignment: Reads are unaligned (as determined by the aligner), or the front AND back of the read have greater than ' + str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have greater than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
+            plot_title = 'Discarded read count summary',
+            plot_label = str(discarded_count) + '/'+str(total_r1_processed) + ' reads were discarded.<br>'+str(final_total_count) + ' R1 reads were used for the final analysis. <br>' + plot_count_str + '<br>' +
+                discard_dup_str + '<br>' + discard_poor_aln_str + '<br>' + discard_r1r2_str + '<br>Poor alignment: Reads are unaligned (as determined by the aligner), or the front AND back of the read have greater than ' + 
+                str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have greater than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
             plot_datas = [
                 ('Discarded reads summary',discarded_reads_plot_obj_root + ".txt")
                 ]
@@ -3329,10 +3312,10 @@ def read_command_output(command):
     """
     Runs a shell command and returns an iter to read the output
 
-    param:
+    Args:
         command: shell command to run
 
-    returns:
+    Returns:
         iter to read the output
     """
 
@@ -3353,7 +3336,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
     Frequently-aligned locations with a min number of reads (crispresso_min_count) are identified
     Reads from these locations are extracted and prepared for analysis by CRISPResso2
 
-    params:
+    Args:
         root: root for written files
         input_fastq_file: input fastq with read sequences
         read_ids_for_crispresso: dict of readID=>cut assignment
@@ -3374,7 +3357,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         crispresso_command: location of crispresso to run
         n_processes: number of processes to run CRISPResso commands on
 
-    returns:
+    Returns:
         crispresso_infos: dict containing metadata about each crispresso run
             #dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
     """
@@ -3531,7 +3514,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
     """
     Runs CRISPResso2 commands and aggregates output
 
-    params:
+    Args:
         root: root for written files
         crispresso_infos: array of metadata information for CRISPResso
             dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command, run
@@ -3541,7 +3524,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
         keep_intermediate: whether to keep intermediate files (if False, intermediate files including produced fastqs will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
-    returns:
+    Returns:
         crispresso_results: dict of run_names and run_sub_htmls for display in report
         crispresso_classification_plot_obj: plot object with classifications includign crispresso analysis
 
@@ -3804,10 +3787,10 @@ def getLeftRightMismatchesMDZ(mdz_str):
       [A-Z], identifying a single reference base that differs from the SEQ base aligned at that position;
       \^[A-Z]+, identifying a run of reference bases that have been deleted in the alignment.
 
-    params:
+    Args:
         mdz_str: MD:Z string from alignment
 
-    returns:
+    Returns:
         left_matches: number of bp that match on the left side of the alignment
         right_matches
    """
@@ -3853,7 +3836,7 @@ def makeTxCountPlot(left_labs = [],
     """
     Make a count plot for the most common types of translocations
 
-    params:
+    Args:
         left_labs: (list) labels for the left side translocations
         right_labs: (list) labels for the right side of translocations
         counts: (list) read counts for each translocation
@@ -3865,7 +3848,7 @@ def makeTxCountPlot(left_labs = [],
         outline_labs: (list) labels for outline color legend
 
         The length of all params should be the same - one for each translocation to plot
-    returns:
+    Returns:
         plt: matplotlib plot object
     """
 
@@ -3936,6 +3919,112 @@ def makeTxCountPlot(left_labs = [],
     ax2.set_xlabel('Number of reads')
 
     return plt
+
+def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts):
+    """
+    Make final summary plot object showing number of reads deduplicated, filtered, and classified, etc.
+
+    Args:
+        root: where file should be written to
+        num_reads_input (int): Number of reads in input
+        post_dedup_count (int): Number of reads post-deduplication (of initial UMIs)
+        post_filter_on_primer_read_count (int): Number of reads post filtering on primers
+        final_read_count (int): Number of reads in final analysis
+        discarded_read_counts (list): List of tuples (why read was discarded, number of reads)
+        classification_read_counts (linst): List of tuples (read classification, number of reads)
+    """
+    final_summary_str = 'Total input reads: ' + str(num_reads_input) + '\n'
+    final_summary_head = ['total_input_reads']
+    final_summary_vals = [num_reads_input]
+
+    post_dedup_count_pct = None
+    if num_reads_input > 0:
+        post_dedup_count_pct=round(100*post_dedup_count/num_reads_input,2)
+    final_summary_str += '\tSurvived initial UMI deduplication: %d/%d (%s%%)\n'%(post_dedup_count,num_reads_input,post_dedup_count_pct)
+    final_summary_head.append('post_dedup_reads')
+    final_summary_vals.append(post_dedup_count)
+
+    post_filter_on_primer_read_count_pct = None
+    if post_dedup_count > 0:
+        post_filter_on_primer_read_count_pct =round(100* post_filter_on_primer_read_count/post_dedup_count,2)
+    final_summary_str += '\tSurvived filtering for primer/origin presence: %d/%d (%s%%)\n'%(post_filter_on_primer_read_count,post_dedup_count,post_filter_on_primer_read_count_pct)
+    final_summary_head.append('post_primer_filter_reads')
+    final_summary_vals.append(post_filter_on_primer_read_count)
+    
+    discarded_total = sum([x[1] for x in discarded_read_counts])
+    survived_filtering_count = post_filter_on_primer_read_count - discarded_total
+
+    survived_filtering_count_pct = None
+    if post_filter_on_primer_read_count > 0:
+        survived_filtering_count_pct =round(100* survived_filtering_count/post_filter_on_primer_read_count,2)
+    final_summary_str += '\tSurvived quality filtering: %d/%d (%s%%)\n'%(survived_filtering_count,post_filter_on_primer_read_count,survived_filtering_count_pct)
+    final_summary_head.append('post_quality_filter_reads')
+    final_summary_vals.append(survived_filtering_count)
+
+    discarded_total_pct = None
+    if post_filter_on_primer_read_count > 0:
+        discarded_total_pct =round(100* discarded_total/post_filter_on_primer_read_count,2)
+    final_summary_str += '\tFailed quality filtering: %d/%d (%s%%)\n'%(discarded_total,post_filter_on_primer_read_count,discarded_total_pct)
+    final_summary_head.append('discarded_quality_filter_reads')
+    final_summary_vals.append(discarded_total)
+
+    for (category,category_count) in discarded_read_counts:
+        category_pct = None
+        if final_read_count > 0:
+            category_pct =round(100* category_count/final_read_count,2)
+        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
+        final_summary_head.append(category)
+        final_summary_vals.append(category_count)
+
+    final_read_count_pct = None
+    if post_filter_on_primer_read_count > 0:
+        final_read_count_pct =round(100* final_read_count/post_filter_on_primer_read_count,2)
+    final_summary_str += '\tReads used for final analysis: %d/%d (%s%%)\n'%(final_read_count,post_filter_on_primer_read_count,final_read_count_pct)
+    final_summary_head.append('analyzed_read_count')
+    final_summary_vals.append(final_read_count)
+
+    for (category,category_count) in classification_read_counts:
+        category_pct = None
+        if final_read_count > 0:
+            category_pct =round(100* category_count/final_read_count,2)
+        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
+        final_summary_head.append(category)
+        final_summary_vals.append(category_count)
+
+    #plot summary
+    filter_labels = ['Deduplicated by initial UMI deduplication','Did not contain origin/primer seqeunce','Failed quality filtering','Used for final analyses']
+    values = [num_reads_input - post_dedup_count,post_dedup_count - post_filter_on_primer_read_count,post_filter_on_primer_read_count - final_read_count, final_read_count]
+    summary_plot_obj_root = root
+    with open(summary_plot_obj_root+".txt","w") as fout:
+        fout.write("\t".join(final_summary_head)+"\n")
+        fout.write("\t".join([str(x) for x in final_summary_vals])+"\n")
+        fout.write(final_summary_str + "\n")
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    pie_values = []
+    pie_labels = []
+    for i in range(len(filter_labels)):
+        if values[i] > 0:
+            pie_values.append(values[i])
+            pie_labels.append(filter_labels[i]+"\n("+str(values[i])+")")
+    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+    ax.set_title('Read Assignment Summary')
+    plt.savefig(summary_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(summary_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
+    plot_label = 'Assignment summary for N=' + str(num_reads_input) + ' input reads:'
+    summary_plot_obj = PlotObject(
+            plot_name = summary_plot_obj_root,
+            plot_title = 'Read summary',
+            plot_label = plot_label + '<br>'+plot_count_str,
+            plot_datas = [
+                ('Read assignment summary',summary_plot_obj_root + ".txt")
+                ]
+            )
+    return summary_plot_obj
+
+
 
 
 class PlotObject:
@@ -4120,7 +4209,7 @@ class SSWPrimerAlign:
     """
     def __init__(self,ssw_obj,primer_seq,list_letters=['A','C','G','T','N'],nFlag=1,match_score=2,mismatch_penalty=5,gap_open_penalty=5,gap_extend_penalty=5):
         """
-        args:
+        Args:
             ssw_obj: ssw object for alignment
             primer_seq: primer sequence which will be searched for in reads
             list_letters: list of possible letters for alignment
@@ -4184,7 +4273,7 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
     """
     Trims the primer from single-end input reads, only keeps reads with the primer present in R1
 
-    params:
+    Args:
         root: root for written files
         fastq_r1: R1 reads to trim
         fastq_r1_trimmed: output file to write R1 to
@@ -4192,7 +4281,7 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
         min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
         ssw_align_primer: SSWPrimerAlignment object for ssw alignment of primer
 
-    returns:
+    Returns:
         post_trim_read_count: number of reads after trimming (primer found)
         too_short_read_count: number of reads where primer seq found was too short
         untrimmed_read_count: number of reads untrimmed (no primer found)
@@ -4241,7 +4330,7 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
     """
     Trims the primer from paired input reads, only keeps reads with the primer present in R1
 
-    params:
+    Args:
         root: root for written files
         fastq_r1: R1 reads to trim
         fastq_r2: R2 reads to trim
@@ -4252,7 +4341,7 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
         ssw_align_primer: SSWPrimerAlignment object for ssw alignment of primer
         ssw_align_primer_rc: SSWPrimerAlignment object for ssw alignment of reverse complement primer (to r2)
 
-    returns:
+    Returns:
         post_trim_read_count: number of reads after trimming (primer found)
         too_short_read_count: number of reads where primer seq found was too short
         untrimmed_read_count: number of reads untrimmed (no primer found)
@@ -4318,13 +4407,13 @@ def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
     Trims a primer from a given read
     E.g. for --primer--read-- returns the portion that aligns to the primer (and before) as the trimmed_primer_seq and to the right as the trimmed_read_seq
 
-    params:
+    Args:
         primer: string
         read: string
         ssw_align: ssw alignment object
         min_score: minimum alignment score between primer and sequence
 
-    returns:
+    Returns:
         trimmed_primer_seq: portion of read that was aligned to the primer
         trimmed_read_seq: portion of the read after the primer
         trimmed_primer_pos: end index of primer that was trimmed
@@ -4356,12 +4445,12 @@ def trimRightPrimerFromRead(read, ssw_align, min_score=40, debug=False):
     Trims a primer from a given read
     E.g. for --read--primer-- returns the portion that aligns to the primer (and after) as the trimmed_primer_seq and to the left as the trimmed_read_seq
 
-    params:
+    Args:
         read: string
         ssw_align: ssw alignment object
         mismatch_score: mismatch/gap score for alignment
 
-    returns:
+    Returns:
         trimmed_read_seq: portion of the read after the primer
         trimmed_primer_seq: portion of read that was aligned to the primer
 
@@ -4392,12 +4481,12 @@ def trimRightPrimerFromRead(read, ssw_align, min_score=40, debug=False):
 def to_int(seq, list_letters, dict_letter_lookup):
     """
     Translate a letter sequence into numbers for ssw alignment
-    params:
+    Args:
         seq: string, letters to translate
         list_letters: list of all letters
         dict_letter_lookup: dict of letter > number for lookup
 
-    returns:
+    Returns:
         array of numbers representing sequence
     """
     num_decl = len(seq) * ctypes.c_int8
@@ -4416,12 +4505,12 @@ def get_guide_match_from_aln(guide_seq_aln, ref_seq_aln, cut_ind):
     """
     Count the number of matches and mismatches from two alignment strings, as well as the index of the cut site
 
-    params:
+    Args:
         guide_seq_aln (str): The guide aligned sequence e.g.     --ATTA-
         ref_seq_aln (str): The reference aligned sequence e.g.   AAATTGGGG
         cut_ind (int): The zero-based index in the the guide seq string of the base to the left where a cut would occur (e.g. for Cas9 and reverse-complement guide PAMGGGGGGGGGGG the cut_ind would be given as 5)
 
-    returns:
+    Returns:
         match_count: number of bp in longest match
         mismatch_count: number of bp that mismatch
         gap_count: number of gaps in longest match
