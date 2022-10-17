@@ -24,7 +24,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.2"
+__version__ = "v0.1.5"
 
 def main(settings, logger):
 
@@ -70,7 +70,7 @@ def main(settings, logger):
                 cut_annotations[cut_site] = casoffinder_cut_annotations[cut_site]
 
 
-    curr_r1_file = settings['fastq_r1'] #keep track of current input files (through trimming, etc.)
+    curr_r1_file = settings['fastq_r1'] #keep track of current input files (through UMI adding, etc.)
     curr_r2_file = settings['fastq_r2']
 
     #if umis are provided, add them to the fastqs
@@ -85,7 +85,7 @@ def main(settings, logger):
         curr_r1_file = umi_r1
         curr_r2_file = umi_r2
 
-    dedup_input_UMI_count = 0
+    post_dedup_count = num_reads_input
     if settings['dedup_input_on_UMI']:
         (dedup_r1, dedup_r2, dedup_tot_read_count, dedup_count_with_regex, post_dedup_count, post_dedup_read_count
                 ) = dedup_input_file(
@@ -109,12 +109,9 @@ def main(settings, logger):
             transposase_adapter_seq = settings['transposase_adapter_seq'],
             n_processes = settings['n_processes'],
             cutadapt_command = settings['cutadapt_command'],
-            use_cutadapt = settings['primer_filter_use_cutadapt'],
             keep_intermediate = settings['keep_intermediate'],
             can_use_previous_analysis = settings['can_use_previous_analysis'],
             )
-    curr_r1_file = filtered_on_primer_fastq_r1
-    curr_r2_file = filtered_on_primer_fastq_r2
 
     if filter_on_primer_plot_obj is not None:
         filter_on_primer_plot_obj.order = 1
@@ -124,8 +121,8 @@ def main(settings, logger):
     (genome_mapped_bam
             ) = align_reads(
                 root = settings['root']+'.genomeAlignment',
-                fastq_r1 = curr_r1_file,
-                fastq_r2 = curr_r2_file,
+                fastq_r1 = filtered_on_primer_fastq_r1,
+                fastq_r2 = filtered_on_primer_fastq_r2,
                 bowtie2_reference = settings['bowtie2_genome'],
                 bowtie2_command = settings['bowtie2_command'],
                 bowtie2_threads = settings['n_processes'],
@@ -141,10 +138,10 @@ def main(settings, logger):
             logger.debug('Deleting intermediate file ' + filtered_on_primer_fastq_r2)
             os.remove(filtered_on_primer_fastq_r2)
 
-    (final_assignment_file,final_read_ids_for_cuts,final_cut_counts,cut_classification_lookup,
+    (final_assignment_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
-        r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj) = make_final_read_assignments(
+        r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj) = make_final_read_assignments(
                 root = settings['root']+'.final',
                 genome_mapped_bam = genome_mapped_bam,
                 origin_seq = origin_seq,
@@ -159,9 +156,13 @@ def main(settings, logger):
                 cut_merge_dist = settings['novel_cut_merge_distance'],
                 collapse_to_homology_dist = settings['homology_cut_merge_distance'],
                 arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
+                arm_max_clipped_bases = settings['arm_max_clipped_bases'],
                 genome_map_resolution = 1000000,
-                suppress_dedup_input_based_on_aln_pos_and_UMI = settings['suppress_dedup_input_based_on_aln_pos_and_UMI'],
+                crispresso_max_indel_size = settings['crispresso_max_indel_size'],
+                dedup_input_based_on_aln_pos_and_UMI = settings['dedup_input_based_on_aln_pos_and_UMI'],
                 discard_reads_without_r2_support = settings['discard_reads_without_r2_support'],
+                discard_reads_with_poor_alignment = settings['discard_reads_with_poor_alignment'],
+                write_discarded_read_info = settings['write_discarded_read_info'],
                 samtools_command = settings['samtools_command'],
                 keep_intermediate = settings['keep_intermediate'],
                 can_use_previous_analysis = settings['can_use_previous_analysis']
@@ -214,15 +215,16 @@ def main(settings, logger):
     if r1_r2_support_dist_plot_obj is not None:
         r1_r2_support_dist_plot_obj.order=30
         summary_plot_objects.append(r1_r2_support_dist_plot_obj)
-    if r1_r2_no_support_dist_plot_obj is not None:
-        r1_r2_no_support_dist_plot_obj.order=31
-        summary_plot_objects.append(r1_r2_no_support_dist_plot_obj)
+
+    if discarded_reads_plot_obj is not None:
+        discarded_reads_plot_obj.order=35
+        summary_plot_objects.append(discarded_reads_plot_obj)
 
     #crispresso_infos: dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
     crispresso_infos = prep_crispresso2(
                 root = settings['root']+'.CRISPResso_r1',
-                input_fastq_file = settings['fastq_r1'],
-                read_ids_for_crispresso = final_read_ids_for_cuts,
+                input_fastq_file = curr_r1_file,
+                read_ids_for_crispresso = final_read_ids_for_crispresso,
                 cut_counts_for_crispresso = final_cut_counts,
                 cut_classification_lookup = cut_classification_lookup,
                 cut_annotations = cut_annotations,
@@ -259,7 +261,68 @@ def main(settings, logger):
             summary_plot_objects = summary_plot_objects,
             )
 
+    final_summary_str = 'Total input reads: ' + str(num_reads_input) + '\n'
+    final_summary_head = ['total_input_reads']
+    final_summary_vals = [num_reads_input]
 
+    post_dedup_count_pct = None
+    if num_reads_input > 0:
+        post_dedup_count_pct=round(100*post_dedup_count/num_reads_input,2)
+    final_summary_str += '\tSurvived initial UMI deduplication: %d/%d (%s%%)\n'%(post_dedup_count,num_reads_input,post_dedup_count_pct)
+    final_summary_head.append('post_dedup_reads')
+    final_summary_vals.append(post_dedup_count)
+
+    post_filter_on_primer_read_count_pct = None
+    if post_dedup_count > 0:
+        post_filter_on_primer_read_count_pct =round(100* post_filter_on_primer_read_count/post_dedup_count,2)
+    final_summary_str += '\tSurvived filtering for primer/origin presence: %d/%d (%s%%)\n'%(post_filter_on_primer_read_count,post_dedup_count,post_filter_on_primer_read_count_pct)
+    final_summary_head.append('post_primer_filter_reads')
+    final_summary_vals.append(post_filter_on_primer_read_count)
+    
+    discarded_total = sum([x[1] for x in discarded_read_counts])
+    survived_filtering_count = post_filter_on_primer_read_count - discarded_total
+
+    survived_filtering_count_pct = None
+    if post_filter_on_primer_read_count > 0:
+        survived_filtering_count_pct =round(100* survived_filtering_count/post_filter_on_primer_read_count,2)
+    final_summary_str += '\tSurvived quality filtering: %d/%d (%s%%)\n'%(survived_filtering_count,post_filter_on_primer_read_count,survived_filtering_count_pct)
+    final_summary_head.append('post_quality_filter_reads')
+    final_summary_vals.append(survived_filtering_count)
+
+    discarded_total_pct = None
+    if post_filter_on_primer_read_count > 0:
+        discarded_total_pct =round(100* discarded_total/post_filter_on_primer_read_count,2)
+    final_summary_str += '\tFailed quality filtering: %d/%d (%s%%)\n'%(discarded_total,post_filter_on_primer_read_count,discarded_total_pct)
+    final_summary_head.append('discarded_quality_filter_reads')
+    final_summary_vals.append(discarded_total)
+
+    for (category,category_count) in discarded_read_counts:
+        category_pct = None
+        if final_read_count > 0:
+            category_pct =round(100* category_count/final_read_count,2)
+        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
+        final_summary_head.append(category)
+        final_summary_vals.append(category_count)
+
+    final_read_count_pct = None
+    if post_filter_on_primer_read_count > 0:
+        final_read_count_pct =round(100* final_read_count/post_filter_on_primer_read_count,2)
+    final_summary_str += '\tReads used for final analysis: %d/%d (%s%%)\n'%(final_read_count,post_filter_on_primer_read_count,final_read_count_pct)
+    final_summary_head.append('analyzed_read_count')
+    final_summary_vals.append(final_read_count)
+
+    for (category,category_count) in classification_read_counts:
+        category_pct = None
+        if final_read_count > 0:
+            category_pct =round(100* category_count/final_read_count,2)
+        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
+        final_summary_head.append(category)
+        final_summary_vals.append(category_count)
+
+    with open(settings['root']+".summary.txt","w") as fout:
+        fout.write("\t".join(final_summary_head)+"\n")
+        fout.write("\t".join([str(x) for x in final_summary_vals])+"\n")
+        fout.write(final_summary_str + "\n")
     logger.info('Successfully completed!')
 
     # FINISHED
@@ -282,6 +345,7 @@ def parse_settings(args):
     parser.add_argument('--debug', action='store_true', help='Tab-separated settings file')
     parser.add_argument('--root', type=str, default=None, help='Output directory file root')
     parser.add_argument('--keep_intermediate',action='store_true',help='If true, intermediate files are not deleted')
+    parser.add_argument('write_discarded_read_info',action='store_true',help='If true, a file with information for discarded reads is produced.')
 
 
     parser.add_argument('--guide_sequences', nargs='*', help='Spacer sequences of guides (multiple guide sequences are separated by spaces). Spacer sequences must be provided without the PAM sequence, but oriented so the PAM would immediately follow the provided spacer sequence', default=[])
@@ -311,19 +375,21 @@ def parse_settings(args):
     p_group.add_argument('--primer_seq', type=str, help='Sequence of primer',default=None)
     p_group.add_argument('--min_primer_aln_score', type=int, help='Minimum primer/origin alignment score for trimming.',default=40)
     p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=30)
-    p_group.add_argument('--primer_filter_use_cutadapt', help='Whether to use cutadapt to identify primer/origin sequence in reads. If true, cutadapt is used. If false, custom lookhead algorithm is used.', action='store_true')
     p_group.add_argument('--min_read_length', type=int, help='Minimum length of read after all filtering',default=30)
     p_group.add_argument('--transposase_adapter_seq', type=str, help='Transposase adapter sequence to be trimmed from reads',default='CTGTCTCTTATACACATCTGACGCTGCCGACGA')
 
 
     #min alignment cutoffs for alignment to each arm/side of read
     a_group = parser.add_argument_group('Alignment cutoff parameters')
-    a_group.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of the alignment. E.g. if a read aligns to a genomic location, the first and last arm_min_matched_start_bases of the read would have to match exactly to the aligned location.', default=10)
+    a_group.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of the alignment. E.g. if arm_min_matched_start_bases is set to 5, the first and last 5bp of the read alignment would have to match exactly to the aligned location.', default=10)
+    a_group.add_argument('--arm_max_clipped_bases', type=int, help='Maximum number of clipped bases at the beginning of the alignment. Bowtie2 alignment marks reads on the beginning or end of the read as "clipped" if they do not align to the genome. This could arise from CRISPR-induced insertions, or bad alignments. We would expect to see clipped bases only on one side. This parameter sets the threshold for clipped bases on both sides of the read.  E.g. if arm_max_clipped_bases is 0, read alignments with more than 0bp on the right AND left side of the alignment would be discarded. An alignment with 5bp clipped on the left and 0bp clipped on the right would be accepted. An alignment with 5bp clipped on the left and 3bp clipped on the right would be discarded.', default=0)
     a_group.add_argument('--ignore_n', help='If set, "N" bases will be ignored. By default (False) N bases will count as mismatches in the number of bases required to match at each arm/side of the read', action='store_true')
+    a_group.add_argument('--discard_reads_with_poor_alignment', help='If set, reads with poor alignment (fewer than --arm_min_matched_start_bases mismatches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) are discarded from final analysis and counts', action='store_true')
 
     #CRISPResso settings
     c_group = parser.add_argument_group('CRISPResso settings')
     c_group.add_argument('--crispresso_min_count', type=int, help='Min number of reads required to be seen at a site for it to be analyzed by CRISPResso', default=50)
+    c_group.add_argument('--crispresso_max_indel_size', type=int, help='Maximum length of indel (as determined by genome alignment) for a read to be analyzed by CRISPResso. Reads with indels longer than this length will not be analyzed by CRISPResso, but the indel length will be reported elsewhere.', default=50)
     c_group.add_argument('--crispresso_min_aln_score', type=int, help='Min alignment score to reference sequence for quantification by CRISPResso', default=20)
     c_group.add_argument('--crispresso_quant_window_size', type=int, help='Number of bp on each side of a cut to consider for edits', default=1)
     c_group.add_argument('--run_crispresso_on_novel_sites', help='If set, CRISPResso analysis will be performed on novel cut sites. If false, CRISPResso analysis will only be performed on user-provided on- and off-targets', action='store_true')
@@ -341,7 +407,7 @@ def parse_settings(args):
     #umi settings
     u_group = parser.add_argument_group('UMI parameters')
     u_group.add_argument('--dedup_input_on_UMI', help='If set, input reads will be deduplicated based on UMI before alignment', action='store_true')
-    u_group.add_argument('--suppress_dedup_input_based_on_aln_pos_and_UMI', help='Suppress deduplication based on alignment position and UMI. If not set, input reads will be deduplicated based on alignment position and UMI', action='store_true')
+    u_group.add_argument('--dedup_input_based_on_aln_pos_and_UMI', help='If set, perform deduplication based on alignment position and UMI.', action='store_true')
     u_group.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match', default='NNWNNWNNN')
 
     #R1/R2 support settings
@@ -416,6 +482,11 @@ def parse_settings(args):
         settings['keep_intermediate'] = (settings_file_args['keep_intermediate'].lower() == 'true')
         settings_file_args.pop('keep_intermediate')
 
+    settings['write_discarded_read_info'] = cmd_args.write_discarded_read_info
+    if 'write_discarded_read_info' in settings_file_args:
+        settings['write_discarded_read_info'] = (settings_file_args['write_discarded_read_info'].lower() == 'true')
+        settings_file_args.pop('write_discarded_read_info')
+
     settings['cuts'] = cmd_args.cuts
     if 'cuts' in settings_file_args:
         settings['cuts'] = settings_file_args['cuts'].split(" ")
@@ -479,11 +550,6 @@ def parse_settings(args):
         settings['min_primer_length'] = int(settings_file_args['min_primer_length'])
         settings_file_args.pop('min_primer_length')
 
-    settings['primer_filter_use_cutadapt'] = cmd_args.primer_filter_use_cutadapt
-    if 'primer_filter_use_cutadapt' in settings_file_args:
-        settings['primer_filter_use_cutadapt'] = (settings_file_args['primer_filter_use_cutadapt'].lower() == 'true')
-        settings_file_args.pop('primer_filter_use_cutadapt')
-
     settings['min_read_length'] = cmd_args.min_read_length
     if 'min_read_length' in settings_file_args:
         settings['min_read_length'] = int(settings_file_args['min_read_length'])
@@ -499,10 +565,20 @@ def parse_settings(args):
         settings['arm_min_matched_start_bases'] = int(settings_file_args['arm_min_matched_start_bases'])
         settings_file_args.pop('arm_min_matched_start_bases')
 
+    settings['arm_max_clipped_bases'] = cmd_args.arm_max_clipped_bases
+    if 'arm_max_clipped_bases' in settings_file_args:
+        settings['arm_max_clipped_bases'] = int(settings_file_args['arm_max_clipped_bases'])
+        settings_file_args.pop('arm_max_clipped_bases')
+
     settings['ignore_n'] = cmd_args.ignore_n
     if 'ignore_n' in settings_file_args:
         settings['ignore_n'] = (settings_file_args['ignore_n'].lower() == 'true')
         settings_file_args.pop('ignore_n')
+
+    settings['discard_reads_with_poor_alignment'] = cmd_args.discard_reads_with_poor_alignment
+    if 'discard_reads_with_poor_alignment' in settings_file_args:
+        settings['discard_reads_with_poor_alignment'] = (settings_file_args['discard_reads_with_poor_alignment'].lower() == 'true')
+        settings_file_args.pop('discard_reads_with_poor_alignment')
 
     settings['run_crispresso_on_novel_sites'] = cmd_args.run_crispresso_on_novel_sites
     if 'run_crispresso_on_novel_sites' in settings_file_args:
@@ -513,6 +589,11 @@ def parse_settings(args):
     if 'crispresso_min_count' in settings_file_args:
         settings['crispresso_min_count'] = int(settings_file_args['crispresso_min_count'])
         settings_file_args.pop('crispresso_min_count')
+
+    settings['crispresso_max_indel_size'] = cmd_args.crispresso_max_indel_size
+    if 'crispresso_max_indel_size' in settings_file_args:
+        settings['crispresso_max_indel_size'] = int(settings_file_args['crispresso_max_indel_size'])
+        settings_file_args.pop('crispresso_max_indel_size')
 
     settings['crispresso_min_aln_score'] = cmd_args.crispresso_min_aln_score
     if 'crispresso_min_aln_score' in settings_file_args:
@@ -574,10 +655,10 @@ def parse_settings(args):
         settings['dedup_input_on_UMI'] = (settings_file_args['dedup_input_on_UMI'].lower() == 'true')
         settings_file_args.pop('dedup_input_on_UMI')
 
-    settings['suppress_dedup_input_based_on_aln_pos_and_UMI'] = cmd_args.suppress_dedup_input_based_on_aln_pos_and_UMI
-    if 'suppress_dedup_input_based_on_aln_pos_and_UMI' in settings_file_args:
-        settings['suppress_dedup_input_based_on_aln_pos_and_UMI'] = (settings_file_args['suppress_dedup_input_based_on_aln_pos_and_UMI'].lower() == 'true')
-        settings_file_args.pop('suppress_dedup_input_based_on_aln_pos_and_UMI')
+    settings['dedup_input_based_on_aln_pos_and_UMI'] = cmd_args.dedup_input_based_on_aln_pos_and_UMI
+    if 'dedup_input_based_on_aln_pos_and_UMI' in settings_file_args:
+        settings['dedup_input_based_on_aln_pos_and_UMI'] = (settings_file_args['dedup_input_based_on_aln_pos_and_UMI'].lower() == 'true')
+        settings_file_args.pop('dedup_input_based_on_aln_pos_and_UMI')
 
     settings['umi_regex'] = cmd_args.umi_regex
     if 'umi_regex' in settings_file_args:
@@ -1317,7 +1398,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
         with open(umi_stats_file,'r') as fin:
             head_line = fin.readline()
             line_els = fin.readline().rstrip('\n').split("\t")
-            if len(line_els) > 3:
+            if len(line_els) == 3:
                 logger.info('Using previously-generated fastqs with UMIs')
                 (fastq_r1_dedup,fastq_r2_dedup,tot_read_count_str) = line_els
                 tot_read_count = int(tot_read_count_str)
@@ -1395,7 +1476,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
     #done processing just plotting now
     return(fastq_r1_dedup,fastq_r2_dedup)
 
-def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',use_cutadapt=False,keep_intermediate=False,can_use_previous_analysis=False):
+def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',keep_intermediate=False,can_use_previous_analysis=False):
     """
     Trims the primer from the input reads, only keeps reads with the primer present in R1
     Also trims the transposase adapter sequence from reads and filters reads that are too short
@@ -1411,7 +1492,6 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         transposase_adapter_seq: transposase adapter seq to trim from R1
         n_processes: Number of processes to run on
         cutadapt_command: command to run cutadapt
-        use_cutadapt: if true, use cutadapt to identify primer sequence. If false, custom lookhead search will be used.
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
@@ -1456,59 +1536,23 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
     post_trim_read_count = 'NA'
     too_short_read_count = 'NA'
     untrimmed_read_count = 'NA'
-    if use_cutadapt:
-        cutadapt_log = root + ".cutadapt.log"
-        if fastq_r2 is None:
-            filtered_on_primer_fastq_r1 = root + ".trimmed.fq.gz"
-            filtered_on_primer_fastq_r2 = None
-            trim_command = "%s -g primerSeq=%s -o %s --rename='{id} {comment} primer={match_sequence}' --discard-untrimmed --minimum-length %d --cores %s %s > %s"%(cutadapt_command,origin_seq,filtered_on_primer_fastq_r1,min_read_length,n_processes,fastq_r1,cutadapt_log)
-        else:
-            filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
-            filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
-            origin_seq_rc = reverse_complement(origin_seq)
-            trim_command = "%s -g primerSeq=%s -A %s -o %s -p %s --rename='{id} {comment} primer={match_sequence}' --discard-untrimmed --minimum-length %d --pair-filter=first --cores %s %s %s > %s"%(cutadapt_command,origin_seq,origin_seq_rc,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_read_length,n_processes,fastq_r1,fastq_r2,cutadapt_log)
+    #prep for alignments using ssw
 
-        logger.debug(trim_command)
-        trim_result = subprocess.check_output(trim_command,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
+    sLibPath = os.path.dirname(os.path.abspath(__file__))+"/lib"
+    ssw_primer = ssw_lib.CSsw(sLibPath)
+    ssw_align_primer = SSWPrimerAlign(ssw_primer,origin_seq)
 
-        if not os.path.exists(cutadapt_log):
-            logger.error('Error found while running command:\n'+trim_command+"\nOutput: "+trim_result)
-
-        with open(cutadapt_log,'r') as fin:
-            for line in fin:
-                m = re.search(r'written \(passing filters\):\s+([\d,]+) \(\d.*%\)',line)
-                if m:
-                    post_trim_read_count = int(m.group(1).replace(',',''))
-
-                m = re.search(r'that were too short:\s+([\d,]+) \(\d.*%\)',line)
-                if m:
-                    too_short_read_count = int(m.group(1).replace(',',''))
-
-                m = re.search(r'discarded as untrimmed:\s+([\d,]+) \(\d.*%\)',line)
-                if m:
-                    untrimmed_read_count = int(m.group(1).replace(',',''))
-
-        if post_trim_read_count == 'NA':
-            logger.error('Could not parse trim read count from file ' + cutadapt_log)
-
-    else: # if not use cutadapt for trimming reads
-        #prep for alignments using ssw
-
-        sLibPath = os.path.dirname(os.path.abspath(__file__))+"/lib"
-        ssw_primer = ssw_lib.CSsw(sLibPath)
-        ssw_align_primer = SSWPrimerAlign(ssw_primer,origin_seq)
-
-        if fastq_r2 is None:
-            filtered_on_primer_fastq_r1 = root + ".has_primer.fq.gz"
-            filtered_on_primer_fastq_r2 = None
-            post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersSingle(fastq_r1,filtered_on_primer_fastq_r1,min_primer_aln_score,min_primer_length,ssw_align_primer)
-        else:
-            filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
-            filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
-            rc_origin_seq = reverse_complement(origin_seq)
-            ssw_primer_rc = ssw_lib.CSsw(sLibPath)
-            ssw_align_primer_rc = SSWPrimerAlign(ssw_primer_rc,rc_origin_seq)
-            post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersPair(fastq_r1,fastq_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc)
+    if fastq_r2 is None:
+        filtered_on_primer_fastq_r1 = root + ".has_primer.fq.gz"
+        filtered_on_primer_fastq_r2 = None
+        post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersSingle(fastq_r1,filtered_on_primer_fastq_r1,min_primer_aln_score,min_primer_length,ssw_align_primer)
+    else:
+        filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
+        filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
+        rc_origin_seq = reverse_complement(origin_seq)
+        ssw_primer_rc = ssw_lib.CSsw(sLibPath)
+        ssw_align_primer_rc = SSWPrimerAlign(ssw_primer_rc,rc_origin_seq)
+        post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersPair(fastq_r1,fastq_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc)
 
     contain_adapter_count = 0
     filtered_too_short_adapter_count = 0
@@ -1577,7 +1621,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
     plt.savefig(filter_on_primer_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
     plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
-    plot_label = "Reads were filtered to contain primer origin sequence <pre>" + origin_seq +"</pre>"
+    plot_label = "Reads were filtered to contain primer origin sequence <p class='text-break text-monospace'>" + origin_seq +"</p>"
     plot_label += "Reads must contain at least " + str(min_primer_length) + " bases that match the primer/origin sequence<br>"
     plot_label += "Reads containing the primer/origin sequence but shorter than " + str(min_read_length) + " were filtered as too short."
     filter_on_primer_plot_obj = PlotObject(
@@ -1606,7 +1650,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
 
     return(filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,post_trim_read_count,filter_on_primer_plot_obj)
 
-def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie2',bowtie2_threads=1,samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
+def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie2',bowtie2_threads=1,use_old_bowtie=False,samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
     """
     Aligns reads to the provided reference
 
@@ -1617,13 +1661,13 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
         bowtie2_reference: bowtie2 reference to align to (either artificial targets or reference)
         bowtie2_command: location of bowtie2 to run
         bowtie2_threads: number of threads to run bowtie2 with
+        use_old_bowtie: boolean for whether to use old bowtie2 version. Versions before v2.3.4.2 didn't implement the '--soft-clipped-unmapped-tlen' option
         samtools_command: location of samtools to run
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
         mapped_bam_file: aligned reads in bam format
-        genome_aligned_reads_count: number of aligned reads using Bowtie2
     """
 
     logger = logging.getLogger('CRISPRlungo')
@@ -1641,12 +1685,17 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
                 return mapped_bam_file
         logger.info('Could not recover previously-performed alignment. Reanalyzing.')
 
+    tlen_option = "--soft-clipped-unmapped-tlen"
+    if use_old_bowtie:
+        tlen_option = ""
+
 
     bowtie_log = root + '.bowtie2Log'
     if fastq_r2 is not None: #paired-end reads
         logger.info('Aligning paired reads using %s'%(bowtie2_command))
-        aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --very-sensitive-local --soft-clipped-unmapped-tlen --threads {bowtie2_threads} -x {bowtie2_reference} -1 {fastq_r1} -2 {fastq_r2} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
+        aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --very-sensitive-local {tlen_option} --threads {bowtie2_threads} -x {bowtie2_reference} -1 {fastq_r1} -2 {fastq_r2} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
+                tlen_option=tlen_option,
                 bowtie2_threads=bowtie2_threads,
                 bowtie2_reference=bowtie2_reference,
                 fastq_r1=fastq_r1,
@@ -1665,8 +1714,9 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
     #unpaired reads
     else:
         logger.info('Aligning single-end reads using %s'%(bowtie2_command))
-        aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --very-sensitive-local --soft-clipped-unmapped-tlen --threads {bowtie2_threads} -x {bowtie2_reference} -U {fastq_r1} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
+        aln_command = '{bowtie2_command} --seed 2248 --sam-no-qname-trunc --very-sensitive-local {tlen_option} --threads {bowtie2_threads} -x {bowtie2_reference} -U {fastq_r1} | {samtools_command} view -F 256 -Shu - | {samtools_command} sort -o {mapped_bam_file} - && {samtools_command} index {mapped_bam_file}'.format(
                 bowtie2_command=bowtie2_command,
+                tlen_option=tlen_option,
                 bowtie2_threads=bowtie2_threads,
                 bowtie2_reference=bowtie2_reference,
                 fastq_r1=fastq_r1,
@@ -1693,8 +1743,9 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
 def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     cut_sites,cut_annotations,cut_classification_annotations,guide_seqs,cleavage_offset,min_primer_length,genome,r1_r2_support_max_distance=100000,
     cut_merge_dist=100,collapse_to_homology_dist=10000,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
-    arm_min_matched_start_bases=10,genome_map_resolution=1000000,suppress_dedup_input_based_on_aln_pos_and_UMI=False,
-    discard_reads_without_r2_support=False,samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
+    arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,dedup_input_based_on_aln_pos_and_UMI=False,
+    discard_reads_without_r2_support=False,discard_reads_with_poor_alignment=False,write_discarded_read_info=False,
+    samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
     """
     Makes final read assignments (after deduplicating based on UMI and alignment location)
 
@@ -1716,18 +1767,26 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         guide_homology_max_gaps: when searching a sequence for homology to a guide sequence, it will be homologous if his has this number of gaps or fewer in the alignment of the guide to a sequence
         guide_homology_max_mismatches: when searching a sequence for homology to a guide sequence, it will be homologous if his has this number of mismatches or fewer in the alignment of the guide to a sequence
         arm_min_matched_start_bases: number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each 'side' a read.
+        arm_max_clipped_bases: the maximum number of bases that can be clipped on both sides for a read to be accepted.
         genome_map_resolution: window size (bp) for reporting number of reads aligned
+        crispresso_max_indel_size: maximum length of indel (as determined by genome alignment position) for a read to be analyzed by CRISPResso. Reads with indels longer than this length will not be analyzed by CRISPResso.
         dedup_based_on_aln_pos: if true, reads with the same UMI and alignment positions will be removed from analysis
         discard_reads_without_r2_support: if true, reads without r2 support will be discarded from final analysis and counts
+        discard_reads_with_poor_alignment: if true, discard reads with poor alignment (fewer than --arm_min_matched_start_bases mismatches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) 
+        write_discarded_read_info: if true, files are written containing info for reads that are discarded from final analysis
         samtools_command: location of samtools to run
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     returns:
         final_assignment_filename: filename of final assignments for each read
-        final_read_ids_for_cuts: dict of readID=>cut
+        final_read_ids_for_crispresso: dict of readID=>cut
         final_cut_counts: dict of cutID=>count how many times each cut was seen -- when we iterate through the reads (fastq) in the next step, we check to see that the cut was seen above a threshold before printing those reads. The count is stored in this dict.
         cut_classification_lookup: dict of cutID=> type (e.g. Linear, Translocation, etc)
+        final_read_count: number of r1 reads used in final analysis
+        discarded_read_counts: dict of category -> count for reasons reads were discarded
+        classification_read_counts: dict of classification -> count for final assignment categories
+k
         chr_aln_plot_obj: plot showing alignment locations of reads
         tlen_plot_object: plot showing distribution of template lengths
         deduplication_plot_obj: plot showing how many reads were deuplicated using UMI + location
@@ -1740,8 +1799,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         origin_deletion_hist_plot_obj: plot of deletion lengths for ontarget (reads pointing same direction/away from the primer)
         origin_indel_depth_plot_obj: plot of read depth around origin
         r1_r2_support_plot_obj: plot of how many reads for which r1 and r2 support each other
-        r1_r2_support_dist_plot_obj: plot of how far apart the r1/r2 supporting reads were aligned from each other
-        r1_r2_no_support_dist_plot_obj: plot of how far apart the r1/r2 reads that did NOT support each other (but were on the same chromosome)
+        r1_r2_support_dist_plot_obj: plot of how far apart the r1/r2 supporting reads were aligned from each other (showing reads supported and not supported by r2 separately)
+        discarded_reads_plot_obj: plot of why reads were discarded from final analysis
 
     """
     logger = logging.getLogger('CRISPRlungo')
@@ -1751,12 +1810,17 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     #check to see if this anaylsis has been completed previously
     if os.path.isfile(info_file) and os.path.isfile(final_file) and can_use_previous_analysis:
         read_total_read_count = 0 #how many lines we read in this time by reading the final assignments file
-        previous_total_read_count = -1 #how many lines were reported to be read the preivous time (if the analysis was completed previously)
+        previous_total_read_count = -1 #how many lines were reported to be read the previous time (if the analysis was completed previously)
         with open (info_file,'r') as fin:
             head_line = fin.readline()
             line_els = fin.readline().rstrip('\n').split("\t")
-            if len(line_els) == 7:
-                (total_reads_processed,dups_removed,bad_alignments_removed,nonsupporting_alignments_removed,final_total_count,found_cut_point_total,final_cut_point_total) = [int(x) for x in line_els]
+            if len(line_els) == 9:
+                (total_reads_processed,total_r1_processed,discarded_reads_not_primary_aln,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total) = [int(x) for x in line_els]
+                discarded_read_counts = [('Not primary alignment',discarded_reads_not_primary_aln),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Poor alignment',discarded_reads_poor_alignment)]
+                classification_categories = fin.readline().rstrip('\n').split("\t")
+                classification_category_counts_str_els = fin.readline().rstrip('\n').split("\t")
+                classification_category_counts = [int(x) for x in classification_category_counts_str_els]
+                classification_read_counts = list(zip(classification_categories, classification_category_counts))
                 previous_total_read_count = final_total_count
                 cut_classification_lookup_str = fin.readline().rstrip('\n')
                 cut_classification_lookup = json.loads(cut_classification_lookup_str)
@@ -1826,38 +1890,40 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 if r1_r2_support_dist_plot_obj_str != "" and r1_r2_support_dist_plot_obj_str != "None":
                     r1_r2_support_dist_plot_obj = PlotObject.from_json(r1_r2_support_dist_plot_obj_str)
 
-                r1_r2_no_support_dist_plot_obj_str = fin.readline().rstrip('\n')
-                r1_r2_no_support_dist_plot_obj = None
-                if r1_r2_no_support_dist_plot_obj_str != "" and r1_r2_no_support_dist_plot_obj_str != "None":
-                    r1_r2_no_support_dist_plot_obj = PlotObject.from_json(r1_r2_no_support_dist_plot_obj_str)
+                discarded_reads_plot_obj_str = fin.readline().rstrip('\n')
+                discarded_reads_plot_obj = None
+                if discarded_reads_plot_obj_str != "" and discarded_reads_plot_obj_str != "None":
+                    discarded_reads_plot_obj = PlotObject.from_json(discarded_reads_plot_obj_str)
 
+                if previous_total_read_count > -1:
+                    #read final assignments from file
+                    final_read_ids_for_crispresso = defaultdict(int)
+                    final_cut_counts = defaultdict(int)
+                    with open (final_file,'r') as fin:
+                        head_line = fin.readline().rstrip('\n')
+                        head_line_els = head_line.split("\t")
+                        read_total_read_count = 0
+                        final_cut_ind = 10
+                        final_cut_indel_ind = 11
+                        if head_line_els[final_cut_ind] == "final_cut_pos" and head_line_els[final_cut_indel_ind] == 'final_cut_indel':
+                            logger.info('Reading previously-processed assignments')
+                            #if header matches, read file
+                            for line in fin:
+                                read_total_read_count += 1
+                                line_els = line.rstrip("\r\n").split("\t")
+                                final_cut_indel = int(line_els[final_cut_indel_ind]) #how long this indel was 
+                                final_cut_counts[line_els[final_cut_ind]] += 1
+                                if abs(final_cut_indel) <= crispresso_max_indel_size:
+                                    final_read_ids_for_crispresso[line_els[0]] = line_els[final_cut_ind]
 
-        if previous_total_read_count > -1:
-            #read final assignments from file
-            final_read_ids_for_cuts = defaultdict(int)
-            final_cut_counts = defaultdict(int)
-            with open (final_file,'r') as fin:
-                head_line = fin.readline().rstrip('\n')
-                head_line_els = head_line.split("\t")
-                read_total_read_count = 0
-                final_cut_ind = 10
-                if head_line_els[final_cut_ind] == "final_cut_pos":
-                    logger.info('Reading previously-processed assignments')
-                    #if header matches, read file
-                    for line in fin:
-                        read_total_read_count += 1
-                        line_els = line.rstrip("\r\n").split("\t")
-                        final_read_ids_for_cuts[line_els[0]] = line_els[final_cut_ind]
-                        final_cut_counts[line_els[final_cut_ind]] += 1
-
-                if final_total_count == read_total_read_count:
-                    logger.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' total reads')
-                    return (final_file,final_read_ids_for_cuts,final_cut_counts,cut_classification_lookup,
-                        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
-                        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
-                        r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj)
-                else:
-                    logger.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
+                        if final_total_count == read_total_read_count:
+                            logger.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' total reads')
+                            return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup,final_total_count,discarded_read_counts,classification_read_counts,
+                                chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
+                                origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
+                                r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
+                        else:
+                            logger.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
 
     logger.info('Analyzing reads aligned to genome')
 
@@ -1874,12 +1940,15 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     r1_r2_support_str_not_supported_not_aln = "Not supported by R2 - unaligned"
 
     #analyze alignments
-    seen_reads_for_dedup = {} # put read info into this dict for deduplicating
+    seen_reads_for_dedup = {} # put read id into this dict for deduplicating
+    seen_read_counts_for_dedup = {} # how many times each umi/loc was seen
     total_reads_processed = 0 # includes pairs
     total_r1_processed = 0
-    dups_removed = 0
-    bad_alignments_removed = 0
-    nonsupporting_alignments_removed = 0
+    tmp_var1 = 0
+    discarded_reads_not_primary_aln = 0 #count of pairs
+    discarded_reads_duplicates = 0
+    discarded_reads_poor_alignment = 0
+    discarded_reads_not_supported_by_R2 = 0
     cut_points_by_chr = defaultdict(lambda: defaultdict(int)) # dict of cut points for each chr contianing observedcuts cut_points_by_chr[chr1][1559988] = count seen
     aligned_tlens = defaultdict(int)
     aligned_chr_counts = defaultdict(int)
@@ -1889,6 +1958,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     r1_r2_support_distances = defaultdict(int) #for reads that are separated by less than r1_r2_support_max_distance
     r1_r2_not_support_distances = defaultdict(int) #for reads that are separated by more than r1_r2_support_max_distance
 
+    discarded_read_file = root+'.discarded_read_info.txt'
+
+    if write_discarded_read_info:
+        fout_discarded = open(discarded_read_file,'w')
+
     #counts for 'support' status
     r1_r2_support_status_counts = defaultdict(int)
     final_file_tmp = root + '.final_assignments.tmp'
@@ -1897,12 +1971,12 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
         if not os.path.exists(genome_mapped_bam):
             raise Exception('Cannot find bam file at ' + genome_mapped_bam)
-        for line in read_command_output('%s view -F 256 %s'%(samtools_command,genome_mapped_bam)):
+        for line in read_command_output('%s view %s'%(samtools_command,genome_mapped_bam)):
             if line.strip() == "": break
 
             line_els = line.split("\t")
-            total_reads_processed += 1
 
+            total_reads_processed += 1
             read_has_multiple_segments = int(line_els[1]) & 0x1
             read_is_paired_read_1 = int(line_els[1]) & 0x40 # only set with bowtie if read is from paired reads
 
@@ -1910,7 +1984,22 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 continue
             total_r1_processed += 1
 
-            (line_info, primer_info) = line_els[0].split(" primer=")
+            read_is_not_primary_alignment = int(line_els[1]) & 0x100
+            if read_is_not_primary_alignment:
+                discarded_reads_not_primary_aln += 1
+                if write_discarded_read_info:
+                    fout_discarded.write(line_els[0]+'\tNot primary alignment\t'+line_els[1]+"\n")
+                continue
+
+            line_unmapped = int(line_els[1]) & 0x4
+            if line_unmapped:
+                discarded_reads_not_primary_aln += 1
+                if write_discarded_read_info:
+                    fout_discarded.write(line_els[0]+'\tUnmapped\t'+line_els[1]+"\n")
+                continue
+
+            (line_info, primer_trimmed_len_str) = line_els[0].split(" primer_len=")
+            primer_trimmed_len = int(primer_trimmed_len_str)
 
             barcode = line_info.split(":")[-1]
             aln1 = line_els[2] + ":" + line_els[3]
@@ -1918,14 +2007,15 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             tlen = abs(int(line_els[8]))
             key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
             if key in seen_reads_for_dedup:
-                seen_reads_for_dedup[key] += 1
-                if not suppress_dedup_input_based_on_aln_pos_and_UMI:
-                    dups_removed += 1
+                seen_read_counts_for_dedup[key] += 1
+                if dedup_input_based_on_aln_pos_and_UMI:
+                    discarded_reads_duplicates += 1
+                    if write_discarded_read_info:
+                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[key]+"\n")
                     continue
             else:
-                seen_reads_for_dedup[key] = 1
-
-            line_unmapped = int(line_els[1]) & 0x4
+                seen_reads_for_dedup[key] = line_els[0]
+                seen_read_counts_for_dedup[key] = 1
 
             left_matches = 0
             right_matches = 0
@@ -1949,12 +2039,14 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             seq = line_els[9]
             is_rc = int(line_els[1]) & 0x10
 
-            if line_unmapped or \
-                    (start_clipped > 0 and end_clipped > 0) or \
+            if discard_reads_with_poor_alignment and \
+                    (start_clipped > arm_max_clipped_bases and end_clipped > arm_max_clipped_bases) or \
                     left_matches < arm_min_matched_start_bases or \
                     right_matches < arm_min_matched_start_bases:
 
-                bad_alignments_removed += 1
+                discarded_reads_poor_alignment += 1
+                if write_discarded_read_info:
+                    fout_discarded.write(line_els[0]+'\tPoor alignment\tUnmapped: clipped: ['+str(start_clipped)+','+str(end_clipped)+'] matches: ['+str(left_matches)+','+str(right_matches)+']\n')
                 continue
 
             line_chr = line_els[2]
@@ -1973,10 +2065,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 cut_direction = "left"
 
 
+            tmp_var1 += 1
             curr_position = "%s:%s-%s"%(line_chr,line_start,line_end)
             cut_pos = "%s:%s"%(line_chr,line_start)
 
-            del_primer = len(origin_seq) - len(primer_info) #how many bases are deleted from the full primer
+            del_primer = len(origin_seq) - primer_trimmed_len #how many bases are deleted from the full primer
             ins_target = start_clipped # how many bases were clipped from alignment (insertions at target)
 
             # assign r1/r2 support for this read
@@ -2021,7 +2114,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 elif r1_r2_support_status == r1_r2_support_str_not_supported_distance:
                     r1_r2_not_support_distances[int(r1_r2_support_dist)] += 1
                 if discard_reads_without_r2_support and r1_r2_support_status != r1_r2_support_str_supported:
-                    nonsupporting_alignments_removed += 1
+                    discarded_reads_not_supported_by_R2 += 1
+                    if write_discarded_read_info:
+                        fout_discarded.write(line_els[0]+'\tNot supported by R2\t'+r1_r2_support_status+'\n')
                     continue
             #done setting r1/r2 support status for paired reads
 
@@ -2040,6 +2135,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         #done iterating through bam file
     #close assignments file
     logger.debug('Finished first pass through alignments')
+    if write_discarded_read_info:
+        fout_discarded.close()
 
     chr_aln_plot_root = root + ".chr_alignments"
     keys = sorted(aligned_chr_counts.keys())
@@ -2049,7 +2146,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         for key in sorted(aligned_chr_counts.keys()):
             chrs.write(key + '\t' + str(aligned_chr_counts[key]) + '\n')
 
-    fig = plt.figure(figsize=(12,12))
+    fig = plt.figure(figsize=(12,6))
     ax = plt.subplot(111)
     if len(vals) > 0:
         ax.bar(range(len(keys)),vals,tick_label=keys)
@@ -2105,9 +2202,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     deduplication_plot_obj = None
     if total_reads_processed > 0:
         labels = ['Not duplicate','Duplicate']
-        values = [total_reads_processed-dups_removed,dups_removed]
+        values = [total_r1_processed-discarded_reads_duplicates,discarded_reads_duplicates]
         deduplication_plot_obj_root = root + ".deduplication_by_UMI_and_aln_pos"
-        fig = plt.figure(figsize=(12,12))
+        fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(121)
         pie_values = []
         pie_labels = []
@@ -2120,9 +2217,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
         ax2 = plt.subplot(122)
         dup_counts = defaultdict(int)
-        dup_keys = seen_reads_for_dedup.keys()
+        dup_keys = seen_read_counts_for_dedup.keys()
         for dup_key in dup_keys:
-            dup_counts[seen_reads_for_dedup[dup_key]] += 1
+            dup_counts[seen_read_counts_for_dedup[dup_key]] += 1
         keys = sorted(dup_counts.keys())
         vals = [dup_counts[key] for key in keys]
         with open(deduplication_plot_obj_root+".txt","w") as summary:
@@ -2142,9 +2239,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         plt.savefig(deduplication_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(deduplication_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        dedup_note = ""
-        if suppress_dedup_input_based_on_aln_pos_and_UMI:
-            dedup_note = ". Note that deduplication of reads for final counts has been turned off by with the parameter --suppress_dedup_input_based_on_aln_pos_and_UMI."
+        dedup_note = ". Note that deduplication of reads by alignment position and UMI is not performed by default. To enable deduplication, set the parameter --dedup_input_based_on_aln_pos_and_UMI."
+        if dedup_input_based_on_aln_pos_and_UMI:
+            dedup_note = ". Deduplication based on alignment and UMI position is performed because the flag --dedup_input_based_on_aln_pos_and_UMI is set."
 
         deduplication_plot_obj = PlotObject(
                 plot_name = deduplication_plot_obj_root,
@@ -2188,11 +2285,12 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     cut_point_homology_info = {} #dict containing cut points with sufficient homology
     with open(root+".cut_homology",'w') as fout:
         fout.write("\t".join([str(x) for x in ['guide_seq','cut_chr','cut_point','is_valid_homology_site','potential_guide','best_score','match_direction','n_matches','n_mismatches','n_gaps','aln_guide','aln_ref']])+"\n")
-        aln_match_score = 5
-        aln_gap_extend_score = -1
+        aln_match_score = 2
+        aln_mismatch_score = -1
+        aln_gap_extend_score = -2
         aln_gap_open_score = -5
-        aln_matrix = CRISPResso2Align.make_matrix(match_score=aln_match_score)
-        padded_seq_len = 25 #how many bp to extend around cut to search for guide
+        aln_matrix = CRISPResso2Align.make_matrix(match_score=aln_match_score,mismatch_score=aln_mismatch_score)
+        padded_seq_len = 30 #how many bp to extend around cut to search for guide
         guide_homology_max_gaps = 2
         guide_homology_max_mismatches = 5
         for guide_seq in guide_seqs:
@@ -2423,7 +2521,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     #keep track of read ids aligning to cuts
     #reads with these ids will be pulled out of the fastq for analysis by CRISPResso
     #cut is chr:pos:direction
-    final_read_ids_for_cuts = defaultdict(int) # dict readID->cut
+    final_read_ids_for_crispresso = defaultdict(int) # dict readID->cut
     final_cut_counts = defaultdict(int) # dict cut->count of reads
 
     if origin_direction == 'left':
@@ -2466,9 +2564,6 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             cut_point_direction = line_els[cut_direction_ind]
             final_cut_point = final_cut_point_lookup[cut_point]
             final_cut_point_and_direction = final_cut_point + ":" + cut_point_direction
-            final_read_ids_for_cuts[line_id] = final_cut_point_and_direction
-            final_cut_counts[final_cut_point_and_direction] += 1
-
 
             (final_cut_point_chr,final_cut_point_start) = final_cut_point.split(":")
             final_cut_point_start = int(final_cut_point_start)
@@ -2483,6 +2578,10 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             del_primer = int(line_els[del_primer_ind])
 
             final_cut_indel = ins_target - del_primer - aln_indel
+
+            final_cut_counts[final_cut_point_and_direction] += 1
+            if abs(final_cut_indel) <= crispresso_max_indel_size:
+                final_read_ids_for_crispresso[line_id] = final_cut_point_and_direction
 
             final_classification = cut_classification_lookup[final_cut_point_and_direction]
             final_classification_counts[final_classification] += 1
@@ -2506,8 +2605,18 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 else:
                     origin_deletion_lengths[this_dist_to_origin] += 1
 
-                if aln_start >= origin_cut_pos:
+                if origin_direction == 'left' and aln_start >= origin_cut_pos: #  primer--origin_seq--->cut..aln_start (origin extends to the left from cut)
                     this_del_len = aln_start - origin_cut_pos
+                    if this_del_len <= 100:
+                        origin_depth_counts_100bp_total += 1
+                        origin_depth_counts_100bp[0:this_del_len+1] += 1
+                        origin_depth_counts_100bp_primer[0:del_primer+1] += 1
+                    if this_del_len <= 2500:
+                        origin_depth_counts_2500bp_total += 1
+                        origin_depth_counts_2500bp[0:this_del_len+1] += 1
+                        origin_depth_counts_2500bp_primer[0:del_primer+1] += 1
+                elif origin_direction == 'right' and aln_start <= origin_cut_pos: #  aln_start..cut<--origin_seq--primer (origin extends to the right from cut)
+                    this_del_len = (aln_start - origin_cut_pos) * -1
                     if this_del_len <= 100:
                         origin_depth_counts_100bp_total += 1
                         origin_depth_counts_100bp[0:this_del_len+1] += 1
@@ -2608,9 +2717,12 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         tx_plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
         tx_plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
 
+        truncated_str = ''
+        if len(sorted_tx_list) < len(final_cut_counts):
+            truncated_str = '. Note that only the top ' + str(len(sorted_tx_list)) + '/' + str(len(final_cut_counts)) + ' events are shown. All events and counts can be found in the Fragment translocation list.'
         tx_order_plot_obj = PlotObject(plot_name = plot_name,
                 plot_title = 'Translocation Summary',
-                plot_label = 'Final translocation counts',
+                plot_label = 'Final translocation counts' + truncated_str,
                 plot_datas = [('Fragment translocation list',tx_list_report)]
                 )
 
@@ -2627,13 +2739,13 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
         chrom_max_count = 0
         height_at_locs = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
-        for loc_key in final_cut_counts:
+        #here only take the top items (not all of them or the plot gets wonky)
+        for loc_key in sorted_tx_list:
             loc_key_els = loc_key.split(":")
             height_at_locs[loc_key_els[0]][int(loc_key_els[1])][loc_key_els[2]] = final_cut_counts[loc_key]
             if final_cut_counts[loc_key] > chrom_max_count: chrom_max_count = final_cut_counts[loc_key]
 
         sorted_chroms = sorted(height_at_locs.keys(), key=lambda x: get_chr_sort_key(x))
-
 
         chrom_max_cuts = 0
         for idx,chrom in enumerate(sorted_chroms):
@@ -2721,9 +2833,12 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
 
+        truncated_str = ''
+        if len(sorted_tx_list) < len(final_cut_counts):
+            truncated_str = '. Note that only the top ' + str(len(sorted_tx_list)) + '/' + str(len(final_cut_counts)) + ' events are shown. All events and counts can be found in the Fragment translocation list.'
         tx_count_plot_obj = PlotObject(plot_name = plot_name,
                 plot_title = 'Translocation Counts',
-                plot_label = 'Final translocation counts',
+                plot_label = 'Final translocation positions and counts' + truncated_str,
                 plot_datas = [('Fragment translocation list',tx_list_report)]
                 )
 
@@ -2734,10 +2849,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
         #assignment plot
         values = [final_classification_counts[x] for x in classification_labels]
+        classification_read_counts_str = "\t".join(classification_labels)+"\n"+"\t".join([str(x) for x in values])+"\n"
+        classification_read_counts = list(zip(classification_labels,values))
         classification_plot_obj_root = root + ".classifications"
         with open(classification_plot_obj_root+".txt",'w') as summary:
-            summary.write("\t".join(classification_labels)+"\n")
-            summary.write("\t".join([str(x) for x in values])+"\n")
+            summary.write(classification_read_counts_str)
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         pie_values = []
@@ -2819,7 +2935,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             for key in keys:
                 summary.write(str(key) + '\t' + str(origin_indel_lengths[key]) + '\n')
 
-        fig = plt.figure(figsize=(12,12))
+        fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(111)
         if len(vals) > 0:
             ax.bar(keys,vals)
@@ -2856,7 +2972,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
         plot_keys = [x for x in keys if abs(x) < origin_dist_cutoff]
         plot_vals = [origin_inversion_lengths[key] for key in plot_keys]
-        fig = plt.figure(figsize=(12,12))
+        fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(111)
         if len(vals) > 0:
             ax.bar(plot_keys,plot_vals)
@@ -2891,7 +3007,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
         plot_keys = [x for x in keys if abs(x) < origin_dist_cutoff]
         plot_vals = [origin_deletion_lengths[key] for key in plot_keys]
-        fig = plt.figure(figsize=(12,12))
+        fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(111)
         if len(plot_vals) > 0:
             ax.bar(plot_keys,plot_vals)
@@ -2977,7 +3093,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     plt.savefig(origin_indel_depth_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(origin_indel_depth_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-    plot_label = 'Read depth surround origin. The top plot shows reads with deletions smaller than 100bp (N='+str(origin_depth_counts_100bp_total)+'). The bottom plot shows reads with deletions smaller than 2500bp (N='+str(origin_depth_counts_2500bp_total)+') . The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos)+'. The vertical red dotted line shows the origin location. The vertical black dotted line shows the minimum requred length (' + str(min_primer_length)+'bp) set by the parameter --min_primer_length.'
+    plot_label = 'Read depth surrounding origin. The top plot shows reads with deletions smaller than 100bp (N='+str(origin_depth_counts_100bp_total)+'). The bottom plot shows reads with deletions smaller than 2500bp (N='+str(origin_depth_counts_2500bp_total)+') . The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos)+'. The vertical red dotted line shows the origin location. The vertical black dotted line shows the minimum requred length (' + str(min_primer_length)+'bp) set by the parameter --min_primer_length.'
     if sum(ys) < 0:
         plot_label = '(No reads found at origin)'
 
@@ -2992,7 +3108,6 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     #make r1/r2/support plots
     r1_r2_support_plot_obj = None # plot of how many reads for which r1 and r2 support each other
     r1_r2_support_dist_plot_obj = None # plot of how far apart the r1/r2 supporting reads were aligned from each other
-    r1_r2_no_support_dist_plot_obj = None # plot of how far apart the r1/r2 reads that did NOT support each other (but were on the same chromosome)
     if len(r1_r2_support_status_counts) > 0:
         r1_r2_support_labels = [r1_r2_support_str_supported,r1_r2_support_str_not_supported_orientation,r1_r2_support_str_not_supported_distance,r1_r2_support_str_not_supported_diff_chrs,r1_r2_support_str_not_supported_not_aln]
 
@@ -3005,7 +3120,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         with open(r1_r2_support_plot_obj_root+".txt",'w') as summary:
             summary.write("\t".join(r1_r2_support_labels)+"\n")
             summary.write("\t".join([str(x) for x in values])+"\n")
-        fig = plt.figure(figsize=(12,12))
+        fig = plt.figure(figsize=(8,8))
         ax = plt.subplot(111)
         pie_values = []
         pie_labels = []
@@ -3015,6 +3130,10 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 pie_labels.append(r1_r2_support_labels[i]+"\n("+str(values[i])+")")
         ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
         ax.set_title('R1/R2 support status')
+
+        discard_str = '(Reads without R1/R2 support are currently included in the final analyses. Set the --discard_reads_without_r2_support flag to discard these reads.)'
+        if discard_reads_without_r2_support:
+            discard_str = '(Reads without R1/R2 support are currently excluded from the final analyses because the --discard_reads_without_r2_support flag is set.)'
         plt.savefig(r1_r2_support_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(r1_r2_support_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
@@ -3029,72 +3148,96 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 )
 
         #plot of distance between R1 and R2 for R1/R2 supportive read pairs
-        r1_r2_support_dist_plot_obj_root = root + ".r1_r2_support_distances"
+        r1_r2_support_dist_plot_obj_root = root + ".r1_r2_distances"
         keys = sorted(r1_r2_support_distances.keys())
         vals = [r1_r2_support_distances[key] for key in keys]
-        with open(r1_r2_support_dist_plot_obj_root+".txt","w") as summary:
+        with open(r1_r2_support_dist_plot_obj_root+"_supported.txt","w") as summary:
             summary.write('R1_R2_distance\tnumReads\n')
             for key in keys:
                 summary.write(str(key) + '\t' + str(r1_r2_support_distances[key]) + '\n')
 
         fig = plt.figure(figsize=(12,12))
-        ax = plt.subplot(111)
+        ax = plt.subplot(211)
         if len(vals) > 0:
             ax.bar(keys,vals)
             ax.set_ymargin(0.05)
         else:
             ax.bar(0,0)
         ax.set_ylabel('Number of Reads')
-        ax.set_title('Distance between R1/R2')
+        ax.set_title('Distance between R1/R2 for read pairs in which R2 supports the R1 alignment')
+
+        #plot of distance between R1 and R2 for R1/R2 NOT supportive read pairs
+        keys_2 = sorted(r1_r2_not_support_distances.keys())
+        vals_2 = [r1_r2_not_support_distances[key] for key in keys_2]
+        with open(r1_r2_support_dist_plot_obj_root+"_not_supported.txt","w") as summary:
+            summary.write('R1_R2_distance\tnumReads\n')
+            for key in keys_2:
+                summary.write(str(key) + '\t' + str(r1_r2_not_support_distances[key]) + '\n')
+
+        ax2 = plt.subplot(212)
+        if len(vals) > 0:
+            ax2.bar(keys,vals)
+            ax2.set_ymargin(0.05)
+        else:
+            ax2.bar(0,0)
+        ax2.set_ylabel('Number of Reads')
+        ax2.set_title('Distance between R1/R2 for read pairs in which R2 does not support the R1 alignment (but R1 and R2 are on the same chromosome)')
+
         plt.savefig(r1_r2_support_dist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(r1_r2_support_dist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        plot_label = 'Bar plot showing distance between R1 and R2 reads for reads with R2 supporting the R1 alignment (max distance for support is ' + str(r1_r2_support_max_distance) + 'bp)'
-        if len(keys) == 0:
-            plot_label = '(No R1/R2 supported reads)'
+        plot_label = '(top) Bar plot showing distance between R1 and R2 reads for reads with R2 supporting the R1 alignment.<br>'
+        plot_label += '(bottom) Bar plot showing distance between R1 and R2 reads for reads with R2 NOT supporting the R1 alignment due to incorrect read orientation or exceeding maximum alignment distance (max distance for support is ' + str(r1_r2_support_max_distance) + 'bp)'
+        if len(keys) == 0 and len(keys_2) == 0:
+            plot_label = '(No R1/R2 reads)'
 
         r1_r2_support_dist_plot_obj = PlotObject(
                 plot_name = r1_r2_support_dist_plot_obj_root,
-                plot_title = 'Distance between R1/R2 Supported Reads',
+                plot_title = 'Distance between R1/R2 Reads',
                 plot_label = plot_label,
-                plot_datas = [('R1/R2 support distance histogram',r1_r2_support_dist_plot_obj_root + ".txt")]
+                plot_datas = [('R1/R2 supported distance histogram',r1_r2_support_dist_plot_obj_root + "_supported.txt"),
+                    ('R1/R2 not supported distance histogram',r1_r2_support_dist_plot_obj_root + "_not_supported.txt")
+
+                    ]
                 )
 
-        #plot of distance between R1 and R2 for R1/R2 NOT supportive read pairs
-        r1_r2_no_support_dist_plot_obj_root = root + ".r1_r2_not_supported_distances"
-        keys = sorted(r1_r2_not_support_distances.keys())
-        vals = [r1_r2_not_support_distances[key] for key in keys]
-        with open(r1_r2_no_support_dist_plot_obj_root+".txt","w") as summary:
-            summary.write('R1_R2_distance\tnumReads\n')
-            for key in keys:
-                summary.write(str(key) + '\t' + str(r1_r2_not_support_distances[key]) + '\n')
+    discarded_reads_plot_obj_root = root+".discarded_reads"
+    labels = ['Not primary alignment','Duplicate','Poor alignment','Not supported by R2']
+    values = [discarded_reads_not_primary_aln,discarded_reads_duplicates,discarded_reads_poor_alignment,discarded_reads_not_supported_by_R2]
+    with open(discarded_reads_plot_obj_root+".txt",'w') as summary:
+        summary.write("\t".join(labels)+"\n")
+        summary.write("\t".join([str(x) for x in values])+"\n")
+    fig = plt.figure(figsize=(12,12))
+    ax = plt.subplot(111)
+    pie_values = []
+    pie_labels = []
+    for i in range(len(labels)):
+        if values[i] > 0:
+            pie_values.append(values[i])
+            pie_labels.append(labels[i]+"\n("+str(values[i])+")")
+    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+    plot_name = discarded_reads_plot_obj_root
+    plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
+    plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
+    plot_count_str = "<br>".join(["%s N=%d"%x for x in zip(labels,values)])
 
-        fig = plt.figure(figsize=(12,12))
-        ax = plt.subplot(111)
-        if len(vals) > 0:
-            ax.bar(keys,vals)
-            ax.set_ymargin(0.05)
-        else:
-            ax.bar(0,0)
-        ax.set_ylabel('Number of Reads')
-        ax.set_title('Distance between R1/R2')
-        plt.savefig(r1_r2_no_support_dist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-        plt.savefig(r1_r2_no_support_dist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+    discarded_count = discarded_reads_not_primary_aln+discarded_reads_duplicates+discarded_reads_poor_alignment+discarded_reads_not_supported_by_R2
 
-        plot_label = 'Bar plot showing distance between R1 and R2 reads for reads with R2 NOT supporting the R1 alignment due to incorrect read orientation or exceeding maximum alignment distance (max distance for support is ' + str(r1_r2_support_max_distance) + 'bp)'
-        if len(keys) == 0:
-            plot_label = '(No R1/R2 not-supported reads)'
-
-        r1_r2_no_support_dist_plot_obj = PlotObject(
-                plot_name = r1_r2_no_support_dist_plot_obj_root,
-                plot_title = 'Distance between R1/R2 NOT Supported Reads',
-                plot_label = plot_label,
-                plot_datas = [('R1/R2 not-supported distance histogram',r1_r2_no_support_dist_plot_obj_root + ".txt")]
-                )
+    discarded_reads_plot_obj = PlotObject(
+            plot_name = discarded_reads_plot_obj_root,
+            plot_title = 'Discarded_read count summary',
+            plot_label = str(discarded_count) + '/'+str(total_r1_processed) + ' reads were discarded.<br>'+str(final_total_count) + ' R1 reads were used for the final analysis. <br>' + plot_count_str + '<br>Poor alignment: Reads are unaligned (as determined by the aligner), or the front AND back of the read have greater than ' + str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have greater than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
+            plot_datas = [
+                ('Discarded reads summary',discarded_reads_plot_obj_root + ".txt")
+                ]
+            )
+    if write_discarded_read_info:
+        discarded_reads_plot_obj.datas.append(('Discarded reads',discarded_read_file))
 
     with open(info_file,'w') as fout:
-        fout.write("\t".join(['total_reads_processed','discarded_reads_duplicates','discarded_reads_not_supported_by_R2','discarded_reads_bad_alignment','final_read_count','discovered_cut_point_count','final_cut_point_count'])+"\n")
-        fout.write("\t".join(str(x) for x in [total_reads_processed,dups_removed,bad_alignments_removed,nonsupporting_alignments_removed,final_total_count,found_cut_point_total,final_cut_point_total])+"\n")
+        fout.write("\t".join(['total_reads_processed','total_r1_processed','discarded_reads_not_primary_alignment','discarded_reads_duplicates','discarded_reads_not_supported_by_R2','discarded_reads_poor_alignment','final_read_count','discovered_cut_point_count','final_cut_point_count'])+"\n")
+        fout.write("\t".join(str(x) for x in [total_reads_processed,total_r1_processed,discarded_reads_not_primary_aln,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total])+"\n")
+        fout.write(classification_read_counts_str)
         classification_json_str = json.dumps(cut_classification_lookup,separators=(',',':'))
         fout.write(classification_json_str+"\n")
 
@@ -3159,10 +3302,10 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             r1_r2_support_dist_plot_obj_str = r1_r2_support_dist_plot_obj.to_json()
         fout.write(r1_r2_support_dist_plot_obj_str+"\n")
 
-        r1_r2_no_support_dist_plot_obj_str = "None"
-        if r1_r2_no_support_dist_plot_obj is not None:
-            r1_r2_no_support_dist_plot_obj_str = r1_r2_no_support_dist_plot_obj.to_json()
-        fout.write(r1_r2_no_support_dist_plot_obj_str+"\n")
+        discarded_reads_plot_obj_str = "None"
+        if discarded_reads_plot_obj is not None:
+            discarded_reads_plot_obj_str = discarded_reads_plot_obj.to_json()
+        fout.write(discarded_reads_plot_obj_str+"\n")
 
     if not keep_intermediate:
         if os.path.exists(final_file_tmp):
@@ -3175,10 +3318,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             logger.debug('Removing genome alignment bam index file: ' + genome_mapped_bam + ".bai")
             os.remove(genome_mapped_bam + ".bai")
 
-    return (final_file,final_read_ids_for_cuts,final_cut_counts,cut_classification_lookup,
+    discarded_read_counts = [('Not primary alignment',discarded_reads_not_primary_aln),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Bad alignment',discarded_reads_poor_alignment)]
+    return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_total_count, discarded_read_counts, classification_read_counts,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
-        r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,r1_r2_no_support_dist_plot_obj)
+        r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
 
 
 def read_command_output(command):
@@ -3288,7 +3432,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
             continue
 
         if this_cut not in cut_names:
-            cut_name = this_cut.replace(" ","_").replace(":","_")
+            cut_name = (cut_classification_lookup[this_cut] + ':' + this_cut).replace(" ","_").replace(":","_")
             cut_names[this_cut] = cut_name
         cut_name = cut_names[this_cut]
 
@@ -3619,12 +3763,12 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
     plot_name = classification_plot_obj_root
     plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
     plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
-    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(labels,values)])
+    plot_count_str = "<br>".join(["%s N=%d"%x for x in zip(labels,values)])
 
     classification_plot_obj = PlotObject(
             plot_name = classification_plot_obj_root,
             plot_title = 'Read classification including CRISPResso analysis',
-            plot_label = 'CRISPResso classification<br>' + plot_count_str + '<brReads labeled (not analyzed) had to few reads for CRISPResso analysis. You can adjust the minimum number of reads to run CRISPResso with the parameter "crispresso_min_count".',
+            plot_label = 'CRISPResso classification<br>' + plot_count_str + '<br>Reads labeled "(not analyzed)" had too few reads for CRISPResso analysis or indels (based on genome alignment) that were too long. You can adjust the minimum number of reads to run CRISPResso with the parameter "crispresso_min_count". You can adjust the maximum indel length for analysis by CRISPResso with the parameter "crispresso_max_indel_size".',
             plot_datas = [
                 ('CRISPResso classification summary',classification_plot_obj_root + ".txt")
                 ]
@@ -3924,7 +4068,7 @@ body {
         plot_str += "<h5>"+plot_obj.title+"</h5>\n"
         plot_str += "</div>\n"
         plot_str += "<div class='card-body'>\n"
-        plot_str += "<a href='"+data_path+plot_obj.name+".pdf'><img src='"+data_path + plot_obj.name + ".png' width='80%' ></a>\n"
+        plot_str += "<a href='"+data_path + plot_obj.name+".pdf'><img src='"+data_path + plot_obj.name + ".png' width='80%' ></a>\n"
         plot_str += "<label>"+plot_obj.label+"</label>\n"
         for (plot_data_label,plot_data_path) in plot_obj.datas:
             plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n";
@@ -4076,11 +4220,11 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
             raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
         tot_read_count += 1
 
-        primer_seq, trimmed_seq = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
+        primer_seq, trimmed_seq, trimmed_primer_pos = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
         if len(primer_seq) > min_primer_length:
             post_trim_read_count += 1
             new_f1_qual_line = f1_qual_line[len(primer_seq):]
-            new_f1_id_line = f1_id_line + ' primer=' + primer_seq
+            new_f1_id_line = f1_id_line + ' primer_len=' + str(trimmed_primer_pos)
 
             f1_out.write(new_f1_id_line + "\n" + trimmed_seq + "\n" + f1_plus_line + new_f1_qual_line + "\n")
         elif len(primer_seq) > 0:
@@ -4147,11 +4291,11 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
         f2_plus_line = f2_in.readline()
         f2_qual_line = f2_in.readline().strip()
 
-        primer_seq, trimmed_seq = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
+        primer_seq, trimmed_seq, trimmed_primer_pos = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
         if len(primer_seq) > min_primer_length:
             post_trim_read_count += 1
             new_f1_qual_line = f1_qual_line[len(primer_seq):]
-            new_f1_id_line = f1_id_line + ' primer=' + primer_seq
+            new_f1_id_line = f1_id_line + ' primer_len=' + str(trimmed_primer_pos)
 
             f2_trimmed_seq, f2_primer_seq = trimRightPrimerFromRead(f2_seq_line,ssw_align_primer_rc,min_primer_aln_score)
             new_f2_qual_line = f2_qual_line[len(f2_primer_seq):]
@@ -4169,7 +4313,7 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
     f2_out.close()
     return(post_trim_read_count, too_short_read_count, untrimmed_read_count)
 
-def trimLeftPrimerFromRead(read, ssw_align, min_score=40):
+def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
     """
     Trims a primer from a given read
     E.g. for --primer--read-- returns the portion that aligns to the primer (and before) as the trimmed_primer_seq and to the right as the trimmed_read_seq
@@ -4183,20 +4327,31 @@ def trimLeftPrimerFromRead(read, ssw_align, min_score=40):
     returns:
         trimmed_primer_seq: portion of read that was aligned to the primer
         trimmed_read_seq: portion of the read after the primer
-
+        trimmed_primer_pos: end index of primer that was trimmed
     """
 
     ssw_res = ssw_align.align(read)
+    if debug:
+        print('================')
+        print('TRIM LEFT PRIMER')
+        print(f'{min_score=}')
+        print(f'{read=}')
+        print(f'{ssw_align.primer_seq=}')
+        print(f'{ssw_res.contents.nScore=}')
+        print(f'{ssw_res.contents.nRefBeg=}')
+        print(f'{ssw_res.contents.nRefEnd=}')
+        print(f'{ssw_res.contents.nQryBeg=}')
+        print(f'{ssw_res.contents.nQryEnd=}')
     if ssw_res.contents.nScore < min_score:
         ssw_align.destroy(ssw_res)
-        return '',read
+        return '',read,0
     else:
-        trimmed_primer_seq = read[:ssw_res.contents.nQryEnd+1]
-        trimmed_read_seq = read[ssw_res.contents.nQryEnd+1:]
+        trimmed_primer_seq = read[:ssw_res.contents.nRefEnd+1]
+        trimmed_read_seq = read[ssw_res.contents.nRefEnd+1:]
         ssw_align.destroy(ssw_res)
-        return trimmed_primer_seq,trimmed_read_seq
+        return trimmed_primer_seq,trimmed_read_seq,ssw_res.contents.nQryEnd
 
-def trimRightPrimerFromRead(read, ssw_align, min_score=40):
+def trimRightPrimerFromRead(read, ssw_align, min_score=40, debug=False):
     """
     Trims a primer from a given read
     E.g. for --read--primer-- returns the portion that aligns to the primer (and after) as the trimmed_primer_seq and to the left as the trimmed_read_seq
@@ -4213,22 +4368,24 @@ def trimRightPrimerFromRead(read, ssw_align, min_score=40):
     """
 
     ssw_res = ssw_align.align(read)
-#    print('================')
-#    print(f'{min_score=}')
-#    print(f'{read=}')
-#    print(f'{ssw_align.primer_seq=}')
-#    print(f'{ssw_res.contents.nScore=}')
-#    print(f'{ssw_res.contents.nRefBeg=}')
-#    print(f'{ssw_res.contents.nRefEnd=}')
-#    print(f'{ssw_res.contents.nQryBeg=}')
-#    print(f'{ssw_res.contents.nQryEnd=}')
+    if debug:
+        print('=================')
+        print('TRIM RIGHT PRIMER')
+        print(f'{min_score=}')
+        print(f'{read=}')
+        print(f'{ssw_align.primer_seq=}')
+        print(f'{ssw_res.contents.nScore=}')
+        print(f'{ssw_res.contents.nRefBeg=}')
+        print(f'{ssw_res.contents.nRefEnd=}')
+        print(f'{ssw_res.contents.nQryBeg=}')
+        print(f'{ssw_res.contents.nQryEnd=}')
 
     if ssw_res.contents.nScore < min_score:
         ssw_align.destroy(ssw_res)
         return read,''
     else:
-        trimmed_read_seq = read[:ssw_res.contents.nQryBeg]
-        trimmed_primer_seq = read[ssw_res.contents.nQryBeg:]
+        trimmed_read_seq = read[:ssw_res.contents.nRefBeg]
+        trimmed_primer_seq = read[ssw_res.contents.nRefBeg:]
         ssw_align.destroy(ssw_res)
         return trimmed_read_seq,trimmed_primer_seq
 
