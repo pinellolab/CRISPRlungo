@@ -138,7 +138,7 @@ def main(settings, logger):
             logger.debug('Deleting intermediate file ' + filtered_on_primer_fastq_r2)
             os.remove(filtered_on_primer_fastq_r2)
 
-    (final_assignment_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts,
+    (final_assignment_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj) = make_final_read_assignments(
@@ -253,7 +253,7 @@ def main(settings, logger):
         crispresso_classification_plot_obj.order=40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
-    final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts)
+    final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts,classification_indel_read_counts)
     final_summary_plot_obj.order= 1
     summary_plot_objects.append(final_summary_plot_obj)
 
@@ -929,7 +929,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
 
     return casoffinder_cut_sites, casoffinder_cut_annotations
 
-def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools_command, genome, bowtie2_command, bowtie2_genome, can_use_previous_analysis=False):
+def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools_command, genome, bowtie2_command, bowtie2_genome, can_use_previous_analysis=False, suppress_file_output=False):
     """
     Prepares primer info by identifying genomic location if possible and calculates statistics by analyzing input fastq_r1 file
     Prepares cut info by aligning guides to the genome
@@ -948,6 +948,7 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         bowtie2_command: location of bowtie2 to run
         bowtie2_genome: bowtie2-indexed genome to align to
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
+        suppress_file_output: suppress writing info file (useful for debugging/testing)
 
 
     Returns:
@@ -1096,6 +1097,8 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
 
         origin_seq = subprocess.check_output(
                 '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,primer_chr,origin_start,origin_end-1),shell=True).decode(sys.stdout.encoding).strip()
+        if origin_seq == '':
+            raise Exception('Cannot retrieve sequence information from fasta file ' + genome)
         if primer_is_rc:
             origin_seq = reverse_complement(origin_seq)
         logger.debug('Got origin sequence: ' + origin_seq)
@@ -1105,11 +1108,12 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
     num_reads_input = get_num_reads_fastq(fastq_r1)
 
     cut_site_count = len(cut_sites)
-    with open(info_file,'w') as fout:
-        fout.write("\t".join(['origin_seq','primer_chr','primer_loc','primer_seq','primer_is_genomic','cut_site_count','av_read_length','num_reads_input'])+"\n")
-        fout.write("\t".join([str(x) for x in [origin_seq,primer_chr,primer_loc,primer_seq,primer_is_genomic,cut_site_count,av_read_length,num_reads_input]])+"\n")
-        for cut_site in cut_sites:
-            fout.write(cut_site + "\t" + ",".join(cut_annotations[cut_site])+"\n")
+    if not suppress_file_output:
+        with open(info_file,'w') as fout:
+            fout.write("\t".join(['origin_seq','primer_chr','primer_loc','primer_seq','primer_is_genomic','cut_site_count','av_read_length','num_reads_input'])+"\n")
+            fout.write("\t".join([str(x) for x in [origin_seq,primer_chr,primer_loc,primer_seq,primer_is_genomic,cut_site_count,av_read_length,num_reads_input]])+"\n")
+            for cut_site in cut_sites:
+                fout.write(cut_site + "\t" + ",".join(cut_annotations[cut_site])+"\n")
 
     logger.info('Finished preparing primer, cut-site, and sequencing information')
 
@@ -1728,6 +1732,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         final_read_count: number of r1 reads used in final analysis
         discarded_read_counts: dict of category -> count for reasons reads were discarded
         classification_read_counts: dict of classification -> count for final assignment categories
+        classification_indel_read_counts: dict of classification -> count for final assignment categories (including 'short indels' category)
 k
         chr_aln_plot_obj: plot showing alignment locations of reads
         tlen_plot_object: plot showing distribution of template lengths
@@ -1749,7 +1754,7 @@ k
 
     final_file = root + '.final_assignments'
     info_file = root + '.info'
-    #check to see if this anaylsis has been completed previously
+    #check to see if this analysis has been completed previously
     if os.path.isfile(info_file) and os.path.isfile(final_file) and can_use_previous_analysis:
         read_total_read_count = 0 #how many lines we read in this time by reading the final assignments file
         previous_total_read_count = -1 #how many lines were reported to be read the previous time (if the analysis was completed previously)
@@ -1763,6 +1768,12 @@ k
                 classification_category_counts_str_els = fin.readline().rstrip('\n').split("\t")
                 classification_category_counts = [int(x) for x in classification_category_counts_str_els]
                 classification_read_counts = list(zip(classification_categories, classification_category_counts))
+
+                classification_indel_categories = fin.readline().rstrip('\n').split("\t")
+                classification_indel_category_counts_str_els = fin.readline().rstrip('\n').split("\t")
+                classification_indel_category_counts = [int(x) for x in classification_indel_category_counts_str_els]
+                classification_indel_read_counts = list(zip(classification_indel_categories, classification_indel_category_counts))
+
                 previous_total_read_count = final_total_count
                 cut_classification_lookup_str = fin.readline().rstrip('\n')
                 cut_classification_lookup = json.loads(cut_classification_lookup_str)
@@ -1860,7 +1871,7 @@ k
 
                         if final_total_count == read_total_read_count:
                             logger.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' total reads')
-                            return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup,final_total_count,discarded_read_counts,classification_read_counts,
+                            return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup,final_total_count,discarded_read_counts,classification_read_counts,classification_indel_read_counts,
                                 chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
                                 origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
                                 r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
@@ -2014,6 +2025,12 @@ k
             del_primer = len(origin_seq) - primer_trimmed_len #how many bases are deleted from the full primer
             ins_target = start_clipped # how many bases were clipped from alignment (insertions at target)
 
+#            print(f'{line_els[0]=}')
+#            print(f'{del_primer=}')
+#            print(f'{len(origin_seq)=}')
+#            print(f'{primer_trimmed_len=}')
+#            print(f'{ins_target=}')
+#
             # assign r1/r2 support for this read
             r1_r2_support_status = None
             r1_r2_support_dist = None # distance between R1 and R2
@@ -2518,6 +2535,7 @@ k
                 aln_indel = final_cut_point_start - aln_start - 1
 
             del_primer = int(line_els[del_primer_ind])
+            ins_target = int(line_els[ins_target_ind])
 
             final_cut_indel = ins_target - del_primer - aln_indel
 
@@ -2600,7 +2618,12 @@ k
         logger.debug('Wrote fragment translocation list ' + tx_list_report)
 
     sorted_tx_list = sorted(final_cut_counts, key=final_cut_counts.get,reverse=True)
-    top_sorted_tx_list = sorted_tx_list[:min(20,len(sorted_tx_list))]
+    top_number_to_plot = 20
+    top_sorted_tx_list = sorted_tx_list[:min(top_number_to_plot,len(sorted_tx_list))]
+    other_tx_count = 0 #number of reads to other locations not plotted
+    if len(sorted_tx_list) > top_number_to_plot:
+        for i in range(21,len(top_sorted_tx_list)):
+            other_tx_count += final_cut_counts[top_sorted_tx_list[i]]
 
     tx_order_plot_obj = None
     tx_count_plot_obj = None
@@ -2653,6 +2676,18 @@ k
             right_cols.append(this_right_col)
             this_right_outline_col = cut_category_lookup[this_cut_anno]
             right_outline_cols.append(this_right_outline_col)
+
+        if other_tx_count > 0:
+            left_labs.append(cut_classification_lookup[tx_order_obj] + ": " + left_label)
+            right_labs.append('Other')
+            counts.append(other_tx_count)
+            this_left_col = color_lookup[left_pos]
+            left_cols.append(this_left_col)
+            this_left_outline_col = 'None'
+            left_outline_cols.append(this_left_outline_col)
+
+            right_cols.append('0.8') #light gray
+            right_outline_cols.append('None')
 
         tx_plt = makeTxCountPlot(left_labs=left_labs, right_labs=right_labs, counts=counts, left_cols=left_cols, right_cols=right_cols, left_outline_cols=left_outline_cols, right_outline_cols=right_outline_cols,outline_cols=cut_colors.colors, outline_labs=cut_categories)
         plot_name = tx_list_report_root
@@ -2843,7 +2878,6 @@ k
                 this_counts.append(final_classification_indel_counts[new_label])
 
             this_sum = sum(this_counts)
-            print('label: ' + str(label))
             if this_sum/sum_inner > cutoff_pct:
                 inner_pie_labels.append(label+"\n("+str(final_classification_counts[label])+")")
                 inner_pie_values.append(final_classification_counts[label])
@@ -2858,6 +2892,8 @@ k
             outer_pie_values.append(outer_other_unmod_count)
             outer_pie_values.append(outer_other_mod_count)
 
+        classification_indel_read_counts_str = "\t".join(classification_indel_labels)+"\n"+"\t".join([str(x) for x in classification_indel_counts])+"\n"
+        classification_indel_read_counts = list(zip(classification_indel_labels,classification_indel_counts))
         classification_indel_plot_obj_root = root + ".classifications_with_indels"
         with open(classification_indel_plot_obj_root+".txt",'w') as summary:
             summary.write("\t".join(classification_indel_labels)+"\n")
@@ -3221,6 +3257,7 @@ k
         fout.write("\t".join(['total_reads_processed','total_r1_processed','discarded_reads_not_primary_alignment','discarded_reads_duplicates','discarded_reads_not_supported_by_R2','discarded_reads_poor_alignment','final_read_count','discovered_cut_point_count','final_cut_point_count'])+"\n")
         fout.write("\t".join(str(x) for x in [total_reads_processed,total_r1_processed,discarded_reads_not_primary_aln,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total])+"\n")
         fout.write(classification_read_counts_str)
+        fout.write(classification_indel_read_counts_str)
         classification_json_str = json.dumps(cut_classification_lookup,separators=(',',':'))
         fout.write(classification_json_str+"\n")
 
@@ -3302,7 +3339,7 @@ k
             os.remove(genome_mapped_bam + ".bai")
 
     discarded_read_counts = [('Not primary alignment',discarded_reads_not_primary_aln),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Bad alignment',discarded_reads_poor_alignment)]
-    return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_total_count, discarded_read_counts, classification_read_counts,
+    return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_total_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
@@ -3920,7 +3957,7 @@ def makeTxCountPlot(left_labs = [],
 
     return plt
 
-def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts):
+def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts):
     """
     Make final summary plot object showing number of reads deduplicated, filtered, and classified, etc.
 
@@ -3931,7 +3968,8 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
         post_filter_on_primer_read_count (int): Number of reads post filtering on primers
         final_read_count (int): Number of reads in final analysis
         discarded_read_counts (list): List of tuples (why read was discarded, number of reads)
-        classification_read_counts (linst): List of tuples (read classification, number of reads)
+        classification_read_counts (list): List of tuples (read classification, number of reads)
+        classification_indel_read_counts (list): List of tuples (read classification, number of reads) including 'short indels' category
     """
     final_summary_str = 'Total input reads: ' + str(num_reads_input) + '\n'
     final_summary_head = ['total_input_reads']
@@ -3950,7 +3988,7 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
     final_summary_str += '\tSurvived filtering for primer/origin presence: %d/%d (%s%%)\n'%(post_filter_on_primer_read_count,post_dedup_count,post_filter_on_primer_read_count_pct)
     final_summary_head.append('post_primer_filter_reads')
     final_summary_vals.append(post_filter_on_primer_read_count)
-    
+
     discarded_total = sum([x[1] for x in discarded_read_counts])
     survived_filtering_count = post_filter_on_primer_read_count - discarded_total
 
@@ -3984,6 +4022,16 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
     final_summary_vals.append(final_read_count)
 
     for (category,category_count) in classification_read_counts:
+        category_pct = None
+        if final_read_count > 0:
+            category_pct =round(100* category_count/final_read_count,2)
+        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
+        final_summary_head.append(category)
+        final_summary_vals.append(category_count)
+
+    final_summary_str += '\tReads used for final analysis (including breakdown of indels): %d/%d (%s%%)\n'%(final_read_count,post_filter_on_primer_read_count,final_read_count_pct)
+
+    for (category,category_count) in classification_indel_read_counts:
         category_pct = None
         if final_read_count > 0:
             category_pct =round(100* category_count/final_read_count,2)
@@ -4313,7 +4361,7 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
         if len(primer_seq) > min_primer_length:
             post_trim_read_count += 1
             new_f1_qual_line = f1_qual_line[len(primer_seq):]
-            new_f1_id_line = f1_id_line + ' primer_len=' + str(trimmed_primer_pos)
+            new_f1_id_line = f1_id_line + ' primer_len=' + str(trimmed_primer_pos + 1) # trimmed primer len is (trimmed_primer_pos + 1)
 
             f1_out.write(new_f1_id_line + "\n" + trimmed_seq + "\n" + f1_plus_line + new_f1_qual_line + "\n")
         elif len(primer_seq) > 0:
@@ -4384,7 +4432,7 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
         if len(primer_seq) > min_primer_length:
             post_trim_read_count += 1
             new_f1_qual_line = f1_qual_line[len(primer_seq):]
-            new_f1_id_line = f1_id_line + ' primer_len=' + str(trimmed_primer_pos)
+            new_f1_id_line = f1_id_line + ' primer_len=' + str(trimmed_primer_pos + 1) # trimmed primer len is (trimmed_primer_pos + 1)
 
             f2_trimmed_seq, f2_primer_seq = trimRightPrimerFromRead(f2_seq_line,ssw_align_primer_rc,min_primer_aln_score)
             new_f2_qual_line = f2_qual_line[len(f2_primer_seq):]
@@ -4412,11 +4460,12 @@ def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
         read: string
         ssw_align: ssw alignment object
         min_score: minimum alignment score between primer and sequence
+        debug: print some debug statements
 
     Returns:
         trimmed_primer_seq: portion of read that was aligned to the primer
         trimmed_read_seq: portion of the read after the primer
-        trimmed_primer_pos: end index of primer that was trimmed
+        trimmed_primer_pos: end index of primer that was trimmed. Note the length of the primer is this value + 1
     """
 
     ssw_res = ssw_align.align(read)
