@@ -11,12 +11,14 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle,Patch
 import multiprocessing as mp
+import math
 import numpy as np
 import os
 import re
 import subprocess
 import sys
 from lib import ssw_lib
+from lib.pyCircos import pyCircos_lib as pc
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
 from CRISPResso2 import CRISPResso2Align
@@ -24,9 +26,15 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.5"
+__version__ = "v0.1.6"
 
-def main(settings, logger):
+def processCRISPRlungo(settings, logger):
+    """Run the CRISPRlungo pipeline
+
+    Args:
+        settings (dict): Dictionary of setting_name->setting_value to use for the run.
+        logger (:func:`logging.logger`): CRISPRlungo logger
+    """
 
     #data structures for plots for report
     summary_plot_objects=[]  # list of PlotObjects for plotting
@@ -139,7 +147,7 @@ def main(settings, logger):
             os.remove(filtered_on_primer_fastq_r2)
 
     (final_assignment_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
-        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
+        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,tx_circos_plot_obj,classification_plot_obj,classification_indel_plot_obj,
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj) = make_final_read_assignments(
                 root = settings['root']+'.final',
@@ -192,6 +200,10 @@ def main(settings, logger):
     if tx_count_plot_obj is not None:
         tx_count_plot_obj.order= 40
         summary_plot_objects.append(tx_count_plot_obj)
+
+    if tx_circos_plot_obj is not None:
+        tx_circos_plot_obj.order= 41
+        summary_plot_objects.append(tx_circos_plot_obj)
 
     if origin_indel_hist_plot_obj is not None:
         origin_indel_hist_plot_obj.order=25
@@ -403,16 +415,17 @@ def parse_settings(args):
 
     logger.setLevel(logging.DEBUG)
 
-    log_formatter = logging.Formatter("%(asctime)s:%(levelname)s: %(message)s","%Y-%m-%d %H:%M:%S")
+    if not logger.hasHandlers():
+        log_formatter = logging.Formatter("%(asctime)s:%(levelname)s: %(message)s","%Y-%m-%d %H:%M:%S")
 
-    sh = logging.StreamHandler()
-    sh.setFormatter(log_formatter)
-    sh.setLevel(logging_level)
-    logger.addHandler(sh)
+        sh = logging.StreamHandler()
+        sh.setFormatter(log_formatter)
+        sh.setLevel(logging_level)
+        logger.addHandler(sh)
 
-    fh = logging.FileHandler(settings['root']+".log")
-    fh.setFormatter(log_formatter)
-    logger.addHandler(fh)
+        fh = logging.FileHandler(settings['root']+".log")
+        fh.setFormatter(log_formatter)
+        logger.addHandler(fh)
 
 
     logger.info('CRISPRlungo ' + __version__)
@@ -1741,6 +1754,7 @@ k
         classification_indel_plot_obj: plot showing assignments (linear, translocation, etc) with indel classification (short indels)
         tx_order_plot_obj: plot showing ordered translocations and counts
         tx_count_plot_obj: plot showing translocations and counts
+        tx_circos_plot_obj: circos plot showing translocations and counts
         origin_indel_hist_plot_obj: plot of indel lenghts for origin
         origin_inversion_hist_plot_obj: plot of inversion lengths at origin (reads pointing opposite directions)
         origin_deletion_hist_plot_obj: plot of deletion lengths for ontarget (reads pointing same direction/away from the primer)
@@ -1803,6 +1817,11 @@ k
                 tx_count_plot_obj = None
                 if tx_count_plot_obj_str != "" and tx_count_plot_obj_str != "None":
                     tx_count_plot_obj = PlotObject.from_json(tx_count_plot_obj_str)
+
+                tx_circos_plot_obj_str = fin.readline().rstrip('\n')
+                tx_circos_plot_obj = None
+                if tx_circos_plot_obj_str != "" and tx_circos_plot_obj_str != "None":
+                    tx_circos_plot_obj = PlotObject.from_json(tx_circos_plot_obj_str)
 
                 classification_plot_obj_str = fin.readline().rstrip('\n')
                 classification_plot_obj = None
@@ -1872,7 +1891,7 @@ k
                         if final_total_count == read_total_read_count:
                             logger.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' total reads')
                             return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup,final_total_count,discarded_read_counts,classification_read_counts,classification_indel_read_counts,
-                                chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
+                                chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,tx_circos_plot_obj,classification_plot_obj,classification_indel_plot_obj,
                                 origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
                                 r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
                         else:
@@ -2546,7 +2565,7 @@ k
             final_classification = cut_classification_lookup[final_cut_point_and_direction]
             final_classification_counts[final_classification] += 1
 
-            indel_str = ''
+            indel_str = ' no indels'
             if final_cut_indel != 0:
                 indel_str = ' short indels'
 
@@ -2620,13 +2639,16 @@ k
     sorted_tx_list = sorted(final_cut_counts, key=final_cut_counts.get,reverse=True)
     top_number_to_plot = 20
     top_sorted_tx_list = sorted_tx_list[:min(top_number_to_plot,len(sorted_tx_list))]
-    other_tx_count = 0 #number of reads to other locations not plotted
+    other_tx_count = 0 #number of locations not plotted
+    other_tx_read_count = 0 # number of reads to other locations not plotted
     if len(sorted_tx_list) > top_number_to_plot:
-        for i in range(21,len(top_sorted_tx_list)):
-            other_tx_count += final_cut_counts[top_sorted_tx_list[i]]
+        for i in range(21,len(sorted_tx_list)):
+            other_tx_count += 1
+            other_tx_read_count += final_cut_counts[sorted_tx_list[i]]
 
     tx_order_plot_obj = None
     tx_count_plot_obj = None
+    tx_circos_plot_obj = None
     if len(top_sorted_tx_list) > 0:
 
         # make tx order plot
@@ -2678,9 +2700,9 @@ k
             right_outline_cols.append(this_right_outline_col)
 
         if other_tx_count > 0:
-            left_labs.append(cut_classification_lookup[tx_order_obj] + ": " + left_label)
-            right_labs.append('Other')
-            counts.append(other_tx_count)
+            left_labs.append(left_label)
+            right_labs.append('Other, ('+str(other_tx_count)+' locations)')
+            counts.append(other_tx_read_count)
             this_left_col = color_lookup[left_pos]
             left_cols.append(this_left_col)
             this_left_outline_col = 'None'
@@ -2813,9 +2835,19 @@ k
         truncated_str = ''
         if len(sorted_tx_list) < len(final_cut_counts):
             truncated_str = '. Note that only the top ' + str(len(sorted_tx_list)) + '/' + str(len(final_cut_counts)) + ' events are shown. All events and counts can be found in the Fragment translocation list.'
+
         tx_count_plot_obj = PlotObject(plot_name = plot_name,
                 plot_title = 'Translocation Counts',
                 plot_label = 'Final translocation positions and counts' + truncated_str,
+                plot_datas = [('Fragment translocation list',tx_list_report)]
+                )
+
+        #plot circos plot
+        plot_name = tx_list_report_root + ".circos"
+        plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,plot_name)
+        tx_circos_plot_obj = PlotObject(plot_name = plot_name,
+                plot_title = 'Translocation Circos Plot',
+                plot_label = 'Final translocation positions and counts',
                 plot_datas = [('Fragment translocation list',tx_list_report)]
                 )
 
@@ -2853,12 +2885,11 @@ k
                     ('Read assignments',final_file)
                     ]
                 )
-        noindel_pie_labels = pie_labels #for use below
-        noindel_pie_values = pie_values
+        noindel_pie_values = pie_values #for use below
 
         #assignment (with indels) plot
 
-        short_indel_categories = ['',' short indels']
+        short_indel_categories = [' no indels',' short indels']
         classification_indel_labels = []
         classification_indel_counts = []
         inner_pie_values = []
@@ -2951,7 +2982,7 @@ k
         plt.savefig(origin_indel_hist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(origin_indel_hist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        plot_label = 'Bar plot showing lengths of insertions (positive) or deletions (negative) for linear reads supporting the origin cut site at ' + origin_chr + ': ' + str(origin_cut_pos) 
+        plot_label = 'Bar plot showing lengths of deletions (negative) or insertions (positive) for linear reads supporting the origin cut site at ' + origin_chr + ': ' + str(origin_cut_pos) 
         if len(keys) == 0:
             plot_label = '(No indel lengths)'
 
@@ -3340,10 +3371,149 @@ k
 
     discarded_read_counts = [('Not primary alignment',discarded_reads_not_primary_aln),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Bad alignment',discarded_reads_poor_alignment)]
     return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_total_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
-        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,classification_plot_obj,classification_indel_plot_obj,
+        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,tx_circos_plot_obj,classification_plot_obj,classification_indel_plot_obj,
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
 
+def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root,include_all_chrs=False):
+    """Plot a circos plot showing translocations.
+
+    Args:
+        genome (str): Genome file location (specifically, this function uses the .fai index file to find chrom lengths)
+        final_cut_counts: dict of cutID=>count how many times each cut was seen -- when we iterate through the reads (fastq) in the next step, we check to see that the cut was seen above a threshold before printing those reads. The count is stored in this dict.
+        origin_chr (str): name of chromosome where origin is (or None if primer is not genomic)
+        origin_cut_pos (int): genomic location of origin cut
+        figure_root (str): root of files to plot - '.pdf' and '.png' will be added
+        include_all_chrs (bool, optional): Whether to plot all chromosomes. Defaults to False and only plots chromosomes that don't include an '_' character.
+    """
+    genome_index_file = genome + ".fai" #we've checked that this file exists before
+    all_chrs = []
+    chr_lens = {}
+    with open(genome_index_file,'r') as fin:
+        for line in fin:
+            line_els = line.split("\t")
+            all_chrs.append(line_els[0])
+            chr_lens[line_els[0]] = int(line_els[1])
+
+    tx_data = defaultdict(int)
+    tx_chrs = {}
+    max_tx_count = 0
+    min_tx_count = None
+    tx_keys = final_cut_counts.keys()
+    for tx_key in tx_keys:
+        cut_els = tx_key.split(":")
+        tx_chrs[cut_els[0]] = 1
+        this_count = final_cut_counts[tx_key]
+        tx_data[cut_els[0]+":"+cut_els[1]] += this_count #could have multiple counts for a single site
+        if this_count > max_tx_count:
+            max_tx_count = this_count
+        if min_tx_count is None:
+            min_tx_count = this_count
+        if this_count < min_tx_count:
+            min_tx_count = this_count
+
+    circle = pc.Gcircle(figsize=(8,8))
+
+    chrom_raxis_range=(600,700)
+    chrom_label_raxis_range=(700,710)
+    chrom_counts_raxis_range=(500,600)
+    arc_raxis = 490
+
+    arcdata_dict = defaultdict(dict)
+
+    min_chr_size = chr_lens[all_chrs[0]]
+    max_chr_size = min_chr_size
+    good_chrs = []
+    for chrom in all_chrs:
+        is_good_chr = True
+        if '_' in chrom and not include_all_chrs:
+            is_good_chr = False
+        if chrom in tx_chrs:
+            is_good_chr = True
+
+        if is_good_chr:
+            good_chrs.append(chrom)
+            if chr_lens[chrom] < min_chr_size:
+                min_chr_size = chr_lens[chrom]
+            if chr_lens[chrom] > max_chr_size:
+                max_chr_size = chr_lens[chrom]
+
+    #add origin chr
+    if origin_chr is None:
+        chr_lens['primer'] = int(float(min_chr_size/2))
+        good_chrs.append('primer')
+        origin_multiplier = 1
+        origin_chr = 'primer'
+        origin_cut_pos = 40
+    else:
+        origin_multiplier = int((max_chr_size*4)/chr_lens[origin_chr])
+        chr_lens[origin_chr] *= origin_multiplier
+
+    for chrom in good_chrs:
+        arc = pc.Garc(arc_id=chrom, size=chr_lens[chrom], interspace=2, raxis_range=chrom_raxis_range, labelposition=80, label_visible=True)
+        circle.add_garc(arc)
+
+        #for scatter plot
+        if chrom not in arcdata_dict:
+            arcdata_dict[chrom]["positions"] = []
+            arcdata_dict[chrom]["values"] = []
+
+
+    circle.set_garcs()
+
+    for arc_id in circle.garc_dict:
+        this_tick_interval = 20000000
+        if arc_id == origin_chr:
+            this_tick_interval *= origin_multiplier
+
+        circle.tickplot(arc_id, raxis_range=chrom_label_raxis_range, tickinterval=this_tick_interval, ticklabels=None)
+
+
+    log_max_tx_count = math.log(max_tx_count)
+    if min_tx_count == max_tx_count:
+        min_tx_count = 0.001
+    log_min_tx_count = math.log(min_tx_count)
+    #scatter plot
+    values_all   = []
+    for tx_key in tx_data.keys():
+        tx_chr,tx_loc = tx_key.split(":")
+        tx_loc = int(tx_loc)
+        if tx_chr == origin_chr:
+            tx_loc = tx_loc * origin_multiplier
+        this_log = math.log(tx_data[tx_key])
+        this_transform = (log_max_tx_count - this_log) + log_min_tx_count
+        values_all.append(this_transform)
+        arcdata_dict[tx_chr]["positions"].append(tx_loc)
+        arcdata_dict[tx_chr]["values"].append(this_transform)
+
+    for key in arcdata_dict:
+        circle.scatterplot(key, data=arcdata_dict[key]["values"], positions=arcdata_dict[key]["positions"],
+                        rlim=[log_min_tx_count-0.05*abs(log_min_tx_count), log_max_tx_count+0.05*abs(log_max_tx_count)], raxis_range=chrom_counts_raxis_range, facecolor='k', spine=True)
+
+
+    #add txs
+    arcdata_dict = defaultdict(dict)
+    for tx_key in tx_data.keys():
+        tx_chr,tx_loc = tx_key.split(":")
+        tx_loc = int(tx_loc)
+        name1  = origin_chr
+        start1 = origin_cut_pos * origin_multiplier
+        end1   = start1 + 20
+        name2  = tx_chr
+        start2 = tx_loc
+        if name2 == origin_chr:
+            start2 = start2 * origin_multiplier
+        end2   = start2 + 20
+        this_count = tx_data[tx_key]
+        source = (name1, start1, end1, arc_raxis)
+        destination = (name2, start2, end2, arc_raxis)
+        color_pct = this_count/max_tx_count
+        if color_pct < 0.1:
+            color_pct = 0.1
+        circle.chord_plot(source, destination, edgecolor=circle.garc_dict[name2].facecolor,linewidth=color_pct*4)
+
+    circle.figure.savefig(figure_root + ".pdf")
+    circle.figure.savefig(figure_root + ".png")
 
 def read_command_output(command):
     """
@@ -4607,7 +4777,7 @@ def get_guide_match_from_aln(guide_seq_aln, ref_seq_aln, cut_ind):
 if __name__ == "__main__":
     settings, logger = parse_settings(sys.argv)
     try:
-        main(settings,logger)
+        processCRISPRlungo(settings,logger)
     except Exception as e:
         if logger.isEnabledFor(logging.DEBUG):
             logger.error(e, exc_info=True)
