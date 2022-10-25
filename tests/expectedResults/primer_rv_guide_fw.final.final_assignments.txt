@@ -1,0 +1,7 @@
+read_id	curr_position	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	final_cut_pos	final_cut_indel	classification
+origin_del1	chr11_sm:160-101	chr11_sm:160	left	0	0	None	None	None	None	chr11_sm:161:left	0	Linear
+del1Left	chr11_sm:159-101	chr11_sm:159	left	0	0	None	None	None	None	chr11_sm:161:left	-1	Linear
+del1Right	chr11_sm:160-101	chr11_sm:160	left	1	0	None	None	None	None	chr11_sm:161:left	-1	Linear
+WT1	chr11_sm:160-102	chr11_sm:160	left	0	0	None	None	None	None	chr11_sm:161:left	0	Linear
+origin_ins1	chr11_sm:160-103	chr11_sm:160	left	0	0	None	None	None	None	chr11_sm:161:left	0	Linear
+ins1	chr11_sm:161-103	chr11_sm:161	left	0	0	None	None	None	None	chr11_sm:161:left	1	Linear

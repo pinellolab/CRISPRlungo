@@ -1,0 +1,2 @@
+Not primary alignment	Duplicate	Poor alignment	Not supported by R2
+1	0	0	0
