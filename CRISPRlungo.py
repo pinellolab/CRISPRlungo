@@ -28,13 +28,13 @@ mpl.rcParams['pdf.fonttype'] = 42
 
 __version__ = "v0.1.6"
 
-def processCRISPRlungo(settings, logger):
+def processCRISPRlungo(settings):
     """Run the CRISPRlungo pipeline
 
     Args:
         settings (dict): Dictionary of setting_name->setting_value to use for the run.
-        logger (:func:`logging.logger`): CRISPRlungo logger
     """
+    logger = logging.getLogger('CRISPRlungo')
 
     #data structures for plots for report
     summary_plot_objects=[]  # list of PlotObjects for plotting
@@ -50,6 +50,7 @@ def processCRISPRlungo(settings, logger):
     origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = prep_input(
             root = settings['root']+'.primerInfo',
             primer_seq = settings['primer_seq'],
+            min_primer_length = settings['min_primer_length'],
             guide_seqs = settings['guide_sequences'],
             cleavage_offset = settings['cleavage_offset'],
             fastq_r1 = settings['fastq_r1'],
@@ -118,6 +119,7 @@ def processCRISPRlungo(settings, logger):
             n_processes = settings['n_processes'],
             cutadapt_command = settings['cutadapt_command'],
             keep_intermediate = settings['keep_intermediate'],
+            suppress_plots = settings['suppress_plots'],
             can_use_previous_analysis = settings['can_use_previous_analysis'],
             )
 
@@ -173,11 +175,13 @@ def processCRISPRlungo(settings, logger):
                 write_discarded_read_info = settings['write_discarded_read_info'],
                 samtools_command = settings['samtools_command'],
                 keep_intermediate = settings['keep_intermediate'],
+                suppress_plots = settings['suppress_plots'],
                 can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
 
-    chr_aln_plot_obj.order=20
-    summary_plot_objects.append(chr_aln_plot_obj)
+    if chr_aln_plot_obj is not None:
+        chr_aln_plot_obj.order=20
+        summary_plot_objects.append(chr_aln_plot_obj)
 
     if tlen_plot_obj is not None:
         tlen_plot_obj.order=15
@@ -187,11 +191,13 @@ def processCRISPRlungo(settings, logger):
         deduplication_plot_obj.order=16
         summary_plot_objects.append(deduplication_plot_obj)
 
-    classification_plot_obj.order=36
-    summary_plot_objects.append(classification_plot_obj)
+    if classification_plot_obj is not None:
+        classification_plot_obj.order=36
+        summary_plot_objects.append(classification_plot_obj)
 
-    classification_indel_plot_obj.order=2
-    summary_plot_objects.append(classification_indel_plot_obj)
+    if classification_indel_plot_obj is not None:
+        classification_indel_plot_obj.order=2
+        summary_plot_objects.append(classification_indel_plot_obj)
 
     if tx_order_plot_obj is not None:
         tx_order_plot_obj.order= 38
@@ -259,23 +265,26 @@ def processCRISPRlungo(settings, logger):
                 final_assignment_file = final_assignment_file,
                 n_processes = settings['n_processes'],
                 keep_intermediate = settings['keep_intermediate'],
+                suppress_plots = settings['suppress_plots'],
                 can_use_previous_analysis = settings['can_use_previous_analysis']
                 )
     if crispresso_classification_plot_obj is not None:
         crispresso_classification_plot_obj.order=40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
-    final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts,classification_indel_read_counts)
-    final_summary_plot_obj.order= 1
-    summary_plot_objects.append(final_summary_plot_obj)
+    final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts,classification_indel_read_counts,suppress_plots=settings['suppress_plots'])
+    if final_summary_plot_obj is not None:
+        final_summary_plot_obj.order= 1
+        summary_plot_objects.append(final_summary_plot_obj)
 
-    make_report(report_file=settings['root']+".html",
-            report_name = 'Report',
-            crisprlungo_folder = '',
-            crispresso_run_names = crispresso_results['run_names'],
-            crispresso_sub_html_files = crispresso_results['run_sub_htmls'],
-            summary_plot_objects = summary_plot_objects,
-            )
+    if not settings['suppress_plots']:
+        make_report(report_file=settings['root']+".html",
+                report_name = 'Report',
+                crisprlungo_folder = '',
+                crispresso_run_names = crispresso_results['run_names'],
+                crispresso_sub_html_files = crispresso_results['run_sub_htmls'],
+                summary_plot_objects = summary_plot_objects,
+                )
 
     logger.info('Successfully completed!')
 
@@ -297,9 +306,10 @@ def parse_settings(args):
     parser.add_argument('settings_file', nargs='*', help='Tab-separated settings file')
 
     parser.add_argument('--debug', action='store_true', help='Tab-separated settings file')
-    parser.add_argument('--root', type=str, default=None, help='Output directory file root')
+    parser.add_argument('--root','--name', type=str, default=None, help='Output directory file root')
     parser.add_argument('--keep_intermediate',action='store_true',help='If true, intermediate files are not deleted')
-    parser.add_argument('write_discarded_read_info',action='store_true',help='If true, a file with information for discarded reads is produced.')
+    parser.add_argument('--write_discarded_read_info',action='store_true',help='If true, a file with information for discarded reads is produced')
+    parser.add_argument('--suppress_plots',action='store_true',help='If true, no plotting will be performed')
 
 
     parser.add_argument('--guide_sequences', nargs='*', help='Spacer sequences of guides (multiple guide sequences are separated by spaces). Spacer sequences must be provided without the PAM sequence, but oriented so the PAM would immediately follow the provided spacer sequence', default=[])
@@ -336,7 +346,8 @@ def parse_settings(args):
     #min alignment cutoffs for alignment to each arm/side of read
     a_group = parser.add_argument_group('Alignment cutoff parameters')
     a_group.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of the alignment. E.g. if arm_min_matched_start_bases is set to 5, the first and last 5bp of the read alignment would have to match exactly to the aligned location.', default=10)
-    a_group.add_argument('--arm_max_clipped_bases', type=int, help='Maximum number of clipped bases at the beginning of the alignment. Bowtie2 alignment marks reads on the beginning or end of the read as "clipped" if they do not align to the genome. This could arise from CRISPR-induced insertions, or bad alignments. We would expect to see clipped bases only on one side. This parameter sets the threshold for clipped bases on both sides of the read.  E.g. if arm_max_clipped_bases is 0, read alignments with more than 0bp on the right AND left side of the alignment would be discarded. An alignment with 5bp clipped on the left and 0bp clipped on the right would be accepted. An alignment with 5bp clipped on the left and 3bp clipped on the right would be discarded.', default=0)
+    a_group.add_argument('--arm_max_clipped_bases', type=int, help='Maximum number of clipped bases at the beginning of the alignment. Bowtie2 alignment marks reads on the beginning or end of the read as "clipped" if they do not align to the genome. This could arise from CRISPR-induced insertions, or bad alignments. ' + \
+        'We would expect to see clipped bases only on one side. This parameter sets the threshold for clipped bases on both sides of the read.  E.g. if arm_max_clipped_bases is 0, read alignments with more than 0bp on the right AND left side of the alignment would be discarded. An alignment with 5bp clipped on the left and 0bp clipped on the right would be accepted. An alignment with 5bp clipped on the left and 3bp clipped on the right would be discarded.', default=0)
     a_group.add_argument('--ignore_n', help='If set, "N" bases will be ignored. By default (False) N bases will count as mismatches in the number of bases required to match at each arm/side of the read', action='store_true')
     a_group.add_argument('--discard_reads_with_poor_alignment', help='If set, reads with poor alignment (fewer than --arm_min_matched_start_bases mismatches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) are discarded from final analysis and counts', action='store_true')
 
@@ -441,6 +452,11 @@ def parse_settings(args):
     if 'write_discarded_read_info' in settings_file_args:
         settings['write_discarded_read_info'] = (settings_file_args['write_discarded_read_info'].lower() == 'true')
         settings_file_args.pop('write_discarded_read_info')
+
+    settings['suppress_plots'] = cmd_args.suppress_plots
+    if 'suppress_plots' in settings_file_args:
+        settings['suppress_plots'] = (settings_file_args['suppress_plots'].lower() == 'true')
+        settings_file_args.pop('suppress_plots')
 
     settings['cuts'] = cmd_args.cuts
     if 'cuts' in settings_file_args:
@@ -593,7 +609,11 @@ def parse_settings(args):
     if settings['n_processes'] == 'max':
         settings['n_processes'] = mp.cpu_count()
     else:
-        settings['n_processes'] = int(settings['n_processes'])
+        try:
+            settings['n_processes'] = int(settings['n_processes'])
+        except ValueError:
+            parser.print_usage()
+            raise Exception('Error: n_processes must be specified as and integer or "max" (current setting: %s)' % settings['n_processes'])
 
     settings['novel_cut_merge_distance'] = cmd_args.novel_cut_merge_distance
     if 'novel_cut_merge_distance' in settings_file_args:
@@ -689,6 +709,11 @@ def parse_settings(args):
         parser.print_usage()
         raise Exception('Error: the primer sequences used must be provided (--primer_seq)')
 
+    if settings['homology_cut_merge_distance'] < settings['novel_cut_merge_distance']:
+        parser.print_usage()
+        raise Exception('The specified homology_cut_merge_distance must be larger than the novel_cut_merge_distance (current values: homology_cut_merge_distance: %d and novel_cut_merge_distance: %d)'%(settings['homology_cut_merge_distance'],settings['novel_cut_merge_distance']))
+
+
     unused_keys = settings_file_args.keys()
     if len(unused_keys) > 0:
         unused_key_str = '"'+'", "'.join(unused_keys)+'"'
@@ -728,7 +753,7 @@ def parse_settings(args):
 
     settings['can_use_previous_analysis'] = can_use_previous_analysis
 
-    return settings, logger
+    return settings
 
 
 def assert_dependencies(cutadapt_command='cutadapt',samtools_command='samtools',bowtie2_command='bowtie2',crispresso_command='CRISPResso',casoffinder_command='cas-offinder'):
@@ -883,10 +908,10 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
     casoffinder_cut_annotations = {}
 
     #link in genome -- it throws a seg fault if it's in the bowtie directory
-    linked_genome = root + '.genome.fa'
+    linked_genome = os.path.abspath(root + '.genome.fa')
     if os.path.exists(linked_genome):
         os.remove(linked_genome)
-    os.symlink(genome,linked_genome)
+    os.symlink(os.path.abspath(genome),linked_genome)
 
 
     casoffinder_input_file = root + '.input.txt'
@@ -942,7 +967,7 @@ def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatc
 
     return casoffinder_cut_sites, casoffinder_cut_annotations
 
-def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools_command, genome, bowtie2_command, bowtie2_genome, can_use_previous_analysis=False, suppress_file_output=False):
+def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset, fastq_r1, samtools_command, genome, bowtie2_command, bowtie2_genome, can_use_previous_analysis=False, suppress_file_output=False):
     """
     Prepares primer info by identifying genomic location if possible and calculates statistics by analyzing input fastq_r1 file
     Prepares cut info by aligning guides to the genome
@@ -953,6 +978,7 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
     Args:
         root: root for written files
         primer_seq: sequence of primer sequence.
+        min_primer_length: paramter for how many bases must match the primer/origin sequence. This function raises an Exception if the primer (if exogenous) or origin sequence (if genomic) shorter than this cutoff
         guide_seqs: sequences of guides used in experiment
         cleavage_offset: offset for guide where cut occurs
         fastq_r1: input fastq
@@ -962,7 +988,6 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         bowtie2_genome: bowtie2-indexed genome to align to
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
         suppress_file_output: suppress writing info file (useful for debugging/testing)
-
 
     Returns:
         origin_seq: common amplified region at primer to be removed from input sequences
@@ -1036,6 +1061,8 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         logger.warning('Primer alignment resulted in an ambiguous alignment')
         logger.info('Setting genomic coordinates for primer aligned to %s:%s'%(primer_chr,primer_loc))
         primer_is_genomic = True
+    else:
+        logger.info('Primer is not aligned to genome. Assuming exogenous primer sequence')
 
     cut_sites = []
     cut_annotations = {}
@@ -1093,10 +1120,15 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
                     closest_cut_site_dist = abs(primer_loc - cut_loc)
                     closest_cut_site_loc = cut_loc
         else:
+            logger.warning('Bowtie alignment results:')
+            logger.warning(guide_aln_results)
             raise Exception('Could not find unique genomic coordinates for guide %s'%guide_seq)
 
     origin_seq = primer_seq
-    if primer_is_genomic:
+    if primer_is_genomic and closest_cut_site_loc == -1:
+        primer_is_genomic = False
+        logger.warning('Primer was found to be gnomic (%s:%s) but no cut sites were found on chromosome %s. Assuming primer is the origin sequence'%(primer_chr,primer_loc,primer_chr))
+    elif primer_is_genomic:
         logger.debug('Closest cut site to primer (%s:%s) is %s:%s'%(primer_chr, primer_loc, primer_chr, closest_cut_site_loc))
         origin_start = primer_loc
         origin_end = closest_cut_site_loc
@@ -1115,6 +1147,9 @@ def prep_input(root, primer_seq, guide_seqs, cleavage_offset, fastq_r1, samtools
         if primer_is_rc:
             origin_seq = reverse_complement(origin_seq)
         logger.debug('Got origin sequence: ' + origin_seq)
+
+    if len(origin_seq) < min_primer_length:
+        raise Exception('The min_primer_length parameter must be less than the length of the primer/origin sequence (Origin: %s (length %d), min_primer_length: %d)'%(origin_seq,len(origin_seq),min_primer_length))
 
     logger.debug('Getting read length and number of total reads')
     av_read_length = get_av_read_len(fastq_r1)
@@ -1435,7 +1470,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
     #done processing just plotting now
     return(fastq_r1_dedup,fastq_r2_dedup)
 
-def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',keep_intermediate=False,can_use_previous_analysis=False):
+def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
     """
     Trims the primer from the input reads, only keeps reads with the primer present in R1
     Also trims the transposase adapter sequence from reads and filters reads that are too short
@@ -1452,6 +1487,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         n_processes: Number of processes to run on
         cutadapt_command: command to run cutadapt
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
+        suppress_plots: if true, plotting will be suppressed
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     Returns:
@@ -1483,12 +1519,12 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
                 if filter_on_primer_plot_obj_str != "" and filter_on_primer_plot_obj_str != "None":
                     filter_on_primer_plot_obj = PlotObject.from_json(filter_on_primer_plot_obj_str)
 
-                logger.info('Using %d previously-filtered fastq sequences trimmed for primers'%post_trim_read_count)
+                if os.path.exists(filtered_on_primer_fastq_r1):
+                    logger.info('Using %d previously-filtered fastq sequences trimmed for primers'%post_trim_read_count)
 
-                return(filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,post_trim_read_count,filter_on_primer_plot_obj)
+                    return(filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,post_trim_read_count,filter_on_primer_plot_obj)
 
-            else:
-                logger.info('Could not recover previously-filtered results. Reprocessing.')
+        logger.info('Could not recover previously-filtered results. Reprocessing.')
 
     logger.info('Filtering and trimming primers from reads')
 
@@ -1566,32 +1602,35 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
     with open(filter_on_primer_plot_obj_root+".txt",'w') as summary:
         summary.write("\t".join(filter_labels)+"\n")
         summary.write("\t".join([str(x) for x in values])+"\n")
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    pie_values = []
-    pie_labels = []
-    for i in range(len(filter_labels)):
-        if values[i] > 0:
-            pie_values.append(values[i])
-            pie_labels.append(filter_labels[i]+"\n("+str(values[i])+")")
-    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
-    ax.set_title('Read filtering based on primer/origin presence')
-    plt.savefig(filter_on_primer_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(filter_on_primer_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+    if suppress_plots:
+        filter_on_primer_plot_obj = None
+    else:
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        pie_values = []
+        pie_labels = []
+        for i in range(len(filter_labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(filter_labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+        ax.set_title('Read filtering based on primer/origin presence')
+        plt.savefig(filter_on_primer_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(filter_on_primer_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
-    plot_label = "Reads were filtered to contain primer origin sequence <p class='text-break text-monospace'>" + origin_seq +"</p>"
-    plot_label += "Reads must contain at least " + str(min_primer_length) + " bases that match the primer/origin sequence<br>"
-    plot_label += "Reads containing the primer/origin sequence but shorter than " + str(min_read_length) + " were filtered as too short."
-    filter_on_primer_plot_obj = PlotObject(
-            plot_name = filter_on_primer_plot_obj_root,
-            plot_title = 'Read filtering based on primer/origin presence',
-            plot_label = plot_label + '<br>'+plot_count_str,
-            plot_datas = [
-                ('Primer/origin information',trim_primer_stats_file),
-                ('Primer filtering statistics',filter_on_primer_plot_obj_root + ".txt")
-                ]
-            )
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
+        plot_label = "Reads were filtered to contain primer origin sequence <p class='text-break text-monospace'>" + origin_seq +"</p>"
+        plot_label += "Reads must contain at least " + str(min_primer_length) + " bases that match the primer/origin sequence<br>"
+        plot_label += "Reads containing the primer/origin sequence but shorter than " + str(min_read_length) + " were filtered as too short."
+        filter_on_primer_plot_obj = PlotObject(
+                plot_name = filter_on_primer_plot_obj_root,
+                plot_title = 'Read filtering based on primer/origin presence',
+                plot_label = plot_label + '<br>'+plot_count_str,
+                plot_datas = [
+                    ('Primer/origin information',trim_primer_stats_file),
+                    ('Primer filtering statistics',filter_on_primer_plot_obj_root + ".txt")
+                    ]
+                )
 
 
     with open(trim_primer_stats_file,'w') as fout:
@@ -1634,7 +1673,7 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
     mapped_bam_file = root + ".bam"
 
     info_file = root + '.info'
-    if os.path.isfile(info_file) and can_use_previous_analysis:
+    if os.path.isfile(info_file) and os.path.isfile(mapped_bam_file) and can_use_previous_analysis:
         with open (info_file,'r') as fin:
             head_line = fin.readline()
             line_els = fin.readline().rstrip('\n').split("\t")
@@ -1704,7 +1743,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     cut_merge_dist=100,collapse_to_homology_dist=10000,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
     arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,dedup_input_based_on_aln_pos_and_UMI=False,
     discard_reads_without_r2_support=False,discard_reads_with_poor_alignment=False,write_discarded_read_info=False,
-    samtools_command='samtools',keep_intermediate=False,can_use_previous_analysis=False):
+    samtools_command='samtools',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
     """
     Makes final read assignments (after deduplicating based on UMI and alignment location)
 
@@ -1735,6 +1774,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         write_discarded_read_info: if true, files are written containing info for reads that are discarded from final analysis
         samtools_command: location of samtools to run
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
+        suppress_plots: if true, plotting will be suppressed
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     Returns:
@@ -1766,7 +1806,7 @@ k
     """
     logger = logging.getLogger('CRISPRlungo')
 
-    final_file = root + '.final_assignments'
+    final_file = root + '.final_assignments.txt'
     info_file = root + '.info'
     #check to see if this analysis has been completed previously
     if os.path.isfile(info_file) and os.path.isfile(final_file) and can_use_previous_analysis:
@@ -2124,28 +2164,31 @@ k
         for key in sorted(aligned_chr_counts.keys()):
             chrs.write(key + '\t' + str(aligned_chr_counts[key]) + '\n')
 
-    fig = plt.figure(figsize=(12,6))
-    ax = plt.subplot(111)
-    if len(vals) > 0:
-        ax.bar(range(len(keys)),vals,tick_label=keys)
-        ax.set_ymargin(0.05)
+    if suppress_plots:
+        chr_aln_plot_obj = None
     else:
-        ax.bar(0,0)
-    ax.set_ylabel('Number of Reads')
-    ax.set_title('Location of read alignments')
-    plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(chr_aln_plot_root+".png",pad_inches=1,bbox_inches='tight')
+        fig = plt.figure(figsize=(12,6))
+        ax = plt.subplot(111)
+        if len(vals) > 0:
+            ax.bar(range(len(keys)),vals,tick_label=keys)
+            ax.set_ymargin(0.05)
+        else:
+            ax.bar(0,0)
+        ax.set_ylabel('Number of Reads')
+        ax.set_title('Location of read alignments')
+        plt.savefig(chr_aln_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(chr_aln_plot_root+".png",pad_inches=1,bbox_inches='tight')
 
-    plot_label = 'Bar plot showing alignment location of read alignments'
-    if len(keys) == 0:
-        plot_label = '(No reads aligned to the genome)'
+        plot_label = 'Bar plot showing alignment location of read alignments'
+        if len(keys) == 0:
+            plot_label = '(No reads aligned to the genome)'
 
-    chr_aln_plot_obj = PlotObject(
-            plot_name = chr_aln_plot_root,
-            plot_title = 'Genome alignment summary',
-            plot_label = plot_label,
-            plot_datas = [('Genome alignment summary',chr_aln_plot_root + ".txt")]
-            )
+        chr_aln_plot_obj = PlotObject(
+                plot_name = chr_aln_plot_root,
+                plot_title = 'Genome alignment summary',
+                plot_label = plot_label,
+                plot_datas = [('Genome alignment summary',chr_aln_plot_root + ".txt")]
+                )
 
     tlen_plot_obj = None
     if len(aligned_tlens) > 0: #paired-end reads
@@ -2157,31 +2200,46 @@ k
             for key in keys:
                 fout.write(str(key) + '\t' + str(aligned_tlens[key]) + '\n')
 
-        fig = plt.figure(figsize=(12,6))
-        ax = plt.subplot(111)
-        if len(vals) > 0:
-            ax.bar(keys,vals)
-            ax.set_ymargin(0.05)
-        else:
-            ax.bar(0,0)
-        ax.set_ylabel('Number of Reads')
-        ax.set_title('Insert size')
-        plt.savefig(tlen_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
-        plt.savefig(tlen_plot_root+".png",pad_inches=1,bbox_inches='tight')
+        if not suppress_plots:
+            fig = plt.figure(figsize=(12,6))
+            ax = plt.subplot(111)
+            if len(vals) > 0:
+                ax.bar(keys,vals)
+                ax.set_ymargin(0.05)
+            else:
+                ax.bar(0,0)
+            ax.set_ylabel('Number of Reads')
+            ax.set_title('Insert size')
+            plt.savefig(tlen_plot_root+".pdf",pad_inches=1,bbox_inches='tight')
+            plt.savefig(tlen_plot_root+".png",pad_inches=1,bbox_inches='tight')
 
-        tlen_plot_obj = PlotObject(
-                plot_name = tlen_plot_root,
-                plot_title = 'Genome Alignment Insert Size Summary',
-                plot_label = 'Bar plot showing insert size of reads aligned to genome',
-                plot_datas = [('Genome alignment insert size summary',tlen_plot_root + ".txt")]
-                )
+            tlen_plot_obj = PlotObject(
+                    plot_name = tlen_plot_root,
+                    plot_title = 'Genome Alignment Insert Size Summary',
+                    plot_label = 'Bar plot showing insert size of reads aligned to genome',
+                    plot_datas = [('Genome alignment insert size summary',tlen_plot_root + ".txt")]
+                    )
 
     #deduplication plot
+
+    dup_counts = defaultdict(int)
+    dup_keys = seen_read_counts_for_dedup.keys()
+    for dup_key in dup_keys:
+        dup_counts[seen_read_counts_for_dedup[dup_key]] += 1
+    dup_count_keys = sorted(dup_counts.keys())
+    dup_count_vals = [dup_counts[key] for key in dup_count_keys]
+
+    deduplication_plot_obj_root = root + ".deduplication_by_UMI_and_aln_pos"
+    with open(deduplication_plot_obj_root+".txt","w") as summary:
+        summary.write('Reads per UMI\tNumber of UMIs\n')
+        for key in dup_count_keys:
+            summary.write(str(key) + '\t' + str(dup_counts[key]) + '\n')
+
     deduplication_plot_obj = None
-    if total_reads_processed > 0:
+    if total_reads_processed > 0 and not suppress_plots:
         labels = ['Not duplicate','Duplicate']
         values = [total_r1_processed-discarded_reads_duplicates,discarded_reads_duplicates]
-        deduplication_plot_obj_root = root + ".deduplication_by_UMI_and_aln_pos"
+
         fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(121)
         pie_values = []
@@ -2194,25 +2252,13 @@ k
         ax.set_title('Duplicate read counts')
 
         ax2 = plt.subplot(122)
-        dup_counts = defaultdict(int)
-        dup_keys = seen_read_counts_for_dedup.keys()
-        for dup_key in dup_keys:
-            dup_counts[seen_read_counts_for_dedup[dup_key]] += 1
-        keys = sorted(dup_counts.keys())
-        vals = [dup_counts[key] for key in keys]
-        with open(deduplication_plot_obj_root+".txt","w") as summary:
-            summary.write('Reads per UMI\tNumber of UMIs\n')
-            for key in keys:
-                summary.write(str(key) + '\t' + str(dup_counts[key]) + '\n')
-        if len(vals) > 0:
-            ax2.bar(keys,vals)
+        if len(dup_count_vals) > 0:
+            ax2.bar(dup_count_keys,dup_count_vals)
             ax2.set_ymargin(0.05)
         else:
             ax2.bar(0,0)
         ax2.set_ylabel('Number of UMIs')
         ax2.set_title('Reads per UMI')
-
-
 
         plt.savefig(deduplication_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(deduplication_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
@@ -2233,8 +2279,8 @@ k
     origin_chr = None
     origin_cut_pos = None
     origin_direction = None
-    #cut sites are input by user (or found by casoffinder)
-    known_cut_points_by_chr = {}
+    known_cut_points_by_chr = {} #cut sites are input by user (or found by casoffinder)
+    final_cut_points_by_chr = defaultdict(lambda: defaultdict(int)) #dict of final cut points by chromosome, contains count of reads with that cut point
     for cut_site in cut_sites:
         (cut_chr,cut_pos) = cut_site.split(":")
         if cut_site in cut_annotations:
@@ -2252,16 +2298,15 @@ k
             known_cut_points_by_chr[cut_chr] = []
         known_cut_points_by_chr[cut_chr].append(int(cut_pos))
         #add known cut points to final cut point lookup as well
-        if cut_chr not in cut_points_by_chr:
-            cut_points_by_chr[cut_chr] = defaultdict(int)
-        cut_points_by_chr[cut_chr][int(cut_pos)] += 1
+        if cut_chr not in final_cut_points_by_chr:
+            final_cut_points_by_chr[cut_chr] = defaultdict(int)
+        final_cut_points_by_chr[cut_chr][int(cut_pos)] = 0
 
     #the counts in this file include only reads that weren't marked as duplicates
-    final_cut_points_by_chr = defaultdict(lambda: defaultdict(int)) #dict of final cut points by chromosome, contains count of reads with that cut point
     final_cut_point_lookup = {} #dict from old(fuzzy/imprecise) position to new
 
     cut_point_homology_info = {} #dict containing cut points with sufficient homology
-    with open(root+".cut_homology",'w') as fout:
+    with open(root+".cut_homology.txt",'w') as fout:
         fout.write("\t".join([str(x) for x in ['guide_seq','cut_chr','cut_point','is_valid_homology_site','potential_guide','best_score','match_direction','n_matches','n_mismatches','n_gaps','aln_guide','aln_ref']])+"\n")
         aln_match_score = 2
         aln_mismatch_score = -1
@@ -2300,7 +2345,7 @@ k
                     cut_key = cut_chr+":"+str(cut_point-padded_seq_len+cleavage_ind+1)
                     is_rc_string = 'Reverse' if is_rc else 'Forward'
                     is_valid_homology = False
-                    
+
                     if n_gaps <= guide_homology_max_gaps and n_mismatches <= guide_homology_max_mismatches:
                         is_valid_homology = True
                         cut_key = cut_chr+":"+str(cut_point-padded_seq_len+cleavage_ind+1)
@@ -2374,7 +2419,9 @@ k
             for curr_point in curr_points:
                 this_sum += curr_point*cut_points_by_chr[cut_chr][curr_point]
                 this_tot += cut_points_by_chr[cut_chr][curr_point]
-            this_weighted_mean = this_sum/float(this_tot)
+            this_weighted_mean = 0
+            if this_tot > 0:
+                this_weighted_mean = this_sum/float(this_tot)
             #this_mean = int(sum(curr_points)/float(len(curr_points)))
             if i == len(these_cut_points) or abs(these_cut_points[i] - this_weighted_mean) > cut_merge_dist:
                 this_pos = int(this_weighted_mean)
@@ -2429,8 +2476,8 @@ k
             if this_str in cut_annotations: #overwrite homology annotation if present in cut_annotations
                 this_anno = cut_annotations[this_str]
             if origin_direction is None: # guide seq primer
-                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0]+' off-target'
-                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' off-target'
+                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0]
+                cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] 
             else: #origin is genomic
                 if chrom != origin_chr:
                     cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0]+' translocation'
@@ -2464,7 +2511,7 @@ k
         cut_val = cut_classification_els[3]
         cut_classification_lookup[cut_key] = cut_val
 
-    with open(root+".cut_classification",'w') as fout:
+    with open(root+".cut_classification.txt",'w') as fout:
         for key in sorted(cut_classification_lookup.keys()):
             fout.write(key+'\t'+cut_classification_lookup[key]+"\n")
 
@@ -2510,11 +2557,11 @@ k
     origin_inversion_lengths = defaultdict(int) # dict inversion_len -> count of reads on same chr as primer and same orientation with specified distance between origin and read (primer is to the genomic left of the cut site, this read is oriented to the genomic left side)
     origin_deletion_lengths = defaultdict(int) # dict deletion_len -> count of reads on same chr as primer and opposite direction with specified distance between origin and read (primer is to the genomic left of the cut site, this read is oriented to the genomic right side)
     origin_depth_counts_100bp = np.zeros(101) #100bp count the number of reads with deletions covering each position
-    origin_depth_counts_100bp_primer = np.zeros(len(origin_seq)) #count deletions covering each base of primer (for those with deletions within 100bp)
+    origin_depth_counts_100bp_primer = np.zeros(len(origin_seq)+1) #count deletions covering each base of primer (for those with deletions within 100bp)
     origin_depth_counts_100bp_total = 0 #count of total reads
 
     origin_depth_counts_2500bp = np.zeros(2501) #2500bp count of the number of reads with deletions covering that position
-    origin_depth_counts_2500bp_primer = np.zeros(len(origin_seq)) #count reads covering each base of primer (for those with deletions within 2500bp)
+    origin_depth_counts_2500bp_primer = np.zeros(len(origin_seq)+1) #count reads covering each base of primer (for those with deletions within 2500bp)
     origin_depth_counts_2500bp_total = 0 #count of total reads
 
     read_id_ind = 0
@@ -2584,7 +2631,7 @@ k
                 else:
                     origin_deletion_lengths[this_dist_to_origin] += 1
 
-                if origin_direction == 'left' and aln_start >= origin_cut_pos: #  primer--origin_seq--->cut..aln_start (origin extends to the left from cut)
+                if origin_direction == 'left' and cut_point_direction == 'right' and aln_start >= origin_cut_pos: #  primer--origin_seq--->cut..aln_start (origin extends to the left from cut)
                     this_del_len = aln_start - origin_cut_pos
                     if this_del_len <= 100:
                         origin_depth_counts_100bp_total += 1
@@ -2594,7 +2641,7 @@ k
                         origin_depth_counts_2500bp_total += 1
                         origin_depth_counts_2500bp[0:this_del_len+1] += 1
                         origin_depth_counts_2500bp_primer[0:del_primer+1] += 1
-                elif origin_direction == 'right' and aln_start <= origin_cut_pos: #  aln_start..cut<--origin_seq--primer (origin extends to the right from cut)
+                elif origin_direction == 'right' and cut_point_direction == 'left' and aln_start <= origin_cut_pos: #  aln_start..cut<--origin_seq--primer (origin extends to the right from cut)
                     this_del_len = (aln_start - origin_cut_pos) * -1
                     if this_del_len <= 100:
                         origin_depth_counts_100bp_total += 1
@@ -2642,6 +2689,7 @@ k
     other_tx_count = 0 #number of locations not plotted
     other_tx_read_count = 0 # number of reads to other locations not plotted
     if len(sorted_tx_list) > top_number_to_plot:
+        logger.debug('Plotting translocations')
         for i in range(21,len(sorted_tx_list)):
             other_tx_count += 1
             other_tx_read_count += final_cut_counts[sorted_tx_list[i]]
@@ -2649,8 +2697,73 @@ k
     tx_order_plot_obj = None
     tx_count_plot_obj = None
     tx_circos_plot_obj = None
-    if len(top_sorted_tx_list) > 0:
+    classification_plot_obj = None
+    classification_indel_plot_obj = None
 
+    classification_labels = []
+    if origin_chr is not None:
+        classification_labels = ['Linear'] #linear goes first in order
+    for key in sorted(final_classification_counts.keys()):
+        if key not in classification_labels and final_classification_counts[key] > 0:
+            classification_labels.append(key)
+
+    classification_values = [final_classification_counts[x] for x in classification_labels]
+    classification_read_counts_str = "\t".join(classification_labels)+"\n"+"\t".join([str(x) for x in classification_values])+"\n"
+    classification_read_counts = list(zip(classification_labels,classification_values))
+    classification_plot_obj_root = root + ".classifications"
+    with open(classification_plot_obj_root+".txt",'w') as summary:
+        summary.write(classification_read_counts_str)
+
+    pie_values = []
+    pie_labels = []
+    for i in range(len(classification_labels)):
+        pie_values.append(classification_values[i])
+        pie_labels.append(classification_labels[i]+"\n("+str(classification_values[i])+")")
+    noindel_pie_values = pie_values #for use below
+
+    short_indel_categories = [' no indels',' short indels']
+    classification_indel_labels = []
+    classification_indel_counts = []
+    inner_pie_values = []
+    inner_pie_labels = []
+    outer_pie_values = []
+    inner_other_count = 0
+    outer_other_mod_count = 0
+    outer_other_unmod_count = 0
+    sum_inner = sum(noindel_pie_values)
+    cutoff_pct = 0.10 #counts < this percent are shown as 'other'
+    for label in classification_labels:
+        this_counts = []
+        for short_indel_category in short_indel_categories:
+            new_label = label + short_indel_category
+            classification_indel_labels.append(new_label)
+            classification_indel_counts.append(final_classification_indel_counts[new_label])
+            this_counts.append(final_classification_indel_counts[new_label])
+
+        this_sum = sum(this_counts)
+        if sum_inner > 0:
+            if this_sum/sum_inner > cutoff_pct:
+                inner_pie_labels.append(label+"\n("+str(final_classification_counts[label])+")")
+                inner_pie_values.append(final_classification_counts[label])
+                outer_pie_values.extend(this_counts)
+            else:
+                inner_other_count += this_sum
+                outer_other_unmod_count += this_counts[0]
+                outer_other_mod_count += this_counts[1]
+    if inner_other_count > 0:
+        inner_pie_labels.append('Other\n('+str(inner_other_count) + ')')
+        inner_pie_values.append(inner_other_count)
+        outer_pie_values.append(outer_other_unmod_count)
+        outer_pie_values.append(outer_other_mod_count)
+
+
+    classification_indel_read_counts_str = "\t".join(classification_indel_labels)+"\n"+"\t".join([str(x) for x in classification_indel_counts])+"\n"
+    classification_indel_read_counts = list(zip(classification_indel_labels,classification_indel_counts))
+    classification_indel_plot_obj_root = root + ".classifications_with_indels"
+    with open(classification_indel_plot_obj_root+".txt",'w') as summary:
+        summary.write("\t".join(classification_indel_labels)+"\n")
+        summary.write("\t".join([str(x) for x in classification_indel_counts])+"\n")
+    if len(top_sorted_tx_list) > 0 and not suppress_plots:
         # make tx order plot
         if origin_chr is None:
             left_label = 'Exogenous'
@@ -2662,7 +2775,7 @@ k
         pos_list.append(left_pos)
         pos_list = sorted(list(set(pos_list)))
 
-        cut_categories = ['On-target', 'Off-target', 'Known','Casoffinder','Novel']
+        cut_categories = ['On-target', 'Off-target', 'Known','Cas-OFFinder','Novel']
         cut_colors = plt.get_cmap('Set1',len(cut_categories))
         cut_category_lookup = {}
         for idx,cat in enumerate(cut_categories):
@@ -2696,6 +2809,8 @@ k
                 this_cut_anno = cut_annotations[this_chr_pos][0]
 
             right_cols.append(this_right_col)
+            if 'Cas-OFFinder' in this_cut_anno: #casoffinder categories look like "Cas-OFFinder OB 3"
+                this_cut_anno = 'Cas-OFFinder'
             this_right_outline_col = cut_category_lookup[this_cut_anno]
             right_outline_cols.append(this_right_outline_col)
 
@@ -2851,31 +2966,15 @@ k
                 plot_datas = [('Fragment translocation list',tx_list_report)]
                 )
 
-        classification_labels = ['Linear'] #linear goes first in order
-        for key in sorted(final_classification_counts.keys()):
-            if key not in classification_labels and final_classification_counts[key] > 0:
-                classification_labels.append(key)
-
         #assignment plot
-        values = [final_classification_counts[x] for x in classification_labels]
-        classification_read_counts_str = "\t".join(classification_labels)+"\n"+"\t".join([str(x) for x in values])+"\n"
-        classification_read_counts = list(zip(classification_labels,values))
-        classification_plot_obj_root = root + ".classifications"
-        with open(classification_plot_obj_root+".txt",'w') as summary:
-            summary.write(classification_read_counts_str)
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
-        pie_values = []
-        pie_labels = []
-        for i in range(len(classification_labels)):
-            pie_values.append(values[i])
-            pie_labels.append(classification_labels[i]+"\n("+str(values[i])+")")
         ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
         ax.set_title('Read classifications')
         plt.savefig(classification_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(classification_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(classification_labels,values)])
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(classification_labels,classification_values)])
         classification_plot_obj = PlotObject(
                 plot_name = classification_plot_obj_root,
                 plot_title = 'Read Classification',
@@ -2885,50 +2984,8 @@ k
                     ('Read assignments',final_file)
                     ]
                 )
-        noindel_pie_values = pie_values #for use below
 
         #assignment (with indels) plot
-
-        short_indel_categories = [' no indels',' short indels']
-        classification_indel_labels = []
-        classification_indel_counts = []
-        inner_pie_values = []
-        inner_pie_labels = []
-        outer_pie_values = []
-        inner_other_count = 0
-        outer_other_mod_count = 0
-        outer_other_unmod_count = 0
-        sum_inner = sum(noindel_pie_values)
-        cutoff_pct = 0.10 #counts < this percent are shown as 'other'
-        for label in classification_labels:
-            this_counts = []
-            for short_indel_category in short_indel_categories:
-                new_label = label + short_indel_category
-                classification_indel_labels.append(new_label)
-                classification_indel_counts.append(final_classification_indel_counts[new_label])
-                this_counts.append(final_classification_indel_counts[new_label])
-
-            this_sum = sum(this_counts)
-            if this_sum/sum_inner > cutoff_pct:
-                inner_pie_labels.append(label+"\n("+str(final_classification_counts[label])+")")
-                inner_pie_values.append(final_classification_counts[label])
-                outer_pie_values.extend(this_counts)
-            else:
-                inner_other_count += this_sum
-                outer_other_unmod_count += this_counts[0]
-                outer_other_mod_count += this_counts[1]
-        if inner_other_count > 0:
-            inner_pie_labels.append('Other\n('+str(inner_other_count) + ')')
-            inner_pie_values.append(inner_other_count)
-            outer_pie_values.append(outer_other_unmod_count)
-            outer_pie_values.append(outer_other_mod_count)
-
-        classification_indel_read_counts_str = "\t".join(classification_indel_labels)+"\n"+"\t".join([str(x) for x in classification_indel_counts])+"\n"
-        classification_indel_read_counts = list(zip(classification_indel_labels,classification_indel_counts))
-        classification_indel_plot_obj_root = root + ".classifications_with_indels"
-        with open(classification_indel_plot_obj_root+".txt",'w') as summary:
-            summary.write("\t".join(classification_indel_labels)+"\n")
-            summary.write("\t".join([str(x) for x in classification_indel_counts])+"\n")
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         width = 0.1
@@ -2959,17 +3016,17 @@ k
                     ('Read assignments',final_file)
                     ]
                 )
+    #end if len(top_sorted_tx_list) > 0
 
     origin_indel_hist_plot_obj = None # plot of indel lengths at origin
-    if len(origin_indel_lengths) > 0:
-        origin_indel_hist_plot_obj_root = root + ".origin_indel_histogram"
-        keys = sorted(origin_indel_lengths.keys())
-        vals = [origin_indel_lengths[key] for key in keys]
-        with open(origin_indel_hist_plot_obj_root+".txt","w") as summary:
-            summary.write('Indel_length\tnumReads\n')
-            for key in keys:
-                summary.write(str(key) + '\t' + str(origin_indel_lengths[key]) + '\n')
-
+    origin_indel_hist_plot_obj_root = root + ".origin_indel_histogram"
+    keys = sorted(origin_indel_lengths.keys())
+    vals = [origin_indel_lengths[key] for key in keys]
+    with open(origin_indel_hist_plot_obj_root+".txt","w") as summary:
+        summary.write('Indel_length\tnumReads\n')
+        for key in keys:
+            summary.write(str(key) + '\t' + str(origin_indel_lengths[key]) + '\n')
+    if len(origin_indel_lengths) > 0 and not suppress_plots:
         fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(111)
         if len(vals) > 0:
@@ -2996,14 +3053,14 @@ k
     origin_dist_cutoff = 100000 # only plot items within 100kb of origin cut
 
     origin_inversion_hist_plot_obj = None # plot of inversion lengths at origin (where read points in opposite genomic direction as primer)
-    if len(origin_inversion_lengths) > 0:
-        origin_inversion_hist_plot_obj_root = root + ".origin_inversion_histogram"
-        keys = sorted(origin_inversion_lengths.keys())
-        vals = [origin_inversion_lengths[key] for key in keys]
-        with open(origin_inversion_hist_plot_obj_root+".txt","w") as summary:
-            summary.write('Inversion_distance\tnumReads\n')
-            for key in keys:
-                summary.write(str(key) + '\t' + str(origin_inversion_lengths[key]) + '\n')
+    origin_inversion_hist_plot_obj_root = root + ".origin_inversion_histogram"
+    keys = sorted(origin_inversion_lengths.keys())
+    vals = [origin_inversion_lengths[key] for key in keys]
+    with open(origin_inversion_hist_plot_obj_root+".txt","w") as summary:
+        summary.write('Inversion_distance\tnumReads\n')
+        for key in keys:
+            summary.write(str(key) + '\t' + str(origin_inversion_lengths[key]) + '\n')
+    if len(origin_inversion_lengths) > 0 and not suppress_plots:
 
         plot_keys = [x for x in keys if abs(x) < origin_dist_cutoff]
         plot_vals = [origin_inversion_lengths[key] for key in plot_keys]
@@ -3019,7 +3076,8 @@ k
         plt.savefig(origin_inversion_hist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(origin_inversion_hist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        plot_label = 'Bar plot showing distance from origin cut of reads supporting inversions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. Reads supporting inversions extend ' + origin_direction + ' after genomic alignment. Distances greater than ' + str(origin_dist_cutoff) + 'bp are not shown.'
+        plot_label = 'Bar plot showing distance from origin cut of reads supporting inversions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. ' + \
+            'Reads supporting inversions extend ' + origin_direction + ' after genomic alignment. Distances greater than ' + str(origin_dist_cutoff) + 'bp are not shown.'
         if len(keys) == 0:
             plot_label = '(No reads supporting inversions found)'
 
@@ -3031,15 +3089,15 @@ k
                 )
 
     origin_deletion_hist_plot_obj = None # plot of deletion lengths at origin
-    if len(origin_deletion_lengths) > 0:
-        origin_deletion_hist_plot_obj_root = root + ".origin_deletion_histogram"
-        keys = sorted(origin_deletion_lengths.keys())
-        vals = [origin_deletion_lengths[key] for key in keys]
-        with open(origin_deletion_hist_plot_obj_root+".txt","w") as summary:
-            summary.write('Deletion_distance\tnumReads\n')
-            for key in keys:
-                summary.write(str(key) + '\t' + str(origin_deletion_lengths[key]) + '\n')
+    origin_deletion_hist_plot_obj_root = root + ".origin_deletion_histogram"
+    keys = sorted(origin_deletion_lengths.keys())
+    vals = [origin_deletion_lengths[key] for key in keys]
+    with open(origin_deletion_hist_plot_obj_root+".txt","w") as summary:
+        summary.write('Deletion_distance\tnumReads\n')
+        for key in keys:
+            summary.write(str(key) + '\t' + str(origin_deletion_lengths[key]) + '\n')
 
+    if len(origin_deletion_lengths) > 0 and not suppress_plots:
         plot_keys = [x for x in keys if abs(x) < origin_dist_cutoff]
         plot_vals = [origin_deletion_lengths[key] for key in plot_keys]
         fig = plt.figure(figsize=(12,6))
@@ -3054,7 +3112,8 @@ k
         plt.savefig(origin_deletion_hist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(origin_deletion_hist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        plot_label = 'Bar plot showing distance from origin cut of reads supporting deletions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. Reads supporting deletions extend ' + origin_direction_opposite + ' after genomic alignment. Distances greater than ' + str(origin_dist_cutoff) + 'bp are not shown.'
+        plot_label = 'Bar plot showing distance from origin cut of reads supporting deletions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. ' + \
+            'Reads supporting deletions extend ' + origin_direction_opposite + ' after genomic alignment. Distances greater than ' + str(origin_dist_cutoff) + 'bp are not shown.'
         if len(keys) == 0:
             plot_label = '(No reads supporting deletions found)'
 
@@ -3083,78 +3142,88 @@ k
         for (xval, yval) in zip(xs,ys):
             summary.write(str(xval)+"\t"+str(yval)+"\n")
 
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(211)
-    if len(origin_depth_counts_100bp) > 0:
-        ax.bar(xs_primer+xs_post,ys_primer+ys_post)
-        ax.set_ymargin(0.05)
-    else:
-        ax.bar(0,0)
-    ax.set_ylabel('Read depth (Number of reads)')
-    ax.set_title('Read depth of 100bp after origin')
-    line1 = ax.axvline(xs_primer[min_primer_length]+0.5,color='k',ls='dotted')
-    line2 = ax.axvline(0,color='r',ls='dotted')
-    ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
-
-    # plot of coverage of 2500bp after cut
     origin_depth_counts_2500bp_plot_obj_root = root + ".origin_depth_counts_2500bp"
     origin_depth_counts_2500bp = origin_depth_counts_2500bp_total - origin_depth_counts_2500bp
     origin_depth_counts_2500bp_primer = origin_depth_counts_2500bp_total - origin_depth_counts_2500bp_primer
 
-    xs_primer = list(np.arange(-1*(len(origin_depth_counts_2500bp_primer)-1),0,1))
-    ys_primer = list(np.flip(origin_depth_counts_2500bp_primer[1:]))
-    xs_post = list(np.arange(1,len(origin_depth_counts_2500bp)))
-    ys_post = list(origin_depth_counts_2500bp[1:])
+    xs_2500_primer = list(np.arange(-1*(len(origin_depth_counts_2500bp_primer)-1),0,1))
+    ys_2500_primer = list(np.flip(origin_depth_counts_2500bp_primer[1:]))
+    xs_2500_post = list(np.arange(1,len(origin_depth_counts_2500bp)))
+    ys_2500_post = list(origin_depth_counts_2500bp[1:])
 
-    xs = xs_primer + xs_post
-    ys = ys_primer + ys_post
-    ax = plt.subplot(212)
-    if len(origin_depth_counts_2500bp) > 0:
-        ax.bar(xs_primer+xs_post,ys_primer+ys_post)
-        ax.set_ymargin(0.05)
-    else:
-        ax.bar(0,0)
-    ax.set_ylabel('Read depth (Number of reads)')
-    ax.set_title('Read depth of 2500bp after origin')
-    line1 = ax.axvline(xs_primer[min_primer_length]+0.5,color='k',ls='dotted')
-    line2 = ax.axvline(0,color='r',ls='dotted')
-    ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
+    xs_2500 = xs_2500_primer + xs_2500_post
+    ys_2500 = ys_2500_primer + ys_2500_post
 
     with open(origin_indel_depth_plot_obj_root+"_2500bp.txt","w") as summary:
         summary.write('bpFromOriginCut\treadDepth\n')
-        for (xval, yval) in zip(xs,ys):
+        for (xval, yval) in zip(xs_2500,ys_2500):
             summary.write(str(xval)+"\t"+str(yval)+"\n")
 
-    plt.savefig(origin_indel_depth_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(origin_indel_depth_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+    if suppress_plots:
+        origin_indel_depth_plot_obj = None
+    else:
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(211)
+        if len(origin_depth_counts_100bp) > 0:
+            ax.bar(xs_primer+xs_post,ys_primer+ys_post)
+            ax.set_ymargin(0.05)
+        else:
+            ax.bar(0,0)
+        ax.set_ylabel('Read depth (Number of reads)')
+        ax.set_title('Read depth of 100bp after origin')
+        line1 = ax.axvline(xs_primer[min_primer_length]+0.5,color='k',ls='dotted')
+        line2 = ax.axvline(0,color='r',ls='dotted')
+        ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
 
-    plot_label = 'Read depth surrounding origin. The top plot shows reads with deletions smaller than 100bp (N='+str(origin_depth_counts_100bp_total)+'). The bottom plot shows reads with deletions smaller than 2500bp (N='+str(origin_depth_counts_2500bp_total)+') . The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos)+'. The vertical red dotted line shows the origin location. The vertical black dotted line shows the minimum requred length (' + str(min_primer_length)+'bp) set by the parameter --min_primer_length.'
-    if sum(ys) < 0:
-        plot_label = '(No reads found at origin)'
+        # plot of coverage of 2500bp after cut
+        ax = plt.subplot(212)
+        if len(origin_depth_counts_2500bp) > 0:
+            ax.bar(xs_2500_primer+xs_2500_post,ys_2500_primer+ys_2500_post)
+            ax.set_ymargin(0.05)
+        else:
+            ax.bar(0,0)
+        ax.set_ylabel('Read depth (Number of reads)')
+        ax.set_title('Read depth of 2500bp after origin')
+        line1 = ax.axvline(xs_2500_primer[min_primer_length]+0.5,color='k',ls='dotted')
+        line2 = ax.axvline(0,color='r',ls='dotted')
+        ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
 
-    origin_indel_depth_plot_obj = PlotObject(
-            plot_name = origin_indel_depth_plot_obj_root,
-            plot_title = 'Read depth around origin',
-            plot_label = plot_label,
-            plot_datas = [('Depth around origin (100bp)',origin_indel_depth_plot_obj_root + "_100bp.txt"),
-                        ('Depth around origin (2500bp)',origin_indel_depth_plot_obj_root + "_2500bp.txt")]
-            )
+        plt.savefig(origin_indel_depth_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(origin_indel_depth_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        primer_info = 'The vertical red dotted line shows the end of the primer sequence. '
+        if origin_chr is not None:
+            primer_info = 'Origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) + ' and the origin extends ' + origin_direction + ' from the cut to the primer. The vertical red dotted line shows the origin location. '
+        plot_label = 'Read depth surrounding origin. The top plot shows reads with deletions smaller than 100bp (N='+str(origin_depth_counts_100bp_total)+'). '+ \
+            'The bottom plot shows reads with deletions smaller than 2500bp (N='+str(origin_depth_counts_2500bp_total)+'). ' + primer_info + \
+            'The vertical black dotted line shows the minimum requred primer length (' + str(min_primer_length)+'bp) set by the parameter --min_primer_length.'
+        if sum(ys_2500) < 0:
+            plot_label = '(No reads found at origin)'
+
+        origin_indel_depth_plot_obj = PlotObject(
+                plot_name = origin_indel_depth_plot_obj_root,
+                plot_title = 'Read depth around origin',
+                plot_label = plot_label,
+                plot_datas = [('Depth around origin (100bp)',origin_indel_depth_plot_obj_root + "_100bp.txt"),
+                            ('Depth around origin (2500bp)',origin_indel_depth_plot_obj_root + "_2500bp.txt")]
+                )
 
     #make r1/r2/support plots
     r1_r2_support_plot_obj = None # plot of how many reads for which r1 and r2 support each other
     r1_r2_support_dist_plot_obj = None # plot of how far apart the r1/r2 supporting reads were aligned from each other
-    if len(r1_r2_support_status_counts) > 0:
-        r1_r2_support_labels = [r1_r2_support_str_supported,r1_r2_support_str_not_supported_orientation,r1_r2_support_str_not_supported_distance,r1_r2_support_str_not_supported_diff_chrs,r1_r2_support_str_not_supported_not_aln]
+    r1_r2_support_labels = [r1_r2_support_str_supported,r1_r2_support_str_not_supported_orientation,r1_r2_support_str_not_supported_distance,r1_r2_support_str_not_supported_diff_chrs,r1_r2_support_str_not_supported_not_aln]
 
-        #check to make sure labels match
-        for k in r1_r2_support_status_counts.keys():
-            if k not in r1_r2_support_labels:
-                raise Exception('R1/R2 support label %s not found in %s'%(k,str(r1_r2_support_labels)))
-        values = [r1_r2_support_status_counts[x] for x in r1_r2_support_labels]
-        r1_r2_support_plot_obj_root = root + ".r1_r2_support"
-        with open(r1_r2_support_plot_obj_root+".txt",'w') as summary:
-            summary.write("\t".join(r1_r2_support_labels)+"\n")
-            summary.write("\t".join([str(x) for x in values])+"\n")
+    #check to make sure labels match
+    for k in r1_r2_support_status_counts.keys():
+        if k not in r1_r2_support_labels:
+            raise Exception('R1/R2 support label %s not found in %s'%(k,str(r1_r2_support_labels)))
+    values = [r1_r2_support_status_counts[x] for x in r1_r2_support_labels]
+    r1_r2_support_plot_obj_root = root + ".r1_r2_support"
+    with open(r1_r2_support_plot_obj_root+".txt",'w') as summary:
+        summary.write("\t".join(r1_r2_support_labels)+"\n")
+        summary.write("\t".join([str(x) for x in values])+"\n")
+
+    if total_reads_processed > 0 and not suppress_plots:
         fig = plt.figure(figsize=(8,8))
         ax = plt.subplot(111)
         pie_values = []
@@ -3182,15 +3251,25 @@ k
                     ]
                 )
 
-        #plot of distance between R1 and R2 for R1/R2 supportive read pairs
-        r1_r2_support_dist_plot_obj_root = root + ".r1_r2_distances"
-        keys = sorted(r1_r2_support_distances.keys())
-        vals = [r1_r2_support_distances[key] for key in keys]
-        with open(r1_r2_support_dist_plot_obj_root+"_supported.txt","w") as summary:
-            summary.write('R1_R2_distance\tnumReads\n')
-            for key in keys:
-                summary.write(str(key) + '\t' + str(r1_r2_support_distances[key]) + '\n')
+    #plot of distance between R1 and R2 for R1/R2 supportive read pairs
+    r1_r2_support_dist_plot_obj_root = root + ".r1_r2_distances"
+    keys = sorted(r1_r2_support_distances.keys())
+    vals = [r1_r2_support_distances[key] for key in keys]
+    with open(r1_r2_support_dist_plot_obj_root+"_supported.txt","w") as summary:
+        summary.write('R1_R2_distance\tnumReads\n')
+        for key in keys:
+            summary.write(str(key) + '\t' + str(r1_r2_support_distances[key]) + '\n')
 
+    #plot of distance between R1 and R2 for R1/R2 NOT supportive read pairs
+    keys_2 = sorted(r1_r2_not_support_distances.keys())
+    vals_2 = [r1_r2_not_support_distances[key] for key in keys_2]
+    with open(r1_r2_support_dist_plot_obj_root+"_not_supported.txt","w") as summary:
+        summary.write('R1_R2_distance\tnumReads\n')
+        for key in keys_2:
+            summary.write(str(key) + '\t' + str(r1_r2_not_support_distances[key]) + '\n')
+
+    if total_reads_processed > 0 and not suppress_plots:
+        #plot of distance between R1 and R2 for R1/R2 supportive read pairs
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(211)
         if len(vals) > 0:
@@ -3202,13 +3281,6 @@ k
         ax.set_title('Distance between R1/R2 for read pairs in which R2 supports the R1 alignment')
 
         #plot of distance between R1 and R2 for R1/R2 NOT supportive read pairs
-        keys_2 = sorted(r1_r2_not_support_distances.keys())
-        vals_2 = [r1_r2_not_support_distances[key] for key in keys_2]
-        with open(r1_r2_support_dist_plot_obj_root+"_not_supported.txt","w") as summary:
-            summary.write('R1_R2_distance\tnumReads\n')
-            for key in keys_2:
-                summary.write(str(key) + '\t' + str(r1_r2_not_support_distances[key]) + '\n')
-
         ax2 = plt.subplot(212)
         if len(vals) > 0:
             ax2.bar(keys,vals)
@@ -3242,45 +3314,48 @@ k
     with open(discarded_reads_plot_obj_root+".txt",'w') as summary:
         summary.write("\t".join(labels)+"\n")
         summary.write("\t".join([str(x) for x in values])+"\n")
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    pie_values = []
-    pie_labels = []
-    for i in range(len(labels)):
-        if values[i] > 0:
-            pie_values.append(values[i])
-            pie_labels.append(labels[i]+"\n("+str(values[i])+")")
-    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
-    plot_name = discarded_reads_plot_obj_root
-    plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
-    plot_count_str = "<br>".join(["%s N=%d"%x for x in zip(labels,values)])
+    if suppress_plots:
+        discarded_reads_plot_obj = None
+    else:
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        pie_values = []
+        pie_labels = []
+        for i in range(len(labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+        plot_name = discarded_reads_plot_obj_root
+        plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
+        plot_count_str = "<br>".join(["%s N=%d"%x for x in zip(labels,values)])
 
-    discarded_count = discarded_reads_not_primary_aln+discarded_reads_duplicates+discarded_reads_poor_alignment+discarded_reads_not_supported_by_R2
+        discarded_count = discarded_reads_not_primary_aln+discarded_reads_duplicates+discarded_reads_poor_alignment+discarded_reads_not_supported_by_R2
 
-    discard_r1r2_str = '(Reads without R1/R2 support are currently included in the final analyses. Set the --discard_reads_without_r2_support flag to discard these reads.)'
-    if discard_reads_without_r2_support:
-        discard_r2r1_str = '(Reads without R1/R2 support are currently excluded from the final analyses because the --discard_reads_without_r2_support flag is set.)'
+        discard_r1r2_str = '(Reads without R1/R2 support are currently included in the final analyses. Set the --discard_reads_without_r2_support flag to discard these reads.)'
+        if discard_reads_without_r2_support:
+            discard_r2r1_str = '(Reads without R1/R2 support are currently excluded from the final analyses because the --discard_reads_without_r2_support flag is set.)'
 
-    discard_dup_str = '(Reads that may be duplicates based on UMI/alignment position are currently included in the final analyses. Set the --dedup_input_based_on_aln_pos_and_UMI flag to discard these reads.)'
-    if discard_reads_without_r2_support:
-        discard_dup_str = '(Duplicate reads based on UMI/alignment position are currently excluded from the final analyses because the --dedup_input_based_on_aln_pos_and_UMI flag is set.)'
+        discard_dup_str = '(Reads that may be duplicates based on UMI/alignment position are currently included in the final analyses. Set the --dedup_input_based_on_aln_pos_and_UMI flag to discard these reads.)'
+        if discard_reads_without_r2_support:
+            discard_dup_str = '(Duplicate reads based on UMI/alignment position are currently excluded from the final analyses because the --dedup_input_based_on_aln_pos_and_UMI flag is set.)'
 
-    discard_poor_aln_str = '(Reads with poor alignment are currently included in the final analyses. Set the --discard_reads_with_poor_alignment flag to discard these reads.)'
-    if discard_reads_without_r2_support:
-        discard_poor_aln_str = '(Reads with poor alignment are currently excluded from the final analyses because the --discard_reads_with_poor_alignment flag is set.)'
+        discard_poor_aln_str = '(Reads with poor alignment are currently included in the final analyses. Set the --discard_reads_with_poor_alignment flag to discard these reads.)'
+        if discard_reads_without_r2_support:
+            discard_poor_aln_str = '(Reads with poor alignment are currently excluded from the final analyses because the --discard_reads_with_poor_alignment flag is set.)'
 
 
-    discarded_reads_plot_obj = PlotObject(
-            plot_name = discarded_reads_plot_obj_root,
-            plot_title = 'Discarded read count summary',
-            plot_label = str(discarded_count) + '/'+str(total_r1_processed) + ' reads were discarded.<br>'+str(final_total_count) + ' R1 reads were used for the final analysis. <br>' + plot_count_str + '<br>' +
-                discard_dup_str + '<br>' + discard_poor_aln_str + '<br>' + discard_r1r2_str + '<br>Poor alignment: Reads are unaligned (as determined by the aligner), or the front AND back of the read have greater than ' + 
-                str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have greater than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
-            plot_datas = [
-                ('Discarded reads summary',discarded_reads_plot_obj_root + ".txt")
-                ]
-            )
+        discarded_reads_plot_obj = PlotObject(
+                plot_name = discarded_reads_plot_obj_root,
+                plot_title = 'Discarded read count summary',
+                plot_label = str(discarded_count) + '/'+str(total_r1_processed) + ' reads were discarded.<br>'+str(final_total_count) + ' R1 reads were used for the final analysis. <br>' + plot_count_str + '<br>' +
+                    discard_dup_str + '<br>' + discard_poor_aln_str + '<br>' + discard_r1r2_str + '<br>Poor alignment: Reads are unaligned (as determined by the aligner), or the front AND back of the read have greater than ' + 
+                    str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have greater than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
+                plot_datas = [
+                    ('Discarded reads summary',discarded_reads_plot_obj_root + ".txt")
+                    ]
+                )
     if write_discarded_read_info:
         discarded_reads_plot_obj.datas.append(('Discarded reads',discarded_read_file))
 
@@ -3292,7 +3367,9 @@ k
         classification_json_str = json.dumps(cut_classification_lookup,separators=(',',':'))
         fout.write(classification_json_str+"\n")
 
-        chr_aln_plot_obj_str = chr_aln_plot_obj.to_json()
+        chr_aln_plot_obj_str = "None"
+        if chr_aln_plot_obj is not None:
+            chr_aln_plot_obj_str = chr_aln_plot_obj.to_json()
         fout.write(chr_aln_plot_obj_str+"\n")
 
         tlen_plot_obj_str = "None"
@@ -3300,7 +3377,9 @@ k
             tlen_plot_obj_str = tlen_plot_obj.to_json()
         fout.write(tlen_plot_obj_str+"\n")
 
-        deduplication_plot_obj_str = deduplication_plot_obj.to_json()
+        deduplication_plot_obj_str = "None"
+        if deduplication_plot_obj is not None:
+            deduplication_plot_obj_str = deduplication_plot_obj.to_json()
         fout.write(deduplication_plot_obj_str+"\n")
 
         tx_order_plot_obj_str = "None"
@@ -3717,7 +3796,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 
     return (crispresso_infos)
 
-def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_processes,skip_failed=True,keep_intermediate=False,can_use_previous_analysis=False):
+def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_processes,skip_failed=True,keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
     """
     Runs CRISPResso2 commands and aggregates output
 
@@ -3729,6 +3808,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
         n_processes: number of processes to run CRISPResso commands on
         skip_failed: if true, failed CRISPResso runs are skipped. Otherwise, if one fails, the program will fail.
         keep_intermediate: whether to keep intermediate files (if False, intermediate files including produced fastqs will be deleted)
+        suppress_plots: if true, plotting will be suppressed
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
 
     Returns:
@@ -3786,7 +3866,9 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
     crispresso_command_file = root + '.commands.txt'
     crispresso_info_file = root + '.summary.txt'
     with open(crispresso_info_file,'w') as crispresso_info_fh, open(crispresso_command_file,'w') as crispresso_command_fh:
-        crispresso_info_fh.write('name\tcut_annotation\tcut_type\tcut_location\treference\treads_printed\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\treads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\treads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\tamplicon_sequence\n')
+        crispresso_info_fh.write('name\tcut_annotation\tcut_type\tcut_location\treference\treads_printed\tn_total\treads_aligned\treads_unmod\treads_mod\treads_discarded\t'+\
+            'reads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\t'+\
+            'reads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\tamplicon_sequence\n')
         for crispresso_info in crispresso_infos:
             crispresso_command_fh.write(crispresso_info['command'])
             name = crispresso_info['name']
@@ -3938,35 +4020,42 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
     classification_plot_obj_root = root+".classificationSummary"
     labels = sorted(list(annotated_final_class_counts.keys()))
     values = [annotated_final_class_counts[x] for x in labels]
+    sum_values = sum(values)
     with open(classification_plot_obj_root+".txt",'w') as summary:
         summary.write("\t".join(labels)+"\n")
         summary.write("\t".join([str(x) for x in values])+"\n")
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    pie_values = []
-    pie_labels = []
-    for i in range(len(labels)):
-        if values[i] > 0:
-            pie_values.append(values[i])
-            pie_labels.append(labels[i]+"\n("+str(values[i])+")")
-    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
-    plot_name = classification_plot_obj_root
-    plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
-    plot_count_str = "<br>".join(["%s N=%d"%x for x in zip(labels,values)])
+    if sum_values == 0 or suppress_plots:
+        classification_plot_obj = None
+    else:
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        pie_values = []
+        pie_labels = []
+        for i in range(len(labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+        plot_name = classification_plot_obj_root
+        plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
+        plot_count_str = "<br>".join(["%s N=%d"%x for x in zip(labels,values)])
 
-    classification_plot_obj = PlotObject(
-            plot_name = classification_plot_obj_root,
-            plot_title = 'Read classification including CRISPResso analysis',
-            plot_label = 'CRISPResso classification<br>' + plot_count_str + '<br>Reads labeled "(not analyzed)" had too few reads for CRISPResso analysis or indels (based on genome alignment) that were too long. You can adjust the minimum number of reads to run CRISPResso with the parameter "crispresso_min_count". You can adjust the maximum indel length for analysis by CRISPResso with the parameter "crispresso_max_indel_size".',
-            plot_datas = [
-                ('CRISPResso classification summary',classification_plot_obj_root + ".txt")
-                ]
-            )
+        classification_plot_obj = PlotObject(
+                plot_name = classification_plot_obj_root,
+                plot_title = 'Read classification including CRISPResso analysis',
+                plot_label = 'CRISPResso classification<br>' + plot_count_str + '<br>Reads labeled "(not analyzed)" had too few reads for CRISPResso analysis or indels (based on genome alignment) that were too long. ' + \
+                    'You can adjust the minimum number of reads to run CRISPResso with the parameter "crispresso_min_count". You can adjust the maximum indel length for analysis by CRISPResso with the parameter "crispresso_max_indel_size".',
+                plot_datas = [
+                    ('CRISPResso classification summary',classification_plot_obj_root + ".txt")
+                    ]
+                )
 
 
     with open(crispresso_stats_file,'w') as fout:
-        classification_plot_obj_str = classification_plot_obj.to_json()
+        classification_plot_obj_str = "None"
+        if classification_plot_obj is not None:
+            classification_plot_obj_str = classification_plot_obj.to_json()
         fout.write(classification_plot_obj_str+"\n\n")
 
         fout.write('Run Name\tRun sub-html\n')
@@ -4127,7 +4216,7 @@ def makeTxCountPlot(left_labs = [],
 
     return plt
 
-def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts):
+def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,suppress_plots=False):
     """
     Make final summary plot object showing number of reads deduplicated, filtered, and classified, etc.
 
@@ -4140,6 +4229,7 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
         discarded_read_counts (list): List of tuples (why read was discarded, number of reads)
         classification_read_counts (list): List of tuples (read classification, number of reads)
         classification_indel_read_counts (list): List of tuples (read classification, number of reads) including 'short indels' category
+        suppress_plots: if true, plotting will be suppressed
     """
     final_summary_str = 'Total input reads: ' + str(num_reads_input) + '\n'
     final_summary_head = ['total_input_reads']
@@ -4217,33 +4307,33 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
         fout.write("\t".join(final_summary_head)+"\n")
         fout.write("\t".join([str(x) for x in final_summary_vals])+"\n")
         fout.write(final_summary_str + "\n")
-    fig = plt.figure(figsize=(12,12))
-    ax = plt.subplot(111)
-    pie_values = []
-    pie_labels = []
-    for i in range(len(filter_labels)):
-        if values[i] > 0:
-            pie_values.append(values[i])
-            pie_labels.append(filter_labels[i]+"\n("+str(values[i])+")")
-    ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
-    ax.set_title('Read Assignment Summary')
-    plt.savefig(summary_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-    plt.savefig(summary_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+    if suppress_plots:
+        summary_plot_obj = None
+    else:
+        fig = plt.figure(figsize=(12,12))
+        ax = plt.subplot(111)
+        pie_values = []
+        pie_labels = []
+        for i in range(len(filter_labels)):
+            if values[i] > 0:
+                pie_values.append(values[i])
+                pie_labels.append(filter_labels[i]+"\n("+str(values[i])+")")
+        ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
+        ax.set_title('Read Assignment Summary')
+        plt.savefig(summary_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(summary_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-    plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
-    plot_label = 'Assignment summary for N=' + str(num_reads_input) + ' input reads:'
-    summary_plot_obj = PlotObject(
-            plot_name = summary_plot_obj_root,
-            plot_title = 'Read summary',
-            plot_label = plot_label + '<br>'+plot_count_str,
-            plot_datas = [
-                ('Read assignment summary',summary_plot_obj_root + ".txt")
-                ]
-            )
+        plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(filter_labels,values)])
+        plot_label = 'Assignment summary for N=' + str(num_reads_input) + ' input reads:'
+        summary_plot_obj = PlotObject(
+                plot_name = summary_plot_obj_root,
+                plot_title = 'Read summary',
+                plot_label = plot_label + '<br>'+plot_count_str,
+                plot_datas = [
+                    ('Read assignment summary',summary_plot_obj_root + ".txt")
+                    ]
+                )
     return summary_plot_obj
-
-
-
 
 class PlotObject:
     """
@@ -4282,6 +4372,11 @@ class PlotObject:
                 plot_datas=obj['plot_datas'],
                 plot_order=obj['plot_order'])
 
+    def __str__(self):
+        return 'Plot object with name ' + self.name
+
+    def __repr__(self):
+        return f'PlotObject(name={self.name}, title={self.title}, label={self.label}, datas={self.datas} order={self.order})'
 
 
 
@@ -4371,13 +4466,16 @@ body {
 
     data_path = ""
     for idx,plot_obj in enumerate(ordered_plot_objects):
+        plot_path = plot_obj.name
+        plot_path = os.path.basename(plot_path)
         plot_str = "<div class='card text-center mb-2' id='plot"+str(idx)+"'>\n\t<div class='card-header'>\n"
         plot_str += "<h5>"+plot_obj.title+"</h5>\n"
         plot_str += "</div>\n"
         plot_str += "<div class='card-body'>\n"
-        plot_str += "<a href='"+data_path + plot_obj.name+".pdf'><img src='"+data_path + plot_obj.name + ".png' width='80%' ></a>\n"
+        plot_str += "<a href='"+data_path + plot_path+".pdf'><img src='"+data_path + plot_path + ".png' width='80%' ></a>\n"
         plot_str += "<label>"+plot_obj.label+"</label>\n"
         for (plot_data_label,plot_data_path) in plot_obj.datas:
+            plot_data_path = os.path.basename(plot_data_path)
             plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n";
         plot_str += "</div></div>\n";
         html_str += plot_str
@@ -4755,7 +4853,7 @@ def get_guide_match_from_aln(guide_seq_aln, ref_seq_aln, cut_ind):
             ref_ind += 1
         if guide_ind == cut_ind:
             ref_ind_cut_site = ref_ind
-    
+
     match_count = 0
     mismatch_count = 0
     gap_count = 0
@@ -4775,10 +4873,11 @@ def get_guide_match_from_aln(guide_seq_aln, ref_seq_aln, cut_ind):
 
 
 if __name__ == "__main__":
-    settings, logger = parse_settings(sys.argv)
+    settings = parse_settings(sys.argv)
     try:
-        processCRISPRlungo(settings,logger)
+        processCRISPRlungo(settings)
     except Exception as e:
+        logger = logging.getLogger('CRISPRlungo')
         if logger.isEnabledFor(logging.DEBUG):
             logger.error(e, exc_info=True)
         else:
