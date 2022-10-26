@@ -195,6 +195,16 @@ def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 #TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATATATCCCCCAGTTTAGTAGTTGGACTTAGGGAACAAAGGAA
 #1DelRight
 #TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAAATCCCCCAGTTTAGTAGTTGGACTTAGGGAACAAAGGAA
+
+##
+#----|---- wt
+#-  -|---- origin del1
+#-+--|---- origin ins1
+#--- |----- del 1 left
+#----| ---- del 1 right
+#-----------ins 1
+#
+
     print('Running Primer FW Guide FW')
     this_root = 'primer_fw_guide_fw'
     settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_fw.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
@@ -341,6 +351,14 @@ def assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 #
 #primer
 #TTGCAATGAAAATAAATGTTT
+
+#
+#----|---------linear
+#----|  -------2d
+#--  |---------2d primer
+#----|       --100d
+#----|        -100d4del
+
 
     print('Running Cuts - testing for casoffinder functionality')
     this_root = 'cuts'
