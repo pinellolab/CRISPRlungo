@@ -26,7 +26,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.6"
+__version__ = "v0.1.7"
 
 def processCRISPRlungo(settings):
     """Run the CRISPRlungo pipeline
@@ -272,7 +272,7 @@ def processCRISPRlungo(settings):
         crispresso_classification_plot_obj.order=40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
-    final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts,classification_indel_read_counts,suppress_plots=settings['suppress_plots'])
+    final_summary_file, final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts,classification_indel_read_counts,suppress_plots=settings['suppress_plots'])
     if final_summary_plot_obj is not None:
         final_summary_plot_obj.order= 1
         summary_plot_objects.append(final_summary_plot_obj)
@@ -287,6 +287,7 @@ def processCRISPRlungo(settings):
                 )
 
     logger.info('Successfully completed!')
+    return final_summary_file
 
     # FINISHED
 
@@ -305,7 +306,7 @@ def parse_settings(args):
     parser.add_argument('-v', '--version', action='version', version="%(prog)s "+__version__)
     parser.add_argument('settings_file', nargs='*', help='Tab-separated settings file')
 
-    parser.add_argument('--debug', action='store_true', help='Tab-separated settings file')
+    parser.add_argument('--debug', action='store_true', help='Print debug output')
     parser.add_argument('--root','--name', type=str, default=None, help='Output directory file root')
     parser.add_argument('--keep_intermediate',action='store_true',help='If true, intermediate files are not deleted')
     parser.add_argument('--write_discarded_read_info',action='store_true',help='If true, a file with information for discarded reads is produced')
@@ -1523,6 +1524,9 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
                     logger.info('Using %d previously-filtered fastq sequences trimmed for primers'%post_trim_read_count)
 
                     return(filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,post_trim_read_count,filter_on_primer_plot_obj)
+                else:
+                    logger.debug('File %s does not exist.'%filtered_on_primer_fastq_r1)
+
 
         logger.info('Could not recover previously-filtered results. Reprocessing.')
 
@@ -4230,6 +4234,10 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
         classification_read_counts (list): List of tuples (read classification, number of reads)
         classification_indel_read_counts (list): List of tuples (read classification, number of reads) including 'short indels' category
         suppress_plots: if true, plotting will be suppressed
+
+    Returns:
+        final_summary_file: file containing summary of results
+        final_summary_plot_obj: plot shwoing final summary
     """
     final_summary_str = 'Total input reads: ' + str(num_reads_input) + '\n'
     final_summary_head = ['total_input_reads']
@@ -4333,7 +4341,7 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
                     ('Read assignment summary',summary_plot_obj_root + ".txt")
                     ]
                 )
-    return summary_plot_obj
+    return summary_plot_obj_root + ".txt", summary_plot_obj
 
 class PlotObject:
     """
