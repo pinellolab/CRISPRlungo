@@ -1,7 +1,0 @@
-fastq_r1	input.r1.fq
-genome	/data/pinello/COMMON_DATA/REFERENCE_GENOMES/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome.fa
-on_target_cut_sites	chr5:500050
-n_processes	20
-perform_unbiased_analysis	True
-primer_seq	GGGGTGGTCCTGCTGGCTGA
-novel_cut_merge_distance	100

@@ -1,5 +1,0 @@
-fastq_r1	input.r1.fq
-genome	/data/pinello/COMMON_DATA/REFERENCE_GENOMES/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome.fa
-cut_sites	chr5:51113396 chr2:60495267 chr11:63955676 
-n_processes	20
-crispresso_min_count	1
