@@ -52,11 +52,16 @@ def processBatch(arg_els):
         line_idx = 1
         for line in fin:
             line_els = line.strip().split(sep)
-            this_command_args = ['CRISPRlungo']
 
+            line_idx += 1
+            if len(line_els) == 0:
+                continue
+                
             if len(line_els) != len(head_els):
                 raise Exception('Incorrect number of items on line ' + str(line_idx))
+            
             this_name = ''
+            this_command_args = ['CRISPRlungo']
             for idx in range(len(line_els)):
                 head_val = head_els[idx]
                 this_val = line_els[idx]
@@ -77,7 +82,6 @@ def processBatch(arg_els):
                 settings_arr.append(settings)
             except Exception as e:
                 raise Exception('Error in parsing ' + batch_file + ' line ' + str(line_idx)+ ":\n" + str(e)) from e
-            line_idx += 1
 
     this_n_processes = settings_arr[0]['n_processes']
     logger.info('Running CRISPRlungo with %d processes'%this_n_processes)
