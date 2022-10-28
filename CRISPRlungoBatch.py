@@ -58,7 +58,7 @@ def processBatch(arg_els):
                 continue
                 
             if len(line_els) != len(head_els):
-                raise Exception('Incorrect number of items on line ' + str(line_idx))
+                raise Exception('Incorrect number of items on line ' + str(line_idx) + ' (got ' + str(len(line_els)) + ' expected ' + str(len(head_els)) + ')')
             
             this_name = ''
             this_command_args = ['CRISPRlungo']
