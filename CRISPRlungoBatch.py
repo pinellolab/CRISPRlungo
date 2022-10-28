@@ -54,7 +54,7 @@ def processBatch(arg_els):
             line_els = line.strip().split(sep)
 
             line_idx += 1
-            if len(line_els) == 0:
+            if line_els == ['']:
                 continue
                 
             if len(line_els) != len(head_els):
