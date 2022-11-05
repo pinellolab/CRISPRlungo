@@ -82,6 +82,10 @@ def processCRISPRlungo(settings):
     curr_r1_file = settings['fastq_r1'] #keep track of current input files (through UMI adding, etc.)
     curr_r2_file = settings['fastq_r2']
 
+    if settings['primer_in_r2']:
+        curr_r1_file = settings['fastq_r2']
+        curr_r2_file = settings['fastq_r1']
+
     #if umis are provided, add them to the fastqs
     if settings['fastq_umi']:
         umi_r1, umi_r2 = add_umi_from_umi_file(
@@ -336,8 +340,8 @@ def parse_settings(args):
 
     #specify primer filtering information
     p_group = parser.add_argument_group('Primer and filtering parameters and settings')
-    p_group.add_argument('--suppress_primer_filtering', help='Whether to filter reads for the presence of the primer/origin sequence. If set, all reads will be considered (but alignments may not ', action='store_true')
     p_group.add_argument('--primer_seq', type=str, help='Sequence of primer',default=None)
+    p_group.add_argument('--primer_in_r2', type=str, help='If true, the primer is in R2. By default, the primer is required to be in R1.',action='store_true')
     p_group.add_argument('--min_primer_aln_score', type=int, help='Minimum primer/origin alignment score for trimming.',default=40)
     p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=30)
     p_group.add_argument('--min_read_length', type=int, help='Minimum length of read after all filtering',default=30)
@@ -511,6 +515,11 @@ def parse_settings(args):
     if 'primer_seq' in settings_file_args:
         settings['primer_seq'] = settings_file_args['primer_seq']
         settings_file_args.pop('primer_seq')
+
+    settings['primer_in_r2'] = cmd_args.primer_in_r2
+    if 'primer_in_r2' in settings_file_args:
+        settings['primer_in_r2'] = (settings_file_args['primer_in_r2'].lower() == 'true')
+        settings_file_args.pop('primer_in_r2')
 
     settings['min_primer_aln_score'] = cmd_args.min_primer_aln_score
     if 'min_primer_aln_score' in settings_file_args:

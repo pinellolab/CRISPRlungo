@@ -103,12 +103,11 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
 
 #### Primer and filtering parameters and settings:
 ```
---suppress_primer_filtering
-                        Whether to filter reads for the presence of the
-                        primer/origin sequence. If set, all reads will be
-                        considered (but alignments may not (default: False)
   --primer_seq PRIMER_SEQ
                         Sequence of primer (default: None)
+  --primer_in_r2        If true, the primer is in R2. By default, the primer
+                        is required to be present in R1.
+                        (default: False)
   --min_primer_aln_score MIN_PRIMER_ALN_SCORE
                         Minimum primer/origin alignment score for trimming.
                         (default: 40)
@@ -125,7 +124,7 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
 
 #### Alignment cutoff parameters:
 ```
---arm_min_matched_start_bases ARM_MIN_MATCHED_START_BASES
+  --arm_min_matched_start_bases ARM_MIN_MATCHED_START_BASES
                         Number of bases that are required to be matching (no
                         indels or mismatches) at the beginning of the read on
                         each "side" of the alignment. E.g. if
@@ -200,7 +199,7 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
 ```
 #### UMI parameters:
 ```
---dedup_input_on_UMI  If set, input reads will be deduplicated based on UMI
+  --dedup_input_on_UMI  If set, input reads will be deduplicated based on UMI
                         before alignment (default: False)
   --dedup_input_based_on_aln_pos_and_UMI
                         If set, perform deduplication based on alignment
@@ -211,7 +210,7 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
 ```
 #### R1/R2 support settings:
 ``` 
- --r1_r2_support_max_distance R1_R2_SUPPORT_MAX_DISTANCE
+  --r1_r2_support_max_distance R1_R2_SUPPORT_MAX_DISTANCE
                         Max distance between r1 and r2 for the read pair to be
                         classified as "supported" by r2 (default: 10000)
   --discard_reads_without_r2_support
