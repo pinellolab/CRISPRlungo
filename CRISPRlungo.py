@@ -341,7 +341,7 @@ def parse_settings(args):
     #specify primer filtering information
     p_group = parser.add_argument_group('Primer and filtering parameters and settings')
     p_group.add_argument('--primer_seq', type=str, help='Sequence of primer',default=None)
-    p_group.add_argument('--primer_in_r2', type=str, help='If true, the primer is in R2. By default, the primer is required to be in R1.',action='store_true')
+    p_group.add_argument('--primer_in_r2', help='If true, the primer is in R2. By default, the primer is required to be in R1.',action='store_true')
     p_group.add_argument('--min_primer_aln_score', type=int, help='Minimum primer/origin alignment score for trimming.',default=40)
     p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=30)
     p_group.add_argument('--min_read_length', type=int, help='Minimum length of read after all filtering',default=30)
