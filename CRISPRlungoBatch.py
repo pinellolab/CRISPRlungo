@@ -107,7 +107,8 @@ def processBatch(arg_els):
 
     column_heads = ['total_input_reads','post_dedup_reads','post_primer_filter_reads','post_quality_filter_reads','discarded_quality_filter_reads','Not primary alignment','Duplicate read','Not supported by R2','Poor alignment','analyzed_read_count']
     for column_head in column_heads:
-        del all_head_els[column_head]
+        if column_head in all_head_els:
+            del all_head_els[column_head]
 
     indel_heads = [x for x in all_head_els.keys() if 'indels' in x]
 
