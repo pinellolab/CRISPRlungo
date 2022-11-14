@@ -27,6 +27,9 @@ def main():
     assert_prep_input(this_genome,this_bowtie2_genome,verbose)
     assert_no_results(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
+    print('----------------')
+    print('TESTING COMPLETE')
+    print('ALL TESTS PASSED')
 
 def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     #test primer fw, guide fw
@@ -154,6 +157,8 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     assert(av_read_length == 99)
     assert(num_reads_input == 4)
 
+    print('TESTS PASSED')
+
 def assert_no_results(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose):
     file_roots_to_compare = [
             '.final.classifications.txt',
@@ -176,6 +181,8 @@ def assert_no_results(this_genome,this_bowtie2_genome,test_inputs_folder,temp_ou
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+    print('TESTS PASSED')
 
 def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose):
     file_roots_to_compare = [
@@ -286,6 +293,8 @@ def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
+    print('TESTS PASSED')
+
 def test_lines_equal(file1,file2,debug):
     """
     Asserts that the lines in two files are present in each other - the order may be different
@@ -374,6 +383,8 @@ def assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
+    print('TESTS PASSED')
+
 def assert_primer(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose):
     file_roots_to_compare = [
             '.final.classifications.txt',
@@ -394,6 +405,8 @@ def assert_primer(this_genome,this_bowtie2_genome,test_inputs_folder,temp_output
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+    print('TESTS PASSED')
 
 
 def delete_files_with_prefix(prefix):
