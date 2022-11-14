@@ -48,12 +48,6 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
                         provided without the PAM sequence, but oriented so the
                         PAM would immediately follow the provided spacer
                         sequence (default: [])
-  --cuts [CUTS ...], --cut_sites [CUTS ...]
-                        Cut sites in the form chr1:234 (multiple cuts are
-                        separated by spaces) (default: [])
-  --on_target_cut_sites [ON_TARGET_CUT_SITES ...]
-                        On-target cut sites in the form chr1:234 (multiple
-                        cuts are separated by spaces) (default: [])
   --cut_classification_annotations [CUT_CLASSIFICATION_ANNOTATIONS ...]
                         User-customizable annotations for cut products in the
                         form: chr1:234:left:Custom_label (multiple annotations

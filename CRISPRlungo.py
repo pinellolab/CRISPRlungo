@@ -318,8 +318,6 @@ def parse_settings(args):
 
 
     parser.add_argument('--guide_sequences', nargs='*', help='Spacer sequences of guides (multiple guide sequences are separated by spaces). Spacer sequences must be provided without the PAM sequence, but oriented so the PAM would immediately follow the provided spacer sequence', default=[])
-    parser.add_argument('--cuts','--cut_sites', nargs='*', help='Cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
-    parser.add_argument('--on_target_cut_sites', nargs='*', help='On-target cut sites in the form chr1:234 (multiple cuts are separated by spaces)', default=[])
     parser.add_argument('--cut_classification_annotations', nargs='*', help='User-customizable annotations for cut products in the form: chr1:234:left:Custom_label (multiple annotations are separated by spaces)', default=[])
     parser.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
 
@@ -467,24 +465,7 @@ def parse_settings(args):
     if 'suppress_plots' in settings_file_args:
         settings['suppress_plots'] = (settings_file_args['suppress_plots'].lower() == 'true')
         settings_file_args.pop('suppress_plots')
-
-    settings['cuts'] = cmd_args.cuts
-    if 'cuts' in settings_file_args:
-        settings['cuts'] = settings_file_args['cuts'].split(" ")
-        settings_file_args.pop('cuts')
-    if 'cut_sites' in settings_file_args:
-        settings['cuts'].extend(settings_file_args['cut_sites'].split(" "))
-        settings_file_args.pop('cut_sites')
-    for cut in settings['cuts']:
-        if ":" not in cut:
-            parser.print_usage()
-            raise Exception('Error: cut specification %s is in the incorrect format (must be given as chr1:234',cut)
-
-    settings['on_target_cut_sites'] = cmd_args.on_target_cut_sites
-    if 'on_target_cut_sites' in settings_file_args:
-        settings['on_target_cut_sites'] = settings_file_args['on_target_cut_sites'].split(" ")
-        settings_file_args.pop('on_target_cut_sites')
-
+    
     settings['cut_classification_annotations'] = cmd_args.cut_classification_annotations
     if 'cut_classification_annotations' in settings_file_args:
         settings['cut_classification_annotations'] = settings_file_args['cut_classification_annotations'].split(" ")
@@ -3583,7 +3564,7 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
     sorted_tx_keys = sorted(tx_data.items(), key=lambda item: item[1], reverse=True)
     sorted_tx_keys_to_plot = sorted_tx_keys[0:min(len(sorted_tx_keys), max_translocations_to_plot)]
     values_all   = []
-    for tx_key in sorted_tx_keys_to_plot:
+    for tx_key,tx_count in sorted_tx_keys_to_plot:
         tx_chr,tx_loc = tx_key.split(":")
         tx_loc = int(tx_loc)
         if tx_chr == origin_chr:
@@ -3600,8 +3581,10 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
 
 
     #add txs
+    if plot_black_white:
+        cmap = plt.cm.Greys
     arcdata_dict = defaultdict(dict)
-    for tx_key in sorted_tx_keys_to_plot:
+    for tx_key,tx_count in sorted_tx_keys_to_plot:
         tx_chr,tx_loc = tx_key.split(":")
         tx_loc = int(tx_loc)
         name1  = origin_chr
@@ -3619,7 +3602,7 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
         if color_pct < 0.1:
             color_pct = 0.1
         if plot_black_white:
-            circle.chord_plot(source, destination, edgecolor='k',facecolor='k')
+            circle.chord_plot(source, destination, edgecolor='k',facecolor=cmap(color_pct))
         else:
             circle.chord_plot(source, destination, edgecolor=circle.garc_dict[name2].facecolor,linewidth=color_pct*4)
 
@@ -4219,7 +4202,8 @@ def makeTxCountPlot(left_labs = [],
     rects = []
     for ind in range(num_boxes):
         rects.append(Rectangle((0,ys[ind]+count_bar_ydiff),counts[ind],y_height-(count_bar_ydiff*2)))
-        ax2.text(x=counts[ind],y=ys[ind]+y_height/2,s=" " + str(counts[ind]),ha='left',va='center')
+        val = max(1,counts[ind]) #min value is 1 or matplotlib flips out
+        ax2.text(x=val,y=ys[ind]+y_height/2,s=" " + str(counts[ind]),ha='left',va='center')
 
     pc = PatchCollection(rects)
     ax2.add_collection(pc)
@@ -4288,7 +4272,7 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
 
     for (category,category_count) in discarded_read_counts:
         category_pct = None
-        if final_read_count > 0:
+        if discarded_total > 0:
             category_pct =round(100* category_count/discarded_total,2)
         final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,discarded_total,category_pct)
         final_summary_head.append(category)
