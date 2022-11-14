@@ -26,7 +26,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.7"
+__version__ = "v0.1.8"
 
 def processCRISPRlungo(settings):
     """Run the CRISPRlungo pipeline
@@ -418,6 +418,11 @@ def parse_settings(args):
             settings['root'] = cmd_args.settings_file[0] + ".CRISPRlungo"
         else:
             settings['root'] = "CRISPRlungo"
+    #create output directory if appropriate
+    output_dir = os.path.dirname(settings['root'])
+    if output_dir != '' and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
 
     settings['debug'] = cmd_args.debug
     if 'debug' in settings_file_args:
@@ -2671,13 +2676,21 @@ k
 
     tx_keys = sorted(final_cut_counts.keys())
     tx_list_report = root + ".translocation_list.txt"
+    written_tx_keys = {}
     with open (tx_list_report,'w') as fout:
-        fout.write('cut\tcut_annotation\tcount\n')
+        fout.write('cut\tcut_annotation\tcount_left\tcount_right\tcount_total\n')
         for tx_key in tx_keys:
             this_cut_annotation = 'Novel'
-            if tx_key in cut_annotations:
-                this_cut_annotation = cut_annotations[tx_key][0]
-                fout.write("%s\t%s\t%s\n"%(tx_key,this_cut_annotation,final_cut_counts[tx_key]))
+            tx_cut = ':'.join(tx_key.split(":")[0:2])
+            if tx_cut in written_tx_keys:
+                continue
+            if tx_cut in cut_annotations:
+                this_cut_annotation = cut_annotations[tx_cut][0]
+            this_left_count = final_cut_counts[tx_cut+":left"]
+            this_right_count = final_cut_counts[tx_cut+":right"]
+            this_total_count = this_left_count + this_right_count
+            fout.write("%s\t%s\t%s\t%s\t%s\n"%(tx_cut,this_cut_annotation,this_left_count,this_right_count,this_total_count))
+            written_tx_keys[tx_cut] = 1
     logger.debug('Wrote translocation list ' + tx_list_report)
 
     # fragment translocations
@@ -2744,7 +2757,7 @@ k
     outer_other_mod_count = 0
     outer_other_unmod_count = 0
     sum_inner = sum(noindel_pie_values)
-    cutoff_pct = 0.10 #counts < this percent are shown as 'other'
+    cutoff_pct = 0.05 #counts < this percent are shown as 'other'
     for label in classification_labels:
         this_counts = []
         for short_indel_category in short_indel_categories:
@@ -2802,44 +2815,34 @@ k
         left_labs = []
         right_labs = []
         counts = []
-        left_cols = []
-        right_cols = []
-        left_outline_cols = []
-        right_outline_cols = []
+        fill_cols = []
+        outline_cols = []
         for tx_order_obj in top_sorted_tx_list:
-            left_labs.append(cut_classification_lookup[tx_order_obj] + ": " + left_label)
+            left_labs.append(cut_classification_lookup[tx_order_obj])
             right_labs.append(tx_order_obj)
             counts.append(final_cut_counts[tx_order_obj])
-            this_left_col = color_lookup[left_pos]
-            left_cols.append(this_left_col)
-            this_left_outline_col = 'None'
-            left_outline_cols.append(this_left_outline_col)
 
             this_chr_pos = ':'.join(tx_order_obj.split(':')[0:2])
-            this_right_col = color_lookup[this_chr_pos]
+            this_fill_col = color_lookup[this_chr_pos]
             this_cut_anno='Novel'
             if this_chr_pos in cut_annotations:
                 this_cut_anno = cut_annotations[this_chr_pos][0]
 
-            right_cols.append(this_right_col)
+            fill_cols.append(this_fill_col)
             if 'Cas-OFFinder' in this_cut_anno: #casoffinder categories look like "Cas-OFFinder OB 3"
                 this_cut_anno = 'Cas-OFFinder'
-            this_right_outline_col = cut_category_lookup[this_cut_anno]
-            right_outline_cols.append(this_right_outline_col)
+            this_outline_col = cut_category_lookup[this_cut_anno]
+            outline_cols.append(this_outline_col)
 
         if other_tx_count > 0:
-            left_labs.append(left_label)
-            right_labs.append('Other, ('+str(other_tx_count)+' locations)')
+            left_labs.append('Other')
+            right_labs.append('('+str(other_tx_count)+' locations)')
             counts.append(other_tx_read_count)
-            this_left_col = color_lookup[left_pos]
-            left_cols.append(this_left_col)
-            this_left_outline_col = 'None'
-            left_outline_cols.append(this_left_outline_col)
 
-            right_cols.append('0.8') #light gray
-            right_outline_cols.append('None')
+            fill_cols.append('0.8') #light gray
+            outline_cols.append('None')
 
-        tx_plt = makeTxCountPlot(left_labs=left_labs, right_labs=right_labs, counts=counts, left_cols=left_cols, right_cols=right_cols, left_outline_cols=left_outline_cols, right_outline_cols=right_outline_cols,outline_cols=cut_colors.colors, outline_labs=cut_categories)
+        tx_plt = makeTxCountPlot(left_labs=left_labs, right_labs=right_labs, counts=counts, fill_cols=fill_cols, outline_cols=outline_cols,legend_outline_cols=cut_colors.colors, legend_outline_labs=cut_categories)
         plot_name = tx_list_report_root
         tx_plt.savefig(plot_name+".pdf",pad_inches=1,bbox_inches='tight')
         tx_plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
@@ -2867,9 +2870,13 @@ k
         chrom_max_count = 0
         height_at_locs = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
         #here only take the top items (not all of them or the plot gets wonky)
-        for loc_key in sorted_tx_list:
+        #but we'll take the left and right sides
+        for loc_key in top_sorted_tx_list:
             loc_key_els = loc_key.split(":")
-            height_at_locs[loc_key_els[0]][int(loc_key_els[1])][loc_key_els[2]] = final_cut_counts[loc_key]
+            cut_key = ":".join(loc_key_els[0:2])
+            height_at_locs[loc_key_els[0]][int(loc_key_els[1])]['left'] = final_cut_counts[cut_key+":"+'left']
+            height_at_locs[loc_key_els[0]][int(loc_key_els[1])]['right'] = final_cut_counts[cut_key+":"+'right']
+            #loc_key will always be bigger than the opposite (left vs right) cut because it's in the top_sorted_tx_list
             if final_cut_counts[loc_key] > chrom_max_count: chrom_max_count = final_cut_counts[loc_key]
 
         sorted_chroms = sorted(height_at_locs.keys(), key=lambda x: get_chr_sort_key(x))
@@ -2961,8 +2968,8 @@ k
         plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
 
         truncated_str = ''
-        if len(sorted_tx_list) < len(final_cut_counts):
-            truncated_str = '. Note that only the top ' + str(len(sorted_tx_list)) + '/' + str(len(final_cut_counts)) + ' events are shown. All events and counts can be found in the Fragment translocation list.'
+        if len(top_sorted_tx_list) < len(final_cut_counts):
+            truncated_str = '. Note that only the top ' + str(len(top_sorted_tx_list)) + '/' + str(len(final_cut_counts)) + ' events are shown. All events and counts can be found in the Fragment translocation list.'
 
         tx_count_plot_obj = PlotObject(plot_name = plot_name,
                 plot_title = 'Translocation Counts',
@@ -3006,9 +3013,9 @@ k
         wedge_properties = {"width":width, "edgecolor":"w",'linewidth': 2}
 
         ax.pie(inner_pie_values, labels=inner_pie_labels, # plot categories without indels
-            wedgeprops=inner_wedge_properties,autopct="%1.2f%%",radius=1-width, labeldistance=0.50,pctdistance=0.25)
+            wedgeprops=inner_wedge_properties,autopct="%1.2f%%",radius=1-width, labeldistance=0.50,pctdistance=0.30)
         ax.pie(outer_pie_values, labels=None,
-            wedgeprops=wedge_properties,autopct="%1.2f%%",colors=['silver','crimson'],pctdistance=1)
+            wedgeprops=wedge_properties,autopct="%1.2f%%",colors=['silver','crimson'],pctdistance=1.08)
         patch1 = Patch(color='silver', label='No indels')
         patch2 = Patch(color='crimson', label='Short indels')
 
@@ -3467,7 +3474,7 @@ k
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
 
-def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root,include_all_chrs=False):
+def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root,max_translocations_to_plot=100,include_all_chrs=False,plot_black_white=True):
     """Plot a circos plot showing translocations.
 
     Args:
@@ -3476,7 +3483,9 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
         origin_chr (str): name of chromosome where origin is (or None if primer is not genomic)
         origin_cut_pos (int): genomic location of origin cut
         figure_root (str): root of files to plot - '.pdf' and '.png' will be added
+        max_translocations_to_plot (int): maximum number of translocations to show in circos plot
         include_all_chrs (bool, optional): Whether to plot all chromosomes. Defaults to False and only plots chromosomes that don't include an '_' character.
+        plot_black_white (bool, optional): If true, arcs will be plotted grayscale. Otherwise, they will be colored the color of the target chromosome
     """
     genome_index_file = genome + ".fai" #we've checked that this file exists before
     all_chrs = []
@@ -3496,13 +3505,15 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
         cut_els = tx_key.split(":")
         tx_chrs[cut_els[0]] = 1
         this_count = final_cut_counts[tx_key]
-        tx_data[cut_els[0]+":"+cut_els[1]] += this_count #could have multiple counts for a single site
-        if this_count > max_tx_count:
-            max_tx_count = this_count
+        tx_data[cut_els[0]+":"+cut_els[1]] += this_count #could have multiple counts for a single site (both strands)
+        this_total_count = tx_data[cut_els[0]+":"+cut_els[1]]
+
+        if this_total_count > max_tx_count:
+            max_tx_count = this_total_count
         if min_tx_count is None:
-            min_tx_count = this_count
-        if this_count < min_tx_count:
-            min_tx_count = this_count
+            min_tx_count = this_total_count
+        if this_total_count < min_tx_count:
+            min_tx_count = this_total_count
 
     circle = pc.Gcircle(figsize=(8,8))
 
@@ -3561,13 +3572,18 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
         circle.tickplot(arc_id, raxis_range=chrom_label_raxis_range, tickinterval=this_tick_interval, ticklabels=None)
 
 
+
+
     log_max_tx_count = math.log(max_tx_count)
     if min_tx_count == max_tx_count:
         min_tx_count = 0.001
     log_min_tx_count = math.log(min_tx_count)
     #scatter plot
+
+    sorted_tx_keys = sorted(tx_data.items(), key=lambda item: item[1], reverse=True)
+    sorted_tx_keys_to_plot = sorted_tx_keys[0:min(len(sorted_tx_keys), max_translocations_to_plot)]
     values_all   = []
-    for tx_key in tx_data.keys():
+    for tx_key in sorted_tx_keys_to_plot:
         tx_chr,tx_loc = tx_key.split(":")
         tx_loc = int(tx_loc)
         if tx_chr == origin_chr:
@@ -3580,12 +3596,12 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
 
     for key in arcdata_dict:
         circle.scatterplot(key, data=arcdata_dict[key]["values"], positions=arcdata_dict[key]["positions"],
-                        rlim=[log_min_tx_count-0.05*abs(log_min_tx_count), log_max_tx_count+0.05*abs(log_max_tx_count)], raxis_range=chrom_counts_raxis_range, facecolor='k', spine=True)
+                        rlim=[log_min_tx_count-0.1*abs(log_min_tx_count), log_max_tx_count+0.1*abs(log_max_tx_count)], raxis_range=chrom_counts_raxis_range, facecolor='k', spine=True)
 
 
     #add txs
     arcdata_dict = defaultdict(dict)
-    for tx_key in tx_data.keys():
+    for tx_key in sorted_tx_keys_to_plot:
         tx_chr,tx_loc = tx_key.split(":")
         tx_loc = int(tx_loc)
         name1  = origin_chr
@@ -3602,7 +3618,10 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
         color_pct = this_count/max_tx_count
         if color_pct < 0.1:
             color_pct = 0.1
-        circle.chord_plot(source, destination, edgecolor=circle.garc_dict[name2].facecolor,linewidth=color_pct*4)
+        if plot_black_white:
+            circle.chord_plot(source, destination, edgecolor='k',facecolor='k')
+        else:
+            circle.chord_plot(source, destination, edgecolor=circle.garc_dict[name2].facecolor,linewidth=color_pct*4)
 
     circle.figure.savefig(figure_root + ".pdf")
     circle.figure.savefig(figure_root + ".png")
@@ -3785,7 +3804,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         if n_processes > 4:
             processes_str = "--n_processes 4"
         output_folder = os.path.join(data_dir,'CRISPResso_on_'+cut_names[cut])
-        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -g %s -wc %s -w %s -r1 %s --fastq_output --quantification_window_coordinates %s %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,
+        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -g %s -wc %s -w %s -r1 %s -gn 'Fragment junction' --fastq_output --quantification_window_coordinates %s %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,
             amp_seq,guide_seq,-15,crispresso_quant_window_size,reads_file,quant_window_coords,processes_str,reads_file)
         
         run_this_one = 'True'
@@ -4135,12 +4154,10 @@ def getLeftRightMismatchesMDZ(mdz_str):
 def makeTxCountPlot(left_labs = [],
         right_labs = [],
         counts = [],
-        left_cols = None,
-        right_cols = None,
-        left_outline_cols=None,
-        right_outline_cols=None,
+        fill_cols = None,
         outline_cols=None,
-        outline_labs=None
+        legend_outline_cols=None,
+        legend_outline_labs=None
         ):
     """
     Make a count plot for the most common types of translocations
@@ -4149,12 +4166,10 @@ def makeTxCountPlot(left_labs = [],
         left_labs: (list) labels for the left side translocations
         right_labs: (list) labels for the right side of translocations
         counts: (list) read counts for each translocation
-        left_cols: (list) colors for left side
-        right_cols: (list) colors for right side
-        left_outline_cols: (list) outline colors for left side
-        right_outline_cols: (list) outline colors for right side
-        outline_cols: (list) colors for outline color legend
-        outline_labs: (list) labels for outline color legend
+        fill_cols: (list) colors for blocks
+        outline_cols: (list) outline colors for blocks
+        legend_outline_cols: (list) colors for outline color legend
+        legend_outline_labs: (list) labels for outline color legend
 
         The length of all params should be the same - one for each translocation to plot
     Returns:
@@ -4163,38 +4178,26 @@ def makeTxCountPlot(left_labs = [],
 
     num_boxes = len(left_labs)
 
-    if left_cols is None:
-        left_cols = ['b']*num_boxes
+    if fill_cols is None:
+        fill_cols = ['b']*num_boxes
 
-    if right_cols is None:
-        right_cols = ['b']*num_boxes
-
-    if left_outline_cols is None:
-        left_outline_cols = ['None']*num_boxes
-
-    if right_outline_cols is None:
-        right_outline_cols = ['None']*num_boxes
+    if outline_cols is None:
+        outline_cols = ['None']*num_boxes
 
     x_width = 2 - 0.1
     y_height = 1 - 0.1
     ys = range(0,num_boxes)[::-1]
-    x1_start = 0
-    x2_start = 2
+    x_start = 2
     count_bar_ydiff = 0.3
 
     fig, (ax1, ax2) = plt.subplots(1,2,sharey=True, figsize=(12,8))
-    left_boxes = [Rectangle((x1_start, y), x_width, y_height)
-                      for y in ys]
-    left_pc = PatchCollection(left_boxes, facecolor=left_cols, edgecolor=left_outline_cols, linewidth=2)
 
-    right_boxes = [Rectangle((x2_start, y), x_width, y_height)
+    boxes = [Rectangle((x_start, y), x_width, y_height)
                       for y in ys]
 
-    right_pc = PatchCollection(right_boxes, facecolor=right_cols, edgecolor=right_outline_cols, linewidth=2)
+    ax1.add_collection(PatchCollection(boxes, facecolor=fill_cols, edgecolor=outline_cols, linewidth=2))
 
     # Add collection to axes
-    ax1.add_collection(left_pc)
-    ax1.add_collection(right_pc)
     ax1.set_ylim(0,num_boxes)
 
     max_right_len = max([len(lab) for lab in right_labs])
@@ -4202,14 +4205,14 @@ def makeTxCountPlot(left_labs = [],
     ax1.set_xlim(-2,10)
 
     for ind in range(num_boxes):
-        ax1.text(-0.1,ys[ind]+y_height/2,left_labs[ind],ha='right',va='center')
+        ax1.text(x_start-0.1,ys[ind]+y_height/2,left_labs[ind],ha='right',va='center')
         ax1.text(4,ys[ind]+y_height/2,right_labs[ind],ha='left',va='center')
 
     ax1.axis('off')
 
-    if outline_labs is not None:
+    if legend_outline_labs is not None:
         legend_patches = []
-        for col,lab in zip(outline_cols,outline_labs):
+        for col,lab in zip(legend_outline_cols,legend_outline_labs):
             legend_patches.append(Patch(facecolor='None',edgecolor=col,label=lab))
         ax1.legend(handles=legend_patches,loc="lower center", bbox_to_anchor=(0.5, -0.2))
 
@@ -4286,8 +4289,8 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
     for (category,category_count) in discarded_read_counts:
         category_pct = None
         if final_read_count > 0:
-            category_pct =round(100* category_count/final_read_count,2)
-        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,final_read_count,category_pct)
+            category_pct =round(100* category_count/discarded_total,2)
+        final_summary_str += '\t\t%s: %d/%d (%s%%)\n'%(category,category_count,discarded_total,category_pct)
         final_summary_head.append(category)
         final_summary_vals.append(category_count)
 
