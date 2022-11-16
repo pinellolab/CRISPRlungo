@@ -35,6 +35,10 @@ def processCRISPRlungo(settings):
         settings (dict): Dictionary of setting_name->setting_value to use for the run.
     """
     logger = logging.getLogger('CRISPRlungo')
+    final_file = settings['root'] + '.summary.txt'
+    if settings['can_use_previous_analysis'] and os.path.exists(final_file):
+        logger.info('Successfully completed!')
+        return final_file
 
     #data structures for plots for report
     summary_plot_objects=[]  # list of PlotObjects for plotting
@@ -276,7 +280,18 @@ def processCRISPRlungo(settings):
         crispresso_classification_plot_obj.order=40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
-    final_summary_file, final_summary_plot_obj = make_final_summary(settings['root']+'.summary', num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts,classification_indel_read_counts,suppress_plots=settings['suppress_plots'])
+    final_summary_file, final_summary_plot_obj = make_final_summary(
+            root = settings['root']+'.summary',
+            num_reads_input = num_reads_input,
+            post_dedup_count = post_dedup_count,
+            post_filter_on_primer_read_count = post_filter_on_primer_read_count,
+            final_read_count = final_read_count,
+            discarded_read_counts = discarded_read_counts,
+            classification_read_counts = classification_read_counts,
+            classification_indel_read_counts = classification_indel_read_counts,
+            suppress_plots = settings['suppress_plots']
+            )
+
     if final_summary_plot_obj is not None:
         final_summary_plot_obj.order= 1
         summary_plot_objects.append(final_summary_plot_obj)
@@ -317,8 +332,8 @@ def parse_settings(args):
     parser.add_argument('--suppress_plots',action='store_true',help='If true, no plotting will be performed')
 
 
-    parser.add_argument('--guide_sequences', nargs='*', help='Spacer sequences of guides (multiple guide sequences are separated by spaces). Spacer sequences must be provided without the PAM sequence, but oriented so the PAM would immediately follow the provided spacer sequence', default=[])
-    parser.add_argument('--cut_classification_annotations', nargs='*', help='User-customizable annotations for cut products in the form: chr1:234:left:Custom_label (multiple annotations are separated by spaces)', default=[])
+    parser.add_argument('--guide_sequences', nargs='+', help='Spacer sequences of guides (multiple guide sequences are separated by spaces). Spacer sequences must be provided without the PAM sequence, but oriented so the PAM would immediately follow the provided spacer sequence', action='extend', default=[])
+    parser.add_argument('--cut_classification_annotations', nargs='+', help='User-customizable annotations for cut products in the form: chr1:234:left:Custom_label (multiple annotations are separated by spaces)', action='extend', default=[])
     parser.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
 
     parser.add_argument('--genome', help='Genome sequence file for alignment. This should point to a file ending in ".fa", and the accompanying index file (".fai") should exist.', default=None)
@@ -411,7 +426,7 @@ def parse_settings(args):
     if 'root' in settings_file_args:
         settings['root'] = settings_file_args['root']
         settings_file_args.pop('root')
-    if cmd_args.root is None:
+    if settings['root'] is None:
         if len(cmd_args.settings_file) > 0:
             settings['root'] = cmd_args.settings_file[0] + ".CRISPRlungo"
         else:
@@ -2696,8 +2711,7 @@ k
     other_tx_count = 0 #number of locations not plotted
     other_tx_read_count = 0 # number of reads to other locations not plotted
     if len(sorted_tx_list) > top_number_to_plot:
-        logger.debug('Plotting translocations')
-        for i in range(21,len(sorted_tx_list)):
+        for i in range(top_number_to_plot,len(sorted_tx_list)):
             other_tx_count += 1
             other_tx_read_count += final_cut_counts[sorted_tx_list[i]]
 
@@ -2771,6 +2785,7 @@ k
         summary.write("\t".join(classification_indel_labels)+"\n")
         summary.write("\t".join([str(x) for x in classification_indel_counts])+"\n")
     if len(top_sorted_tx_list) > 0 and not suppress_plots:
+        logger.debug('Plotting translocations')
         # make tx order plot
         if origin_chr is None:
             left_label = 'Exogenous'
@@ -3584,7 +3599,8 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
     if plot_black_white:
         cmap = plt.cm.Greys
     arcdata_dict = defaultdict(dict)
-    for tx_key,tx_count in sorted_tx_keys_to_plot:
+    # reverse so the highest counts get plotted last/on top
+    for tx_key,tx_count in sorted_tx_keys_to_plot[::-1]:
         tx_chr,tx_loc = tx_key.split(":")
         tx_loc = int(tx_loc)
         name1  = origin_chr
@@ -3602,7 +3618,7 @@ def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root
         if color_pct < 0.1:
             color_pct = 0.1
         if plot_black_white:
-            circle.chord_plot(source, destination, edgecolor='k',facecolor=cmap(color_pct))
+            circle.chord_plot(source, destination,facecolor=cmap(color_pct),linewidth=color_pct,edgecolor=cmap(color_pct))
         else:
             circle.chord_plot(source, destination, edgecolor=circle.garc_dict[name2].facecolor,linewidth=color_pct*4)
 
@@ -3631,7 +3647,7 @@ def read_command_output(command):
 
 def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_for_crispresso,cut_classification_lookup,cut_annotations,
         av_read_length,origin_seq,cleavage_offset,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,crispresso_quant_window_size,
-        run_crispresso_on_novel_sites,samtools_command,crispresso_command,n_processes=1):
+        run_crispresso_on_novel_sites,samtools_command,crispresso_command,n_processes=1,use_counts_from_both_sides_of_cuts=True):
     """
     Prepares reads for analysis by crispresso2
     Frequently-aligned locations with a min number of reads (crispresso_min_count) are identified
@@ -3657,6 +3673,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         samtools_command: location of samtools to run
         crispresso_command: location of crispresso to run
         n_processes: number of processes to run CRISPResso commands on
+        use_counts_from_both_sides_of_cuts: boolean; cuts must have at least cut_counts_for_crispresso reads aligned to them for crispresso analysis. If use_counts_from_both_sides_of_cuts is true, this count is the sum of the number of left and right reads. Otherwise if false, the count is only the left (or right) count. If use_counts_from_both_sides_of_cuts, for sites where the left or right side has a lot of reads, both sides will be analyzed by CRISPResso (if they have reads)
 
     Returns:
         crispresso_infos: dict containing metadata about each crispresso run
@@ -3712,7 +3729,15 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
 
         this_cut = read_ids_for_crispresso[read_id]
 
-        if cut_counts_for_crispresso[this_cut] < crispresso_min_count:
+        this_count = cut_counts_for_crispresso[this_cut]
+        if use_counts_from_both_sides_of_cuts:
+            this_cut_els = this_cut.split(":")
+            this_cut_pos = ":".join(this_cut_els[0:2])
+            left_count = cut_counts_for_crispresso[this_cut_pos+":left"]
+            right_count = cut_counts_for_crispresso[this_cut_pos+":right"]
+            this_count = left_count + right_count
+
+        if this_count < crispresso_min_count or cut_counts_for_crispresso[this_cut] == 0:
             continue
 
         if this_cut not in cut_names:
@@ -3794,7 +3819,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         if not run_crispresso_on_novel_sites and 'Novel' in cut_classification_lookup[cut]:
             run_this_one = 'False: novel location'
 
-        if printed_cuts[cut] < crispresso_min_count:
+        if not use_counts_from_both_sides_of_cuts and printed_cuts[cut] < crispresso_min_count:
             run_this_one = 'False: too few reads (' + str(printed_cuts[cut]) + ')'
         crispresso_infos.append({
                 "cut":cut,
