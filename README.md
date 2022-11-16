@@ -1,5 +1,5 @@
 # CRISPRlungo
-Genome Editing Analysis of Long UNidirectional sequencing for GenOme Rearrangements
+Genome Editing AnaLysis of UNidirectional sequencing for GenOme rearrangements
 
 CRISPRlungo enables the analysis of single-anchor amplicon sequencing data through quantifying complex genome editing outcomes, identifying novel cut points, and using a biologically-aware alignment method to precisely measure small insertions and deletions. 
 
