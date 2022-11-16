@@ -1,4 +1,5 @@
 import sys
+import os
 from collections import defaultdict
 import CRISPRlungo
 import multiprocessing
@@ -6,12 +7,30 @@ import multiprocessing.pool
 import logging
 
 def processBatch(arg_els):
+    usage_str = 'Usage: CRISPRlungoBatch.py {batch file} {settings file} {?--batch_processes int} {additional settings}'
 
     #batch_file #settings_file #list of other settings
     sep = "\t"
     if len(arg_els) < 2:
-        raise Exception('Usage: CRISPRlungoBatch.py {batch file} {settings file} {additional settings}')
+        raise Exception(usage_str)
+
+    batch_process_count = 1
+    for idx,arg in enumerate(arg_els):
+        if arg == '--batch_processes':
+            if len(arg_els) < idx+1:
+                raise Exception('batch_processes parameter must be an integer')
+            try:
+                batch_process_count = int(arg_els[idx+1])
+            except ValueError:
+                raise Exception('batch_processes parameter must be an integer (got "%s")'%arg_els[idx+1])
+            arg_els.pop(idx) #pop arg name
+            arg_els.pop(idx) #pop value
+
     batch_file = arg_els[1]
+
+    if not os.path.isfile(batch_file):
+        raise Exception('Cannot find batch file "'+batch_file+'"\n'+usage_str)
+
 
     logger = logging.getLogger('CRISPRlungoBatch')
     logging_level = logging.INFO
@@ -41,7 +60,6 @@ def processBatch(arg_els):
     if len(arg_els) > 2:
         sub_arg_els = arg_els[2:]
 
-
     settings_arr = []
     names_arr = []
     with open(batch_file,'r') as fin:
@@ -56,10 +74,10 @@ def processBatch(arg_els):
             line_idx += 1
             if line_els == ['']:
                 continue
-                
+
             if len(line_els) != len(head_els):
                 raise Exception('Incorrect number of items on line ' + str(line_idx) + ' (got ' + str(len(line_els)) + ' expected ' + str(len(head_els)) + ')')
-            
+
             this_name = ''
             this_command_args = ['CRISPRlungo']
             for idx in range(len(line_els)):
@@ -83,11 +101,10 @@ def processBatch(arg_els):
             except Exception as e:
                 raise Exception('Error in parsing ' + batch_file + ' line ' + str(line_idx)+ ":\n" + str(e)) from e
 
-    this_n_processes = settings_arr[0]['n_processes']
-    logger.info('Running CRISPRlungo with %d processes'%this_n_processes)
+    logger.info('Running CRISPRlungo with %d processes'%batch_process_count)
     result_summary_files = []
-    with NonDaemonPool(processes=this_n_processes) as pool:
-        result_summary_files = pool.map(CRISPRlungo.processCRISPRlungo,settings_arr)
+    with NonDaemonPool(processes=batch_process_count) as pool:
+        result_summary_files = pool.map(runOneCRISPRlungo,settings_arr)
 
     if len(result_summary_files) != len(names_arr):
         raise Exception('Number of results and number of input batches does not match')
@@ -135,6 +152,13 @@ def processBatch(arg_els):
     logger.info('Printed ' + output_summary_file)
     logger.info('Finished')
 
+def runOneCRISPRlungo(settings):
+    logger = logging.getLogger('CRISPRlungoBatch')
+    logger.info('Running ' + settings['root'])
+    final_file = CRISPRlungo.processCRISPRlungo(settings)
+    logger.info('Finished ' + settings['root'])
+    return final_file
+
 class NonDaemonPool(multiprocessing.pool.Pool):
     """
     Pool that is not daemonic so it can have children
@@ -162,6 +186,8 @@ if __name__ == "__main__":
     try:
         processBatch(sys.argv)
     except Exception as e:
-        print(str(e))
-        raise(e)
-        raise SystemExit(e)
+        if '--debug' in sys.argv:
+            raise e
+        else:
+            print(str(e))
+            sys.exit(1)
