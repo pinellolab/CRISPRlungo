@@ -1831,7 +1831,7 @@ k
             line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) == 9:
                 (total_reads_processed,total_r1_processed,discarded_reads_unaligned,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total) = [int(x) for x in line_els]
-                discarded_read_counts = [('Not primary alignment',discarded_reads_unaligned),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Poor alignment',discarded_reads_poor_alignment)]
+                discarded_read_counts = [('Unaligned',discarded_reads_unaligned),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Poor alignment',discarded_reads_poor_alignment)]
                 classification_categories = fin.readline().rstrip('\n').split("\t")
                 classification_category_counts_str_els = fin.readline().rstrip('\n').split("\t")
                 classification_category_counts = [int(x) for x in classification_category_counts_str_els]
@@ -1970,7 +1970,6 @@ k
     seen_read_counts_for_dedup = {} # how many times each umi/loc was seen
     total_reads_processed = 0 # includes pairs
     total_r1_processed = 0
-    tmp_var1 = 0
     discarded_reads_unaligned = 0 #count of pairs
     discarded_reads_duplicates = 0
     discarded_reads_poor_alignment = 0
@@ -2014,7 +2013,7 @@ k
             if read_is_not_primary_alignment:
                 discarded_reads_unaligned += 1
                 if write_discarded_read_info:
-                    fout_discarded.write(line_els[0]+'\tNot primary alignment\t'+line_els[1]+"\n")
+                    fout_discarded.write(line_els[0]+'\tUnaligned\t'+line_els[1]+"\n")
                 continue
 
             line_unmapped = int(line_els[1]) & 0x4
@@ -2026,22 +2025,6 @@ k
 
             (line_info, primer_trimmed_len_str) = line_els[0].split(" primer_len=")
             primer_trimmed_len = int(primer_trimmed_len_str)
-
-            barcode = line_info.split(":")[-1]
-            aln1 = line_els[2] + ":" + line_els[3]
-            aln2 = line_els[6] + ":" + line_els[7] # if unpaired, this will just be *:0, so we can still use it in our key
-            tlen = abs(int(line_els[8]))
-            key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
-            if key in seen_reads_for_dedup:
-                seen_read_counts_for_dedup[key] += 1
-                if not suppress_dedup_on_aln_pos_and_UMI_filter:
-                    discarded_reads_duplicates += 1
-                    if write_discarded_read_info:
-                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[key]+'('+key+')\n')
-                    continue
-            else:
-                seen_reads_for_dedup[key] = line_els[0]
-                seen_read_counts_for_dedup[key] = 1
 
             left_matches = 0
             right_matches = 0
@@ -2090,8 +2073,6 @@ k
                 end_clipped = tmp
                 cut_direction = "left"
 
-
-            tmp_var1 += 1
             curr_position = "%s:%s-%s"%(line_chr,line_start,line_end)
             cut_pos = "%s:%s"%(line_chr,line_start)
 
@@ -2151,6 +2132,24 @@ k
                         fout_discarded.write(line_els[0]+'\tNot supported by R2\t'+r1_r2_support_status+'\n')
                     continue
             #done setting r1/r2 support status for paired reads
+
+            #as a last step, deduplicate
+            barcode = line_info.split(":")[-1]
+            aln1 = line_els[2] + ":" + line_els[3]
+            aln2 = line_els[6] + ":" + line_els[7] # if unpaired, this will just be *:0, so we can still use it in our key
+            tlen = abs(int(line_els[8]))
+            key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
+            if key in seen_reads_for_dedup:
+                seen_read_counts_for_dedup[key] += 1
+                if not suppress_dedup_on_aln_pos_and_UMI_filter:
+                    discarded_reads_duplicates += 1
+                    if write_discarded_read_info:
+                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[key]+'('+key+')\n')
+                    continue
+            else:
+                seen_reads_for_dedup[key] = line_els[0]
+                seen_read_counts_for_dedup[key] = 1
+            #finished deduplication by barcode and aln position
 
             cut_points_by_chr[line_chr][line_start] += 1
             insert_size = 'None'
