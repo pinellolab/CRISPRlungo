@@ -177,9 +177,9 @@ def processCRISPRlungo(settings):
                 arm_max_clipped_bases = settings['arm_max_clipped_bases'],
                 genome_map_resolution = 1000000,
                 crispresso_max_indel_size = settings['crispresso_max_indel_size'],
-                dedup_input_based_on_aln_pos_and_UMI = settings['dedup_input_based_on_aln_pos_and_UMI'],
-                discard_reads_without_r2_support = settings['discard_reads_without_r2_support'],
-                discard_reads_with_poor_alignment = settings['discard_reads_with_poor_alignment'],
+                suppress_dedup_on_aln_pos_and_UMI_filter = settings['suppress_dedup_on_aln_pos_and_UMI_filter'],
+                suppress_r2_support_filter = settings['suppress_r2_support_filter'],
+                suppress_poor_alignment_filter = settings['suppress_poor_alignment_filter'],
                 write_discarded_read_info = settings['write_discarded_read_info'],
                 samtools_command = settings['samtools_command'],
                 keep_intermediate = settings['keep_intermediate'],
@@ -367,7 +367,7 @@ def parse_settings(args):
     a_group.add_argument('--arm_max_clipped_bases', type=int, help='Maximum number of clipped bases at the beginning of the alignment. Bowtie2 alignment marks reads on the beginning or end of the read as "clipped" if they do not align to the genome. This could arise from CRISPR-induced insertions, or bad alignments. ' + \
         'We would expect to see clipped bases only on one side. This parameter sets the threshold for clipped bases on both sides of the read.  E.g. if arm_max_clipped_bases is 0, read alignments with more than 0bp on the right AND left side of the alignment would be discarded. An alignment with 5bp clipped on the left and 0bp clipped on the right would be accepted. An alignment with 5bp clipped on the left and 3bp clipped on the right would be discarded.', default=0)
     a_group.add_argument('--ignore_n', help='If set, "N" bases will be ignored. By default (False) N bases will count as mismatches in the number of bases required to match at each arm/side of the read', action='store_true')
-    a_group.add_argument('--discard_reads_with_poor_alignment', help='If set, reads with poor alignment (fewer than --arm_min_matched_start_bases mismatches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) are discarded from final analysis and counts', action='store_true')
+    a_group.add_argument('--suppress_poor_alignment_filter', help='If set, reads with poor alignment (fewer than --arm_min_matched_start_bases matches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) are included in final analysis and counts. By default they are excluded.', action='store_true')
 
     #CRISPResso settings
     c_group = parser.add_argument_group('CRISPResso settings')
@@ -390,13 +390,13 @@ def parse_settings(args):
     #umi settings
     u_group = parser.add_argument_group('UMI parameters')
     u_group.add_argument('--dedup_input_on_UMI', help='If set, input reads will be deduplicated based on UMI before alignment', action='store_true')
-    u_group.add_argument('--dedup_input_based_on_aln_pos_and_UMI', help='If set, perform deduplication based on alignment position and UMI.', action='store_true')
+    u_group.add_argument('--suppress_dedup_on_aln_pos_and_UMI_filter', help='If set, reads that are called as deduplicates based on alignment position and UMI will be included in final analysis and counts. By default, these reads are excluded.', action='store_true')
     u_group.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match', default='NNWNNWNNN')
 
     #R1/R2 support settings
     r_group = parser.add_argument_group('R1/R2 support settings')
     r_group.add_argument('--r1_r2_support_max_distance', type=int, help='Max distance between r1 and r2 for the read pair to be classified as "supported" by r2', default=10000)
-    r_group.add_argument('--discard_reads_without_r2_support', help='If set, reads without r2 support will be discarded from final analysis and counts', action='store_true')
+    r_group.add_argument('--suppress_r2_support_filter', help='If set, reads without r2 support will be included in final analysis and counts. By default these reads are excluded.', action='store_true')
 
 
     cmd_args = parser.parse_args(args[1:])
@@ -557,10 +557,10 @@ def parse_settings(args):
         settings['ignore_n'] = (settings_file_args['ignore_n'].lower() == 'true')
         settings_file_args.pop('ignore_n')
 
-    settings['discard_reads_with_poor_alignment'] = cmd_args.discard_reads_with_poor_alignment
-    if 'discard_reads_with_poor_alignment' in settings_file_args:
-        settings['discard_reads_with_poor_alignment'] = (settings_file_args['discard_reads_with_poor_alignment'].lower() == 'true')
-        settings_file_args.pop('discard_reads_with_poor_alignment')
+    settings['suppress_poor_alignment_filter'] = cmd_args.suppress_poor_alignment_filter
+    if 'suppress_poor_alignment_filter' in settings_file_args:
+        settings['suppress_poor_alignment_filter'] = (settings_file_args['suppress_poor_alignment_filter'].lower() == 'true')
+        settings_file_args.pop('suppress_poor_alignment_filter')
 
     settings['run_crispresso_on_novel_sites'] = cmd_args.run_crispresso_on_novel_sites
     if 'run_crispresso_on_novel_sites' in settings_file_args:
@@ -641,10 +641,10 @@ def parse_settings(args):
         settings['dedup_input_on_UMI'] = (settings_file_args['dedup_input_on_UMI'].lower() == 'true')
         settings_file_args.pop('dedup_input_on_UMI')
 
-    settings['dedup_input_based_on_aln_pos_and_UMI'] = cmd_args.dedup_input_based_on_aln_pos_and_UMI
-    if 'dedup_input_based_on_aln_pos_and_UMI' in settings_file_args:
-        settings['dedup_input_based_on_aln_pos_and_UMI'] = (settings_file_args['dedup_input_based_on_aln_pos_and_UMI'].lower() == 'true')
-        settings_file_args.pop('dedup_input_based_on_aln_pos_and_UMI')
+    settings['suppress_dedup_on_aln_pos_and_UMI_filter'] = cmd_args.suppress_dedup_on_aln_pos_and_UMI_filter
+    if 'suppress_dedup_on_aln_pos_and_UMI_filter' in settings_file_args:
+        settings['suppress_dedup_on_aln_pos_and_UMI_filter'] = (settings_file_args['suppress_dedup_on_aln_pos_and_UMI_filter'].lower() == 'true')
+        settings_file_args.pop('suppress_dedup_on_aln_pos_and_UMI_filter')
 
     settings['umi_regex'] = cmd_args.umi_regex
     if 'umi_regex' in settings_file_args:
@@ -656,10 +656,10 @@ def parse_settings(args):
         settings['r1_r2_support_max_distance'] = int(settings_file_args['r1_r2_support_max_distance'])
         settings_file_args.pop('r1_r2_support_max_distance')
 
-    settings['discard_reads_without_r2_support'] = cmd_args.discard_reads_without_r2_support
-    if 'discard_reads_without_r2_support' in settings_file_args:
-        settings['discard_reads_without_r2_support'] = (settings_file_args['discard_reads_without_r2_support'].lower() == 'true')
-        settings_file_args.pop('discard_reads_without_r2_support')
+    settings['suppress_r2_support_filter'] = cmd_args.suppress_r2_support_filter
+    if 'suppress_r2_support_filter' in settings_file_args:
+        settings['suppress_r2_support_filter'] = (settings_file_args['suppress_r2_support_filter'].lower() == 'true')
+        settings_file_args.pop('suppress_r2_support_filter')
 
     settings['fastq_r1'] = cmd_args.fastq_r1
     if 'fastq_r1' in settings_file_args:
@@ -1755,8 +1755,8 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
 def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     cut_sites,cut_annotations,cut_classification_annotations,guide_seqs,cleavage_offset,min_primer_length,genome,r1_r2_support_max_distance=100000,
     cut_merge_dist=100,collapse_to_homology_dist=10000,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
-    arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,dedup_input_based_on_aln_pos_and_UMI=False,
-    discard_reads_without_r2_support=False,discard_reads_with_poor_alignment=False,write_discarded_read_info=False,
+    arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,suppress_dedup_on_aln_pos_and_UMI_filter=False,
+    suppress_r2_support_filter=False,suppress_poor_alignment_filter=False,write_discarded_read_info=False,
     samtools_command='samtools',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
     """
     Makes final read assignments (after deduplicating based on UMI and alignment location)
@@ -1783,8 +1783,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         genome_map_resolution: window size (bp) for reporting number of reads aligned
         crispresso_max_indel_size: maximum length of indel (as determined by genome alignment position) for a read to be analyzed by CRISPResso. Reads with indels longer than this length will not be analyzed by CRISPResso.
         dedup_based_on_aln_pos: if true, reads with the same UMI and alignment positions will be removed from analysis
-        discard_reads_without_r2_support: if true, reads without r2 support will be discarded from final analysis and counts
-        discard_reads_with_poor_alignment: if true, discard reads with poor alignment (fewer than --arm_min_matched_start_bases mismatches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) 
+        suppress_r2_support_filter: if true, reads without r2 support will be included in final analysis and counts. If false, reads without r2 support will be filtered from the final analysis.
+        suppress_poor_alignment_filter: if true, reads with poor alignment (fewer than --arm_min_matched_start_bases matches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) are included in the final analysis and counts. If false, reads with poor alignment are filtered from the final analysis.
         write_discarded_read_info: if true, files are written containing info for reads that are discarded from final analysis
         samtools_command: location of samtools to run
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
@@ -1830,8 +1830,8 @@ k
             head_line = fin.readline()
             line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) == 9:
-                (total_reads_processed,total_r1_processed,discarded_reads_not_primary_aln,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total) = [int(x) for x in line_els]
-                discarded_read_counts = [('Not primary alignment',discarded_reads_not_primary_aln),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Poor alignment',discarded_reads_poor_alignment)]
+                (total_reads_processed,total_r1_processed,discarded_reads_unaligned,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total) = [int(x) for x in line_els]
+                discarded_read_counts = [('Not primary alignment',discarded_reads_unaligned),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Poor alignment',discarded_reads_poor_alignment)]
                 classification_categories = fin.readline().rstrip('\n').split("\t")
                 classification_category_counts_str_els = fin.readline().rstrip('\n').split("\t")
                 classification_category_counts = [int(x) for x in classification_category_counts_str_els]
@@ -1971,7 +1971,7 @@ k
     total_reads_processed = 0 # includes pairs
     total_r1_processed = 0
     tmp_var1 = 0
-    discarded_reads_not_primary_aln = 0 #count of pairs
+    discarded_reads_unaligned = 0 #count of pairs
     discarded_reads_duplicates = 0
     discarded_reads_poor_alignment = 0
     discarded_reads_not_supported_by_R2 = 0
@@ -2012,14 +2012,14 @@ k
 
             read_is_not_primary_alignment = int(line_els[1]) & 0x100
             if read_is_not_primary_alignment:
-                discarded_reads_not_primary_aln += 1
+                discarded_reads_unaligned += 1
                 if write_discarded_read_info:
                     fout_discarded.write(line_els[0]+'\tNot primary alignment\t'+line_els[1]+"\n")
                 continue
 
             line_unmapped = int(line_els[1]) & 0x4
             if line_unmapped:
-                discarded_reads_not_primary_aln += 1
+                discarded_reads_unaligned += 1
                 if write_discarded_read_info:
                     fout_discarded.write(line_els[0]+'\tUnmapped\t'+line_els[1]+"\n")
                 continue
@@ -2034,10 +2034,10 @@ k
             key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
             if key in seen_reads_for_dedup:
                 seen_read_counts_for_dedup[key] += 1
-                if dedup_input_based_on_aln_pos_and_UMI:
+                if not suppress_dedup_on_aln_pos_and_UMI_filter:
                     discarded_reads_duplicates += 1
                     if write_discarded_read_info:
-                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[key]+"\n")
+                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[key]+'('+key+')\n')
                     continue
             else:
                 seen_reads_for_dedup[key] = line_els[0]
@@ -2064,15 +2064,15 @@ k
 
             seq = line_els[9]
             is_rc = int(line_els[1]) & 0x10
-        
-            if discard_reads_with_poor_alignment and \
+
+            if not suppress_poor_alignment_filter and \
                     ((start_clipped > arm_max_clipped_bases and end_clipped > arm_max_clipped_bases) or \
                     left_matches < arm_min_matched_start_bases or \
                     right_matches < arm_min_matched_start_bases):
 
                 discarded_reads_poor_alignment += 1
                 if write_discarded_read_info:
-                    fout_discarded.write(line_els[0]+'\tPoor alignment\tUnmapped: clipped: ['+str(start_clipped)+','+str(end_clipped)+'] matches: ['+str(left_matches)+','+str(right_matches)+']\n')
+                    fout_discarded.write(line_els[0]+'\tPoor alignment\tclipped: ['+str(start_clipped)+','+str(end_clipped)+'] matches: ['+str(left_matches)+','+str(right_matches)+']\n')
                 continue
 
             line_chr = line_els[2]
@@ -2145,7 +2145,7 @@ k
                     r1_r2_support_distances[int(r1_r2_support_dist)] += 1
                 elif r1_r2_support_status == r1_r2_support_str_not_supported_distance:
                     r1_r2_not_support_distances[int(r1_r2_support_dist)] += 1
-                if discard_reads_without_r2_support and r1_r2_support_status != r1_r2_support_str_supported:
+                if not suppress_r2_support_filter and r1_r2_support_status != r1_r2_support_str_supported:
                     discarded_reads_not_supported_by_R2 += 1
                     if write_discarded_read_info:
                         fout_discarded.write(line_els[0]+'\tNot supported by R2\t'+r1_r2_support_status+'\n')
@@ -2277,9 +2277,9 @@ k
         plt.savefig(deduplication_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(deduplication_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        dedup_note = ". Note that deduplication of reads by alignment position and UMI is not performed by default. To enable deduplication, set the parameter --dedup_input_based_on_aln_pos_and_UMI."
-        if dedup_input_based_on_aln_pos_and_UMI:
-            dedup_note = ". Deduplication based on alignment and UMI position is performed because the flag --dedup_input_based_on_aln_pos_and_UMI is set."
+        dedup_note = ". Note that deduplication of reads by alignment position and UMI is performed by default. To disable deduplication, set the parameter --suppress_dedup_on_aln_pos_and_UMI_filter."
+        if suppress_dedup_on_aln_pos_and_UMI_filter:
+            dedup_note = ". Deduplication based on alignment and UMI position is not performed because the flag --suppress_dedup_on_aln_pos_and_UMI_filter is set."
 
         deduplication_plot_obj = PlotObject(
                 plot_name = deduplication_plot_obj_root,
@@ -3251,9 +3251,9 @@ k
         ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
         ax.set_title('R1/R2 support status')
 
-        discard_str = '(Reads without R1/R2 support are currently included in the final analyses. Set the --discard_reads_without_r2_support flag to discard these reads.)'
-        if discard_reads_without_r2_support:
-            discard_str = '(Reads without R1/R2 support are currently excluded from the final analyses because the --discard_reads_without_r2_support flag is set.)'
+        discard_str = '(Reads without R1/R2 support are currently excluded from the final analyses. Set the --suppress_r2_support_filter flag to include these reads.)'
+        if suppress_r2_support_filter:
+            discard_str = '(Reads without R1/R2 support are currently included in the final analyses because the --suppress_r2_support_filter flag is set.)'
         plt.savefig(r1_r2_support_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(r1_r2_support_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
@@ -3325,8 +3325,8 @@ k
                 )
 
     discarded_reads_plot_obj_root = root+".discarded_reads"
-    labels = ['Not primary alignment','Duplicate','Poor alignment','Not supported by R2']
-    values = [discarded_reads_not_primary_aln,discarded_reads_duplicates,discarded_reads_poor_alignment,discarded_reads_not_supported_by_R2]
+    labels = ['Unaligned','Duplicate','Poor alignment','Not supported by R2']
+    values = [discarded_reads_unaligned,discarded_reads_duplicates,discarded_reads_poor_alignment,discarded_reads_not_supported_by_R2]
     with open(discarded_reads_plot_obj_root+".txt",'w') as summary:
         summary.write("\t".join(labels)+"\n")
         summary.write("\t".join([str(x) for x in values])+"\n")
@@ -3347,26 +3347,25 @@ k
         plt.savefig(plot_name+".png",pad_inches=1,bbox_inches='tight')
         plot_count_str = "<br>".join(["%s N=%d"%x for x in zip(labels,values)])
 
-        discarded_count = discarded_reads_not_primary_aln+discarded_reads_duplicates+discarded_reads_poor_alignment+discarded_reads_not_supported_by_R2
+        discarded_count = discarded_reads_unaligned+discarded_reads_duplicates+discarded_reads_poor_alignment+discarded_reads_not_supported_by_R2
 
-        discard_r1r2_str = '(Reads without R1/R2 support are currently included in the final analyses. Set the --discard_reads_without_r2_support flag to discard these reads.)'
-        if discard_reads_without_r2_support:
-            discard_r2r1_str = '(Reads without R1/R2 support are currently excluded from the final analyses because the --discard_reads_without_r2_support flag is set.)'
+        discard_r1r2_str = '(Reads without R1/R2 support are currently excluded from the final analyses. Set the --suppress_r2_support_filter flag to include these reads.)'
+        if suppress_r2_support_filter:
+            discard_r1r2_str = '(Reads without R1/R2 support are currently included in the final analyses because the --suppress_r2_support_filter flag is set.)'
+        discard_dup_str = '(Reads that may be duplicates based on UMI/alignment position are currently excluded from the final analyses. Set the --suppress_dedup_on_aln_pos_and_UMI_filter flag to include these reads.)'
+        if suppress_dedup_on_aln_pos_and_UMI_filter:
+            discard_dup_str = '(Duplicate reads based on UMI/alignment position are currently included in the final analyses because the --suppress_dedup_on_aln_pos_and_UMI_filter flag is set.)'
 
-        discard_dup_str = '(Reads that may be duplicates based on UMI/alignment position are currently included in the final analyses. Set the --dedup_input_based_on_aln_pos_and_UMI flag to discard these reads.)'
-        if discard_reads_without_r2_support:
-            discard_dup_str = '(Duplicate reads based on UMI/alignment position are currently excluded from the final analyses because the --dedup_input_based_on_aln_pos_and_UMI flag is set.)'
-
-        discard_poor_aln_str = '(Reads with poor alignment are currently included in the final analyses. Set the --discard_reads_with_poor_alignment flag to discard these reads.)'
-        if discard_reads_without_r2_support:
-            discard_poor_aln_str = '(Reads with poor alignment are currently excluded from the final analyses because the --discard_reads_with_poor_alignment flag is set.)'
+        discard_poor_aln_str = '(Reads with poor alignment are currently excluded from the final analyses. Set the --suppress_poor_alignment_filter flag to include these reads.)'
+        if suppress_poor_alignment_filter:
+            discard_poor_aln_str = '(Reads with poor alignment are currently included in the final analyses because the --suppress_poor_alignment_filter flag is set.)'
 
 
         discarded_reads_plot_obj = PlotObject(
                 plot_name = discarded_reads_plot_obj_root,
                 plot_title = 'Discarded read count summary',
                 plot_label = str(discarded_count) + '/'+str(total_r1_processed) + ' reads were discarded.<br>'+str(final_total_count) + ' R1 reads were used for the final analysis. <br>' + plot_count_str + '<br>' +
-                    discard_dup_str + '<br>' + discard_poor_aln_str + '<br>' + discard_r1r2_str + '<br>Poor alignment: Reads are unaligned (as determined by the aligner), or the front AND back of the read have greater than ' + 
+                    discard_dup_str + '<br>' + discard_poor_aln_str + '<br>' + discard_r1r2_str + '<br>Poor alignment: Reads are aligned such that the front AND back of the read have greater than ' +
                     str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have greater than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
                 plot_datas = [
                     ('Discarded reads summary',discarded_reads_plot_obj_root + ".txt")
@@ -3376,8 +3375,8 @@ k
         discarded_reads_plot_obj.datas.append(('Discarded reads',discarded_read_file))
 
     with open(info_file,'w') as fout:
-        fout.write("\t".join(['total_reads_processed','total_r1_processed','discarded_reads_not_primary_alignment','discarded_reads_duplicates','discarded_reads_not_supported_by_R2','discarded_reads_poor_alignment','final_read_count','discovered_cut_point_count','final_cut_point_count'])+"\n")
-        fout.write("\t".join(str(x) for x in [total_reads_processed,total_r1_processed,discarded_reads_not_primary_aln,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total])+"\n")
+        fout.write("\t".join(['total_reads_processed','total_r1_processed','discarded_reads_unaligned','discarded_reads_duplicates','discarded_reads_not_supported_by_R2','discarded_reads_poor_alignment','final_read_count','discovered_cut_point_count','final_cut_point_count'])+"\n")
+        fout.write("\t".join(str(x) for x in [total_reads_processed,total_r1_processed,discarded_reads_unaligned,discarded_reads_duplicates,discarded_reads_not_supported_by_R2,discarded_reads_poor_alignment,final_total_count,found_cut_point_total,final_cut_point_total])+"\n")
         fout.write(classification_read_counts_str)
         fout.write(classification_indel_read_counts_str)
         classification_json_str = json.dumps(cut_classification_lookup,separators=(',',':'))
@@ -3464,7 +3463,7 @@ k
             logger.debug('Removing genome alignment bam index file: ' + genome_mapped_bam + ".bai")
             os.remove(genome_mapped_bam + ".bai")
 
-    discarded_read_counts = [('Not primary alignment',discarded_reads_not_primary_aln),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Bad alignment',discarded_reads_poor_alignment)]
+    discarded_read_counts = [('Unaligned',discarded_reads_unaligned),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Bad alignment',discarded_reads_poor_alignment)]
     return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_total_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,tx_circos_plot_obj,classification_plot_obj,classification_indel_plot_obj,
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,

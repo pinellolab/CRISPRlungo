@@ -144,11 +144,11 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
                         N bases will count as mismatches in the number of
                         bases required to match at each arm/side of the read
                         (default: False)
-  --discard_reads_with_poor_alignment
+  --suppress_poor_alignment_filter
                         If set, reads with poor alignment (fewer than
-                        --arm_min_matched_start_bases mismatches at the
+                        --arm_min_matched_start_bases matches at the
                         alignment ends or more than --arm_max_clipped_bases on
-                        both sides of the read) are discarded from final
+                        both sides of the read) are included in final
                         analysis and counts (default: False)
 ```
 #### CRISPResso settings:
@@ -195,9 +195,11 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
 ```
   --dedup_input_on_UMI  If set, input reads will be deduplicated based on UMI
                         before alignment (default: False)
-  --dedup_input_based_on_aln_pos_and_UMI
-                        If set, perform deduplication based on alignment
-                        position and UMI. (default: False)
+  --suppress_dedup_on_aln_pos_and_UMI_filter
+                        If set, suppress deduplication based on alignment
+                        position and UMI. By default reads are deduplicated 
+                        based on alignment position and UMI sequence before
+                        final analysis. (default: False)
   --umi_regex UMI_REGEX
                         String specifying regex that UMI must match (default:
                         NNWNNWNNN)
@@ -207,9 +209,10 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
   --r1_r2_support_max_distance R1_R2_SUPPORT_MAX_DISTANCE
                         Max distance between r1 and r2 for the read pair to be
                         classified as "supported" by r2 (default: 10000)
-  --discard_reads_without_r2_support
-                        If set, reads without r2 support will be discarded
-                        from final analysis and counts (default: False)
+  --suppress_r2_support_filter
+                        If set, reads without r2 support will be included
+                        in final analysis and counts. By default these reads 
+                        are excluded (default: False)
 
 
 ```
