@@ -2,7 +2,6 @@ import argparse
 from collections import defaultdict
 import ctypes
 import gzip
-import io
 import json
 import logging
 import matplotlib
@@ -41,7 +40,7 @@ def processCRISPRlungo(settings):
         return final_file
 
     #data structures for plots for report
-    summary_plot_objects=[]  # list of PlotObjects for plotting
+    summary_plot_objects = []  # list of PlotObjects for plotting
 
     assert_dependencies(
             cutadapt_command=settings['cutadapt_command'],
@@ -1631,7 +1630,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
                     adapter_too_short_read_count = int(m.group(1).replace(',',''))
 
         if post_trim_read_count == 'NA' or adapter_too_short_read_count == 'NA':
-            logger.error('Could not parse trim read count from file ' + cutadapt_log)
+            logger.error('Could not parse trim read count from file ' + cutadapt_transposase_log)
         too_short_read_count += adapter_too_short_read_count
 
         if not keep_intermediate:
@@ -2481,9 +2480,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     origin_depth_counts_100bp_primer = np.zeros(len(origin_seq)+1) #count deletions covering each base of primer (for those with deletions within 100bp)
     origin_depth_counts_100bp_total = 0 #count of total reads
 
-    origin_depth_counts_2500bp = np.zeros(2501) #2500bp count of the number of reads with deletions covering that position
-    origin_depth_counts_2500bp_primer = np.zeros(len(origin_seq)+1) #count reads covering each base of primer (for those with deletions within 2500bp)
-    origin_depth_counts_2500bp_total = 0 #count of total reads
+    long_distance = 100000
+    long_distance_str = '100kb'
+    origin_depth_counts_long = np.zeros(long_distance + 1) #long count of the number of reads with deletions covering that position
+    origin_depth_counts_long_primer = np.zeros(len(origin_seq)+1) #count reads covering each base of primer (for those with deletions within {long_distance})
+    origin_depth_counts_long_total = 0 #count of total reads
 
     read_id_ind = 0
     aln_ind = 1
@@ -2561,20 +2562,20 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                         origin_depth_counts_100bp_total += 1
                         origin_depth_counts_100bp[0:this_del_len+1] += 1
                         origin_depth_counts_100bp_primer[0:del_primer+1] += 1
-                    if this_del_len <= 2500:
-                        origin_depth_counts_2500bp_total += 1
-                        origin_depth_counts_2500bp[0:this_del_len+1] += 1
-                        origin_depth_counts_2500bp_primer[0:del_primer+1] += 1
+                    if this_del_len <= long_distance:
+                        origin_depth_counts_long_total += 1
+                        origin_depth_counts_long[0:this_del_len+1] += 1
+                        origin_depth_counts_long_primer[0:del_primer+1] += 1
                 elif origin_direction == 'right' and cut_point_direction == 'left' and aln_start <= origin_cut_pos: #  aln_start..cut<--origin_seq--primer (origin extends to the right from cut)
                     this_del_len = (aln_start - origin_cut_pos) * -1
                     if this_del_len <= 100:
                         origin_depth_counts_100bp_total += 1
                         origin_depth_counts_100bp[0:this_del_len+1] += 1
                         origin_depth_counts_100bp_primer[0:del_primer+1] += 1
-                    if this_del_len <= 2500:
-                        origin_depth_counts_2500bp_total += 1
-                        origin_depth_counts_2500bp[0:this_del_len+1] += 1
-                        origin_depth_counts_2500bp_primer[0:del_primer+1] += 1
+                    if this_del_len <= long_distance:
+                        origin_depth_counts_long_total += 1
+                        origin_depth_counts_long[0:this_del_len+1] += 1
+                        origin_depth_counts_long_primer[0:del_primer+1] += 1
 
             #finish iterating through read ids
         #close final file
@@ -2659,8 +2660,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     inner_pie_labels = []
     outer_pie_values = []
     inner_other_count = 0
-    outer_other_mod_count = 0
-    outer_other_unmod_count = 0
+    outer_other_counts = [0]*len(short_indel_categories)
     sum_inner = sum(noindel_pie_values)
     cutoff_pct = 0.05 #counts < this percent are shown as 'other'
     for label in classification_labels:
@@ -2679,14 +2679,14 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 outer_pie_values.extend(this_counts)
             else:
                 inner_other_count += this_sum
-                outer_other_unmod_count += this_counts[0]
-                outer_other_mod_count += this_counts[1]
+
+                for i in range(len(short_indel_categories)):
+                    outer_other_counts[i] += this_counts[i]
+
     if inner_other_count > 0:
         inner_pie_labels.append('Other\n('+str(inner_other_count) + ')')
         inner_pie_values.append(inner_other_count)
-        outer_pie_values.append(outer_other_unmod_count)
-        outer_pie_values.append(outer_other_mod_count)
-
+        outer_pie_values.extend(outer_other_counts)
 
     classification_indel_read_counts_str = "\t".join(classification_indel_labels)+"\n"+"\t".join([str(x) for x in classification_indel_counts])+"\n"
     classification_indel_read_counts = list(zip(classification_indel_labels,classification_indel_counts))
@@ -2929,7 +2929,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         classification_indel_plot_obj = PlotObject(
                 plot_name = classification_indel_plot_obj_root,
                 plot_title = 'Read Classification including indels',
-                plot_label = 'Read classification including annotations for presence of indels<br>Short indels: <=' +str(short_indel_length_cutoff)+'bp<br>Long indels: >'+str(short_indel_length_cutoff)+'bp<br>'+plot_count_str,
+                plot_label = 'Read classification including annotations for presence of indels<br>(Short indels: <=' +str(short_indel_length_cutoff)+'bp, Long indels: >'+str(short_indel_length_cutoff)+'bp)<br>'+plot_count_str,
                 plot_datas = [
                     ('Alignment classifications with indels',classification_indel_plot_obj_root + ".txt"),
                     ('Alignment classifications',classification_plot_obj_root + ".txt"),
@@ -3062,21 +3062,21 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         for (xval, yval) in zip(xs,ys):
             summary.write(str(xval)+"\t"+str(yval)+"\n")
 
-    origin_depth_counts_2500bp_plot_obj_root = root + ".origin_depth_counts_2500bp"
-    origin_depth_counts_2500bp = origin_depth_counts_2500bp_total - origin_depth_counts_2500bp
-    origin_depth_counts_2500bp_primer = origin_depth_counts_2500bp_total - origin_depth_counts_2500bp_primer
+    origin_depth_counts_long_plot_obj_root = root + ".origin_depth_counts_"+long_distance_str
+    origin_depth_counts_long = origin_depth_counts_long_total - origin_depth_counts_long
+    origin_depth_counts_long_primer = origin_depth_counts_long_total - origin_depth_counts_long_primer
 
-    xs_2500_primer = list(np.arange(-1*(len(origin_depth_counts_2500bp_primer)-1),0,1))
-    ys_2500_primer = list(np.flip(origin_depth_counts_2500bp_primer[1:]))
-    xs_2500_post = list(np.arange(1,len(origin_depth_counts_2500bp)))
-    ys_2500_post = list(origin_depth_counts_2500bp[1:])
+    xs_long_primer = list(np.arange(-1*(len(origin_depth_counts_long_primer)-1),0,1))
+    ys_long_primer = list(np.flip(origin_depth_counts_long_primer[1:]))
+    xs_long_post = list(np.arange(1,len(origin_depth_counts_long)))
+    ys_long_post = list(origin_depth_counts_long[1:])
 
-    xs_2500 = xs_2500_primer + xs_2500_post
-    ys_2500 = ys_2500_primer + ys_2500_post
+    xs_long = xs_long_primer + xs_long_post
+    ys_long = ys_long_primer + ys_long_post
 
-    with open(origin_indel_depth_plot_obj_root+"_2500bp.txt","w") as summary:
+    with open(origin_indel_depth_plot_obj_root+"_"+long_distance_str+".txt","w") as summary:
         summary.write('bpFromOriginCut\treadDepth\n')
-        for (xval, yval) in zip(xs_2500,ys_2500):
+        for (xval, yval) in zip(xs_long,ys_long):
             summary.write(str(xval)+"\t"+str(yval)+"\n")
 
     if suppress_plots:
@@ -3095,16 +3095,21 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         line2 = ax.axvline(0,color='r',ls='dotted')
         ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
 
-        # plot of coverage of 2500bp after cut
+        # plot of coverage of {long_distance} after cut
         ax = plt.subplot(212)
-        if len(origin_depth_counts_2500bp) > 0:
-            ax.bar(xs_2500_primer+xs_2500_post,ys_2500_primer+ys_2500_post)
+        all_long_xs = xs_long_primer+xs_long_post
+        all_long_ys = ys_long_primer+ys_long_post
+        inds_to_keep = list(range(0,len(all_long_xs),int(len(all_long_xs)/100)))
+        subset_long_xs = [all_long_xs[x] for x in inds_to_keep]
+        subset_long_ys = [all_long_ys[x] for x in inds_to_keep]
+        if len(origin_depth_counts_long) > 0:
+            ax.bar(subset_long_xs,subset_long_ys)
             ax.set_ymargin(0.05)
         else:
             ax.bar(0,0)
         ax.set_ylabel('Read depth (Number of reads)')
-        ax.set_title('Read depth of 2500bp after origin')
-        line1 = ax.axvline(xs_2500_primer[min_primer_length]+0.5,color='k',ls='dotted')
+        ax.set_title('Read depth of '+long_distance_str+' after origin')
+        line1 = ax.axvline(xs_long_primer[min_primer_length]+0.5,color='k',ls='dotted')
         line2 = ax.axvline(0,color='r',ls='dotted')
         ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
 
@@ -3115,9 +3120,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         if origin_chr is not None:
             primer_info = 'Origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) + ' and the origin extends ' + origin_direction + ' from the cut to the primer. The vertical red dotted line shows the origin location. '
         plot_label = 'Read depth surrounding origin. The top plot shows reads with deletions smaller than 100bp (N='+str(origin_depth_counts_100bp_total)+'). '+ \
-            'The bottom plot shows reads with deletions smaller than 2500bp (N='+str(origin_depth_counts_2500bp_total)+'). ' + primer_info + \
+            'The bottom plot shows reads with deletions smaller than '+long_distance_str+' (N='+str(origin_depth_counts_long_total)+'). ' + primer_info + \
             'The vertical black dotted line shows the minimum requred primer length (' + str(min_primer_length)+'bp) set by the parameter --min_primer_length.'
-        if sum(ys_2500) < 0:
+        if sum(ys_long) < 0:
             plot_label = '(No reads found at origin)'
 
         origin_indel_depth_plot_obj = PlotObject(
@@ -3125,7 +3130,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 plot_title = 'Read depth around origin',
                 plot_label = plot_label,
                 plot_datas = [('Depth around origin (100bp)',origin_indel_depth_plot_obj_root + "_100bp.txt"),
-                            ('Depth around origin (2500bp)',origin_indel_depth_plot_obj_root + "_2500bp.txt")]
+                            ('Depth around origin ('+long_distance_str+')',origin_indel_depth_plot_obj_root + "_"+long_distance_str+".txt")]
                 )
 
     #make r1/r2/support plots
@@ -4338,7 +4343,7 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
         final_read_count (int): Number of reads in final analysis
         discarded_read_counts (list): List of tuples (why read was discarded, number of reads)
         classification_read_counts (list): List of tuples (read classification, number of reads)
-        classification_indel_read_counts (list): List of tuples (read classification, number of reads) including 'short indels' category
+        classification_indel_read_counts (list): List of tuples (read classification, number of reads) including 'short indels' and 'long indels' categories
         suppress_plots: if true, plotting will be suppressed
 
     Returns:
