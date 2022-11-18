@@ -1,0 +1,2 @@
+Linear	Cas-OFFinder OB 3 translocation	My Annotation	Novel large inversion
+3	1	2	2

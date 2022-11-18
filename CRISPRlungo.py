@@ -26,7 +26,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.8"
+__version__ = "v0.1.9"
 
 def processCRISPRlungo(settings):
     """Run the CRISPRlungo pipeline
@@ -171,8 +171,9 @@ def processCRISPRlungo(settings):
                 min_primer_length = settings['min_primer_length'],
                 genome = settings['genome'],
                 r1_r2_support_max_distance = settings['r1_r2_support_max_distance'],
-                cut_merge_dist = settings['novel_cut_merge_distance'],
-                collapse_to_homology_dist = settings['homology_cut_merge_distance'],
+                novel_cut_merge_distance = settings['novel_cut_merge_distance'],
+                known_cut_merge_distance = settings['known_cut_merge_distance'],
+                origin_cut_merge_distance = settings['origin_cut_merge_distance'],
                 arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
                 arm_max_clipped_bases = settings['arm_max_clipped_bases'],
                 genome_map_resolution = 1000000,
@@ -343,8 +344,10 @@ def parse_settings(args):
     parser.add_argument('--fastq_r2', help='Input fastq r2 file', default=None)
     parser.add_argument('--fastq_umi', help='Input fastq umi file', default=None)
 
-    parser.add_argument('--novel_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) from each other (and not within homology_cut_merge_distance to a known/provided cut site or a site with homology to guide_sequences) will be merged into a single cut site. Variation in the cut sites or in the fragments produced may produce clusters of cut sites in a certain region. This parameter will merge novel cut sites within this distance into a single cut site.', default=100)
-    parser.add_argument('--homology_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) with a known/provided/homologous site will be merged to that site. Homologous sites are defined as those that have homology to guide_sequences. Novel cut sites farther than homology_cut_merge_distance will be merged into novel cut sites based on the parameter novel_cut_merge_distance.', default=10000)
+    parser.add_argument('--novel_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) from each other (and not within known_cut_merge_distance to a known/provided cut site or a site with homology to guide_sequences) will be merged into a single cut site. Variation in the cut sites or in the fragments produced may produce clusters of cut sites in a certain region. This parameter will merge novel cut sites within this distance into a single cut site.', default=50)
+    parser.add_argument('--known_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) with a known/provided/homologous site (that is not the origin) will be merged to that site. Homologous sites are defined as those that have homology to guide_sequences. Novel cut sites farther than known_cut_merge_distance will be merged into novel cut sites based on the parameter novel_cut_merge_distance.', default=50)
+    parser.add_argument('--origin_cut_merge_distance', type=int, help='Reads aligned within this distance (bp) to the origin site will be merged to that origin.', default=10000)
+    parser.add_argument('--short_indel_length_cutoff', type=int, help='For reads aligned to a cut site, indels this size or shorter are classified as "short indels" while indels larger than this size are classified as "long indels" ', default=50)
 
     #for finding offtargets with casoffinder
     ot_group = parser.add_argument_group('In silico off-target search parameters')
@@ -480,27 +483,42 @@ def parse_settings(args):
     if 'suppress_plots' in settings_file_args:
         settings['suppress_plots'] = (settings_file_args['suppress_plots'].lower() == 'true')
         settings_file_args.pop('suppress_plots')
-    
-    settings['cut_classification_annotations'] = cmd_args.cut_classification_annotations
+
+    settings['cut_classification_annotations'] = []
+    annotations_arr = cmd_args.cut_classification_annotations
     if 'cut_classification_annotations' in settings_file_args:
-        settings['cut_classification_annotations'] = settings_file_args['cut_classification_annotations'].split(" ")
-        for idx,arg in enumerate(settings['cut_classification_annotations']):
-            arg_els = arg.split(":")
-            if len(arg_els) != 4: # chr:pos:direction:annotation
-                parser.print_usage()
-                raise Exception('Error: cut classification annotations must contain 4 elements (e.g. chr1:234:left:my_annotation). Please check the value "' + arg + '"')
-            settings['cut_classification_annotations'][idx] = arg.replace("__"," ") #replace __ with space
+        annotations_arr = settings_file_args['cut_classification_annotations'].split(" ")
+        if "[" in settings_file_args['cut_classification_annotations']:
+            annotations_arr = [x.strip() for x in settings_file_args['cut_classification_annotations'].strip("[] ").replace('"','').replace("'","").split(",")]
         settings_file_args.pop('cut_classification_annotations')
+
+    for arg in annotations_arr:
+        arg_els = arg.split(":")
+        if len(arg_els) != 4: # chr:pos:direction:annotation
+            parser.print_usage()
+            raise Exception('Error: cut classification annotations must contain 4 elements (e.g. chr1:234:left:my_annotation). Please check the value "' + arg + '"')
+        settings['cut_classification_annotations'].append(arg.replace("__"," ")) #replace __ with space
 
     settings['PAM'] = cmd_args.PAM
     if 'PAM' in settings_file_args:
         settings['PAM'] = settings_file_args['PAM']
         settings_file_args.pop('PAM')
 
-    settings['guide_sequences'] = cmd_args.guide_sequences
+    guide_arr = cmd_args.guide_sequences
+    settings['guide_sequences'] = []
     if 'guide_sequences' in settings_file_args:
-        settings['guide_sequences'] = settings_file_args['guide_sequences'].split(" ")
+        guide_arr = settings_file_args['guide_sequences'].split(" ")
+
+        if "[" in settings_file_args['guide_sequences']:
+            guide_arr = [x.strip() for x in settings_file_args['guide_sequences'].strip("[] ").replace('"','').replace("'","").split(",")]
         settings_file_args.pop('guide_sequences')
+
+    for guide in guide_arr:
+        wrong_nt=CRISPRessoShared.find_wrong_nt(guide)
+        if wrong_nt:
+            raise Exception('The guide sequence %s contains bad characters: %s'%(guide,'"'+'", "'.join(wrong_nt)+'"'))
+        settings['guide_sequences'].append(guide)
+
 
     settings['casoffinder_num_mismatches'] = cmd_args.casoffinder_num_mismatches
     if 'casoffinder_num_mismatches' in settings_file_args:
@@ -631,10 +649,20 @@ def parse_settings(args):
         settings['novel_cut_merge_distance'] = int(settings_file_args['novel_cut_merge_distance'])
         settings_file_args.pop('novel_cut_merge_distance')
 
-    settings['homology_cut_merge_distance'] = cmd_args.homology_cut_merge_distance
-    if 'homology_cut_merge_distance' in settings_file_args:
-        settings['homology_cut_merge_distance'] = int(settings_file_args['homology_cut_merge_distance'])
-        settings_file_args.pop('homology_cut_merge_distance')
+    settings['known_cut_merge_distance'] = cmd_args.known_cut_merge_distance
+    if 'known_cut_merge_distance' in settings_file_args:
+        settings['known_cut_merge_distance'] = int(settings_file_args['known_cut_merge_distance'])
+        settings_file_args.pop('known_cut_merge_distance')
+
+    settings['origin_cut_merge_distance'] = cmd_args.origin_cut_merge_distance
+    if 'origin_cut_merge_distance' in settings_file_args:
+        settings['origin_cut_merge_distance'] = int(settings_file_args['origin_cut_merge_distance'])
+        settings_file_args.pop('origin_cut_merge_distance')
+
+    settings['short_indel_length_cutoff'] = cmd_args.short_indel_length_cutoff
+    if 'short_indel_length_cutoff' in settings_file_args:
+        settings['short_indel_length_cutoff'] = int(settings_file_args['short_indel_length_cutoff'])
+        settings_file_args.pop('short_indel_length_cutoff')
 
     settings['dedup_input_on_UMI'] = cmd_args.dedup_input_on_UMI
     if 'dedup_input_on_UMI' in settings_file_args:
@@ -674,14 +702,16 @@ def parse_settings(args):
 
     settings['fastq_r2'] = cmd_args.fastq_r2
     if 'fastq_r2' in settings_file_args:
-        settings['fastq_r2'] = settings_file_args['fastq_r2']
+        if 'none' not in settings_file_args['fastq_r2'].lower():
+            settings['fastq_r2'] = settings_file_args['fastq_r2']
         settings_file_args.pop('fastq_r2')
     if settings['fastq_r2'] and not os.path.isfile(settings['fastq_r2']):
         raise Exception('Error: fastq_r2 file %s does not exist',settings['fastq_r2'])
 
     settings['fastq_umi'] = cmd_args.fastq_umi
     if 'fastq_umi' in settings_file_args:
-        settings['fastq_umi'] = settings_file_args['fastq_umi']
+        if 'none' not in settings_file_args['fastq_umi'].lower():
+            settings['fastq_umi'] = settings_file_args['fastq_umi']
         settings_file_args.pop('fastq_umi')
     if settings['fastq_umi'] and not os.path.isfile(settings['fastq_umi']):
         raise Exception('Error: fastq_umi file %s does not exist',settings['fastq_umi'])
@@ -719,11 +749,15 @@ def parse_settings(args):
     if not settings['primer_seq']:
         parser.print_usage()
         raise Exception('Error: the primer sequences used must be provided (--primer_seq)')
+    
+    for guide in settings['guide_sequences']:
+        wrong_nt=CRISPRessoShared.find_wrong_nt(guide)
+        if wrong_nt:
+            raise Exception('The guide sequence %s contains bad characters: %s'%(guide,'"'+'", "'.join(wrong_nt)+'"'))
 
-    if settings['homology_cut_merge_distance'] < settings['novel_cut_merge_distance']:
-        parser.print_usage()
-        raise Exception('The specified homology_cut_merge_distance must be larger than the novel_cut_merge_distance (current values: homology_cut_merge_distance: %d and novel_cut_merge_distance: %d)'%(settings['homology_cut_merge_distance'],settings['novel_cut_merge_distance']))
-
+    primer_wrong_nt=CRISPRessoShared.find_wrong_nt(settings['primer_seq'])
+    if primer_wrong_nt:
+        raise Exception('The primer sequence %s contains bad characters: %s'%(settings['primer_seq'],'"'+'", "'.join(wrong_nt)+'"'))
 
     unused_keys = settings_file_args.keys()
     if len(unused_keys) > 0:
@@ -1004,7 +1038,7 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
         origin_seq: common amplified region at primer to be removed from input sequences
         cut_sites: list of cut locations for input guides
         cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
-            (type=On-target, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
+            (type=Programmed, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
         primer_chr: chromosome location of primer
         primer_loc: position of primer
         primer_is_genomic: boolean, true if primer is genomic
@@ -1099,7 +1133,7 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
             logger.info('Setting cut site for guide %s to %s:%s'%(guide_seq,guide_chr,cut_loc))
             key = guide_chr + ":" + str(cut_loc)
             cut_sites.append(key)
-            cut_annotations[key] = ['On-target','Not-origin',guide_is_rc_str,guide_seq]
+            cut_annotations[key] = ['Programmed','Not-origin',guide_is_rc_str,guide_seq]
             if primer_is_genomic and primer_chr == guide_chr:
                 if closest_cut_site_loc == -1:
                     closest_cut_site_dist = abs(primer_loc - cut_loc)
@@ -1122,7 +1156,7 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
             logger.info('Setting cut site for guide %s to %s:%s'%(guide_seq,guide_chr,cut_loc))
             key = guide_chr + ":" + str(cut_loc)
             cut_sites.append(key)
-            cut_annotations[key] = ['On-target','Not-origin',guide_is_rc_str,guide_seq]
+            cut_annotations[key] = ['Programmed','Not-origin',guide_is_rc_str,guide_seq]
             if primer_is_genomic and primer_chr == guide_chr:
                 if closest_cut_site_loc == -1:
                     closest_cut_site_dist = abs(primer_loc - cut_loc)
@@ -1754,7 +1788,7 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
 
 def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     cut_sites,cut_annotations,cut_classification_annotations,guide_seqs,cleavage_offset,min_primer_length,genome,r1_r2_support_max_distance=100000,
-    cut_merge_dist=100,collapse_to_homology_dist=10000,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
+    novel_cut_merge_distance=50,known_cut_merge_distance=50,origin_cut_merge_distance=10000,short_indel_length_cutoff=50,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
     arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,suppress_dedup_on_aln_pos_and_UMI_filter=False,
     suppress_r2_support_filter=False,suppress_poor_alignment_filter=False,write_discarded_read_info=False,
     samtools_command='samtools',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
@@ -1767,15 +1801,17 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         origin_seq: common amplified region at primer (to first cut site)
         cut_sites: array of known/input cut sites
         cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
-            (type=On-target, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
-        cut_classification_annotations: dict of cut_chr:cut_site:direction -> annotation (as provided by users as parameters)
+            (type=Programmed, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
+        cut_classification_annotations: list of cut_chr:cut_site:direction:annotation (as provided by users as parameters)
         guide_seqs: sequences of guides used in experiment (required here for finding homology at novel cut sites)
         cleavage_offset: position where cleavage occurs (relative to end of spacer seq -- for Cas9 this is -3)
         min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
         genome: path to genome fa file (required here for finding genome sequences for guide homology)
         r1_r2_support_max_distance: max distance between r1 and r2 for the read pair to be classified as 'supported' by r2
-        cut_merge_dist: cuts within this distance (bp) will be merged
-        collapse_to_homology_dist: novel cuts within this distance to a site with homology to a given guide. Novel cuts are first merged to the nearest site with homology (within collapse_to_homology_dist), and remaining cuts are merged with eachother (specified by the 'cut_merge_dist' parameter).
+        novel_cut_merge_distance: cuts within this distance (bp) will be merged
+        known_cut_merge_distance: novel cuts within this distance to a site with homology to a given guide. Novel cuts are first merged to the nearest site with homology (within known_cut_merge_distance), and remaining cuts are merged with eachother (specified by the 'novel_cut_merge_distance' parameter).
+        origin_cut_merge_distance: reads aligned with this distance to the origin will be merged to the origin
+        short_indel_length_cutoff: indels this length or shorter will be classified 'short indels' while those longer will be classified 'long indels'
         guide_homology_max_gaps: when searching a sequence for homology to a guide sequence, it will be homologous if his has this number of gaps or fewer in the alignment of the guide to a sequence
         guide_homology_max_mismatches: when searching a sequence for homology to a guide sequence, it will be homologous if his has this number of mismatches or fewer in the alignment of the guide to a sequence
         arm_min_matched_start_bases: number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each 'side' a read.
@@ -1800,7 +1836,6 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         discarded_read_counts: dict of category -> count for reasons reads were discarded
         classification_read_counts: dict of classification -> count for final assignment categories
         classification_indel_read_counts: dict of classification -> count for final assignment categories (including 'short indels' category)
-k
         chr_aln_plot_obj: plot showing alignment locations of reads
         tlen_plot_object: plot showing distribution of template lengths
         deduplication_plot_obj: plot showing how many reads were deuplicated using UMI + location
@@ -1974,7 +2009,7 @@ k
     discarded_reads_duplicates = 0
     discarded_reads_poor_alignment = 0
     discarded_reads_not_supported_by_R2 = 0
-    cut_points_by_chr = defaultdict(lambda: defaultdict(int)) # dict of cut points for each chr contianing observedcuts cut_points_by_chr[chr1][1559988] = count seen
+    cut_points_by_chr = defaultdict(lambda: defaultdict(int)) # dict of cut points for each chr contianing observed cuts cut_points_by_chr[chr1][1559988] = count seen
     aligned_tlens = defaultdict(int)
     aligned_chr_counts = defaultdict(int)
     aln_pos_by_chr = defaultdict(lambda: defaultdict(int))
@@ -2288,35 +2323,7 @@ k
                 )
 
     #now that we've aggregated all cut sites, find likely cut positions and record assignments to those positions in final_cut_point_lookup
-    #also annotate the origin cut
-    origin_chr = None
-    origin_cut_pos = None
-    origin_direction = None
-    known_cut_points_by_chr = {} #cut sites are input by user (or found by casoffinder)
-    final_cut_points_by_chr = defaultdict(lambda: defaultdict(int)) #dict of final cut points by chromosome, contains count of reads with that cut point
-    for cut_site in cut_sites:
-        (cut_chr,cut_pos) = cut_site.split(":")
-        if cut_site in cut_annotations:
-            origin_status = cut_annotations[cut_site][1]
-            if origin_status == 'Origin:right':
-                origin_chr = cut_chr
-                origin_cut_pos = int(cut_pos)
-                origin_direction = 'right'
-            elif origin_status == 'Origin:left':
-                origin_chr = cut_chr
-                origin_cut_pos = int(cut_pos)
-                origin_direction = 'left'
 
-        if cut_chr not in known_cut_points_by_chr:
-            known_cut_points_by_chr[cut_chr] = []
-        known_cut_points_by_chr[cut_chr].append(int(cut_pos))
-        #add known cut points to final cut point lookup as well
-        if cut_chr not in final_cut_points_by_chr:
-            final_cut_points_by_chr[cut_chr] = defaultdict(int)
-        final_cut_points_by_chr[cut_chr][int(cut_pos)] = 0
-
-    #the counts in this file include only reads that weren't marked as duplicates
-    final_cut_point_lookup = {} #dict from old(fuzzy/imprecise) position to new
 
     cut_point_homology_info = {} #dict containing cut points with sufficient homology
     with open(root+".cut_homology.txt",'w') as fout:
@@ -2369,113 +2376,17 @@ k
 
                     fout.write("\t".join([str(x) for x in [guide_seq,cut_chr,cut_point,is_valid_homology,potential_guide,best_score,is_rc_string,n_matches,n_mismatches,n_gaps,best_1,best_2]])+"\n")
 
-    #create dict of cut_point > closest cut point with homology
-    closest_cut_point_with_homology_lookup = {}
-
-    #first create dict with known sites and sites with homology
-    cut_points_with_homology_by_chr = defaultdict(list)
-    #add known sites
-    for cut_chr in known_cut_points_by_chr:
-        cut_points_with_homology_by_chr[cut_chr] = known_cut_points_by_chr[cut_chr][:]
-    #split cut points with homology by chr to allow sorting
-    for cut_point in cut_point_homology_info:
-        cut_chr,cut_pos = cut_point.split(":")
-        if int(cut_pos) not in cut_points_with_homology_by_chr[cut_chr]:
-            cut_points_with_homology_by_chr[cut_chr].append(int(cut_pos))
-
-    #assign each cut point to the closest site with homology if possible
-    for cut_chr in cut_points_by_chr:
-        these_cut_points = sorted(cut_points_by_chr[cut_chr])
-
-        these_cut_points_with_homology = sorted(cut_points_with_homology_by_chr[cut_chr])
-        #if no cut points on this chr
-        if len(these_cut_points_with_homology) == 0:
-            for cut_point in these_cut_points:
-                closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
-        else:
-            curr_ind = 0
-            for cut_point in these_cut_points:
-                dist_to_curr = abs(cut_point - these_cut_points_with_homology[curr_ind])
-                #if curr_ind is at last item, choose it
-                if curr_ind + 1 >= len(these_cut_points_with_homology):
-                    if dist_to_curr <= collapse_to_homology_dist:
-                        closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_with_homology[curr_ind])
-                    else:
-                        closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
-                #otherwise choose closest of curr or next
-                else:
-                    dist_to_next = abs(cut_point - these_cut_points_with_homology[curr_ind+1])
-                    if dist_to_curr <= dist_to_next:
-                        if dist_to_curr <= collapse_to_homology_dist:
-                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_with_homology[curr_ind])
-                        else:
-                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
-                    else:
-                        curr_ind += 1
-                        if dist_to_next <= collapse_to_homology_dist:
-                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_with_homology[curr_ind])
-                        else:
-                            closest_cut_point_with_homology_lookup[cut_chr+":"+str(cut_point)] = None
-
-    found_cut_point_total = 0
-    closest_cut_point_lookup = {}
-    for cut_chr in cut_points_by_chr:
-        found_cut_point_total += len(cut_points_by_chr[cut_chr])
-        these_cut_points = sorted(cut_points_by_chr[cut_chr])
-        last_seen_point = these_cut_points[0]
-        curr_points = [last_seen_point]
-        for i in range(1,len(these_cut_points)+1):
-            #if next point is beyond cut_merge_dist, merge and reset!
-            #do weighted sum
-            this_sum = 0
-            this_tot = 0
-            for curr_point in curr_points:
-                this_sum += curr_point*cut_points_by_chr[cut_chr][curr_point]
-                this_tot += cut_points_by_chr[cut_chr][curr_point]
-            this_weighted_mean = 0
-            if this_tot > 0:
-                this_weighted_mean = this_sum/float(this_tot)
-            #this_mean = int(sum(curr_points)/float(len(curr_points)))
-            if i == len(these_cut_points) or abs(these_cut_points[i] - this_weighted_mean) > cut_merge_dist:
-                this_pos = int(this_weighted_mean)
-                min_dist = cut_merge_dist
-                #once we've selected a putative cut point, make sure it isn't within min_dist from known cut points
-                #and select the closest point (keep shrinking min_dist in case another one is found closer)
-                if cut_chr in known_cut_points_by_chr:
-                    for known_cut_point in known_cut_points_by_chr[cut_chr]:
-                        this_dist = abs(known_cut_point - this_weighted_mean)
-                        if this_dist <= min_dist:
-                            this_pos = known_cut_point
-                            min_dist = this_dist
-
-                #add this assignment to the lookup
-                for curr_point in curr_points:
-                    closest_cut_point_lookup[cut_chr+":"+str(curr_point)] = cut_chr+":"+str(this_pos)
-
-                #reset current points
-                curr_points = []
-
-            if i < len(these_cut_points):
-                curr_points.append(these_cut_points[i])
-
-    #make final assignments - either to the next homologous site (if available), or to the next closest site
-    all_cut_points_count = 0
-    all_cut_points_assigned_to_homology_count = 0 #how many cut sites were assigned to their nearest homologous site
-    all_cut_points_collapsed_count = 0 #how many cut sites were collapsed (not assigned to homologous sites)
-    for cut_chr in cut_points_by_chr:
-        for cut_point in cut_points_by_chr[cut_chr]:
-            all_cut_points_count += 1
-            cut_key = cut_chr+":"+str(cut_point)
-            if closest_cut_point_with_homology_lookup[cut_key] is not None:
-                cut_assignment = closest_cut_point_with_homology_lookup[cut_key]
-                all_cut_points_assigned_to_homology_count += 1
-            else:
-                cut_assignment = closest_cut_point_lookup[cut_key]
-                all_cut_points_collapsed_count += 1
-
-            cut_assignment_pos = int(cut_assignment.split(":")[1])
-            final_cut_point_lookup[cut_key] = cut_assignment
-            final_cut_points_by_chr[cut_chr][cut_assignment_pos] += cut_points_by_chr[cut_chr][cut_point]
+    #the counts in cut_points include only reads that weren't marked as duplicates
+    #final_cut_point_lookup = dict from old(fuzzy/imprecise) position to new
+    #final_cut_points_by_chr = dict of chr > cut points
+    origin_chr, origin_cut_pos, origin_direction, final_cut_point_lookup, final_cut_points_by_chr, found_cut_point_total = collapse_cut_points(
+        novel_cut_merge_distance = novel_cut_merge_distance,
+        known_cut_merge_distance = known_cut_merge_distance,
+        origin_cut_merge_distance = origin_cut_merge_distance,
+        cut_points_by_chr = cut_points_by_chr,
+        cut_annotations = cut_annotations,
+        cut_point_homology_info = cut_point_homology_info
+        )
 
     final_cut_point_total = 0
     cut_classification_lookup = {}
@@ -2511,11 +2422,8 @@ k
                         else:
                             cut_classification_lookup['%s:%s:%s'%(chrom,pos,'left')] = this_anno[0] + ' large deletion'
                             cut_classification_lookup['%s:%s:%s'%(chrom,pos,'right')] = this_anno[0] + ' large inversion'
-
-    logger.info('Processed ' + str(all_cut_points_count) + ' observed cut points')
-    logger.info(str(all_cut_points_assigned_to_homology_count) + ' cut points were collapsed to known/given/homologous cut sites')
-    logger.info(str(all_cut_points_collapsed_count) + ' cut points were collapsed to nearby cut sites')
     logger.info(str(final_cut_point_total) + ' final cut points after collapsing')
+
 
     #add cut classifications from parameters
     for cut_classification_param in cut_classification_annotations:
@@ -2626,8 +2534,11 @@ k
             final_classification_counts[final_classification] += 1
 
             indel_str = ' no indels'
-            if final_cut_indel != 0:
-                indel_str = ' short indels'
+            if abs(final_cut_indel) > 0:
+                if abs(final_cut_indel) > short_indel_length_cutoff:
+                    indel_str = ' long indels'
+                else:
+                    indel_str = ' short indels'
 
             final_classification_indel_counts[final_classification+indel_str] += 1
 
@@ -2697,11 +2608,11 @@ k
             cut_annotation = 'Novel'
             tx_cut = ':'.join(tx_key.split(":")[0:2])
             if tx_cut in cut_annotations:
-                    cut_annotation = cut_annotations[tx_cut][0]
+                cut_annotation = cut_annotations[tx_cut][0]
             tx_classification = 'Unknown'
             if tx_key in cut_classification_lookup:
                 tx_classification = cut_classification_lookup[tx_key]
-                fout.write("%s\t%s\t%s\t%s\n"%(tx_key,cut_annotation,tx_classification,final_cut_counts[tx_key]))
+            fout.write("%s\t%s\t%s\t%s\n"%(tx_key,cut_annotation,tx_classification,final_cut_counts[tx_key]))
         logger.debug('Wrote fragment translocation list ' + tx_list_report)
 
     sorted_tx_list = sorted(final_cut_counts, key=final_cut_counts.get,reverse=True)
@@ -2741,7 +2652,7 @@ k
         pie_labels.append(classification_labels[i]+"\n("+str(classification_values[i])+")")
     noindel_pie_values = pie_values #for use below
 
-    short_indel_categories = [' no indels',' short indels']
+    short_indel_categories = [' no indels',' short indels',' long indels']
     classification_indel_labels = []
     classification_indel_counts = []
     inner_pie_values = []
@@ -2786,17 +2697,10 @@ k
     if len(top_sorted_tx_list) > 0 and not suppress_plots:
         logger.debug('Plotting translocations')
         # make tx order plot
-        if origin_chr is None:
-            left_label = 'Exogenous'
-            left_pos = 'None'
-        else:
-            left_label = origin_chr+':'+str(origin_cut_pos)+':'+origin_direction
-            left_pos = origin_chr+':'+str(origin_cut_pos)
         pos_list = [':'.join(x.split(':')[0:2]) for x in top_sorted_tx_list]
-        pos_list.append(left_pos)
         pos_list = sorted(list(set(pos_list)))
 
-        cut_categories = ['On-target', 'Off-target', 'Known','Cas-OFFinder','Novel']
+        cut_categories = ['Programmed', 'Off-target', 'Known','Cas-OFFinder','Novel']
         cut_colors = plt.get_cmap('Set1',len(cut_categories))
         cut_category_lookup = {}
         for idx,cat in enumerate(cut_categories):
@@ -3010,11 +2914,12 @@ k
         ax.pie(inner_pie_values, labels=inner_pie_labels, # plot categories without indels
             wedgeprops=inner_wedge_properties,autopct="%1.2f%%",radius=1-width, labeldistance=0.50,pctdistance=0.30)
         ax.pie(outer_pie_values, labels=None,
-            wedgeprops=wedge_properties,autopct="%1.2f%%",colors=['silver','crimson'],pctdistance=1.08)
+            wedgeprops=wedge_properties,autopct="%1.2f%%",colors=['silver','pink','crimson'],pctdistance=1.08)
         patch1 = Patch(color='silver', label='No indels')
-        patch2 = Patch(color='crimson', label='Short indels')
+        patch2 = Patch(color='pink', label='Short indels')
+        patch3 = Patch(color='crimson', label='Long indels')
 
-        plt.legend(handles=[patch1, patch2])
+        plt.legend(handles=[patch1, patch2, patch3])
 
         ax.set_title('Read classifications')
         plt.savefig(classification_indel_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -3023,8 +2928,8 @@ k
         plot_count_str = "<br>".join(["%s N=%s"%x for x in zip(classification_indel_labels,classification_indel_counts)])
         classification_indel_plot_obj = PlotObject(
                 plot_name = classification_indel_plot_obj_root,
-                plot_title = 'Read Classification including short indels',
-                plot_label = 'Read classification including annotations for presence of short indels<br>'+plot_count_str,
+                plot_title = 'Read Classification including indels',
+                plot_label = 'Read classification including annotations for presence of indels<br>Short indels: <=' +str(short_indel_length_cutoff)+'bp<br>Long indels: >'+str(short_indel_length_cutoff)+'bp<br>'+plot_count_str,
                 plot_datas = [
                     ('Alignment classifications with indels',classification_indel_plot_obj_root + ".txt"),
                     ('Alignment classifications',classification_plot_obj_root + ".txt"),
@@ -3468,6 +3373,188 @@ k
         origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
 
+def collapse_cut_points(novel_cut_merge_distance, known_cut_merge_distance, origin_cut_merge_distance,
+        cut_points_by_chr, cut_annotations, cut_point_homology_info):
+    """
+    Collapse observed cut points to final cut points based on merging distances
+
+    Args:
+        novel_cut_merge_distance (int): distance to merge novel cut points
+        known_cut_merge_distance (int): distance to merge known cut points
+        origin_cut_merge_distance (int): distance to merge origin cut points
+        cut_points_by_chr (dict): dictionary of known cut points by chromosome
+        cut_annotations (dict): dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction, guide_sequence] for known/given cut sites
+        cut_point_homology_info (dict): dictionary of homology info by cut point
+
+    Returns:
+        origin_chr (str): name of origin chromosome
+        origin_cut (int): position of origin cut
+        origin_direction (str): direction of primer from origin cut
+        final_cut_point_lookup (dict): dictionary of final cut point lookups old_cut_point > new_cut_point
+        final_cut_points_by_chr (dict): dictionary of final cut points chr->cut point
+        found_cut_point_total (int): number of final cut points
+
+    """
+
+    logger = logging.getLogger('CRISPRlungo')
+    logger.info('Merging cut points')
+    origin_chr = None
+    origin_cut_pos = None
+    origin_direction = None
+    known_cut_points_by_chr = {} #cut sites are input by user (or found by casoffinder)
+    final_cut_points_by_chr = defaultdict(lambda: defaultdict(int)) #dict of final cut points by chromosome, contains count of reads with that cut point
+    final_cut_point_lookup = {} #dict from old(fuzzy/imprecise) position to new
+    for cut_site in cut_annotations:
+        cut_chr,cut_pos_str = cut_site.split(":")
+        cut_pos = int(cut_pos_str)
+        if cut_site in cut_annotations:
+            origin_status = cut_annotations[cut_site][1]
+            if origin_status == 'Origin:right':
+                origin_chr = cut_chr
+                origin_cut_pos = cut_pos
+                origin_direction = 'right'
+            elif origin_status == 'Origin:left':
+                origin_chr = cut_chr
+                origin_cut_pos = cut_pos
+                origin_direction = 'left'
+
+        if cut_chr not in known_cut_points_by_chr:
+            known_cut_points_by_chr[cut_chr] = []
+        known_cut_points_by_chr[cut_chr].append(cut_pos)
+        #add known cut points to final cut point lookup as well
+        if cut_chr not in final_cut_points_by_chr:
+            final_cut_points_by_chr[cut_chr] = defaultdict(int)
+        final_cut_points_by_chr[cut_chr][cut_pos] = 0
+
+    #create dict of cut_point > closest cut point that is origin, known or with homology
+    closest_origin_known_homology_lookup = {}
+
+    #first, assign applicable points to origin - sites known or homology will overwrite this
+    origin_range_min = -1 # for non-genomic primers
+    origin_range_max = -1
+    if origin_cut_pos is not None: #for genomic primers
+        origin_range_min = origin_cut_pos - origin_cut_merge_distance
+        origin_range_max = origin_cut_pos + origin_cut_merge_distance
+
+    for cut_point in cut_points_by_chr[origin_chr]:
+        if cut_point >= origin_range_min and cut_point <= origin_range_max:
+            closest_origin_known_homology_lookup[origin_chr+":"+str(cut_point)] = origin_chr+":"+str(origin_cut_pos)
+
+    #next create dict with known sites and sites with homology
+    cut_points_known_or_homology_by_chr = defaultdict(list)
+    #add known sites
+    for cut_chr in known_cut_points_by_chr:
+        cut_points_known_or_homology_by_chr[cut_chr] = known_cut_points_by_chr[cut_chr][:]
+    #split cut points with homology by chr to allow sorting
+    for cut_point in cut_point_homology_info:
+        cut_chr,cut_pos = cut_point.split(":")
+        if int(cut_pos) not in cut_points_known_or_homology_by_chr[cut_chr]:
+            cut_points_known_or_homology_by_chr[cut_chr].append(int(cut_pos))
+
+
+    #assign each cut point to the closest origin, known site or site with homology if possible
+    for cut_chr in cut_points_by_chr:
+        these_cut_points = sorted(cut_points_by_chr[cut_chr])
+
+        these_cut_points_known_or_homology = sorted(cut_points_known_or_homology_by_chr[cut_chr])
+        #if no cut points on this chr
+        if len(these_cut_points_known_or_homology) == 0:
+            for cut_point in these_cut_points:
+                closest_origin_known_homology_lookup[cut_chr+":"+str(cut_point)] = None
+        else:
+            curr_ind = 0
+            for cut_point in these_cut_points:
+                dist_to_curr = abs(cut_point - these_cut_points_known_or_homology[curr_ind])
+                #if curr_ind is at last item, choose it
+                if curr_ind + 1 >= len(these_cut_points_known_or_homology):
+                    if dist_to_curr <= known_cut_merge_distance:
+                        closest_origin_known_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_known_or_homology[curr_ind])
+                    else:
+                        closest_origin_known_homology_lookup[cut_chr+":"+str(cut_point)] = None
+                #otherwise choose closest of curr or next
+                else:
+                    dist_to_next = abs(cut_point - these_cut_points_known_or_homology[curr_ind+1])
+                    if dist_to_curr <= dist_to_next:
+                        if dist_to_curr <= known_cut_merge_distance:
+                            closest_origin_known_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_known_or_homology[curr_ind])
+                        else:
+                            closest_origin_known_homology_lookup[cut_chr+":"+str(cut_point)] = None
+                    else:
+                        curr_ind += 1
+                        if dist_to_next <= known_cut_merge_distance:
+                            closest_origin_known_homology_lookup[cut_chr+":"+str(cut_point)] = cut_chr+":"+str(these_cut_points_known_or_homology[curr_ind])
+                        else:
+                            closest_origin_known_homology_lookup[cut_chr+":"+str(cut_point)] = None
+
+    #cluster remaining novel points
+    found_cut_point_total = 0
+    closest_cut_point_lookup = {}
+    for cut_chr in cut_points_by_chr:
+        found_cut_point_total += len(cut_points_by_chr[cut_chr])
+        these_cut_points = sorted(cut_points_by_chr[cut_chr])
+        for cut_point in these_cut_points:
+            this_cut_str = cut_chr+":"+str(cut_point)
+            if closest_origin_known_homology_lookup[this_cut_str] is not None:
+                these_cut_points.remove(cut_point)
+                closest_cut_point_lookup[this_cut_str] = closest_origin_known_homology_lookup[this_cut_str]
+
+        if len(these_cut_points) > 0:
+            last_seen_point = these_cut_points[0]
+            curr_points = [last_seen_point]
+            for i in range(1,len(these_cut_points)+1):
+                #if next point is beyond novel_cut_merge_dist, merge and reset!
+                #do weighted sum
+                this_sum = 0
+                this_tot = 0
+                for curr_point in curr_points:
+                    this_sum += curr_point*cut_points_by_chr[cut_chr][curr_point]
+                    this_tot += cut_points_by_chr[cut_chr][curr_point]
+                this_weighted_mean = 0
+                if this_tot > 0:
+                    this_weighted_mean = this_sum/float(this_tot)
+                #this_mean = int(sum(curr_points)/float(len(curr_points)))
+                if i == len(these_cut_points) or abs(these_cut_points[i] - this_weighted_mean) > novel_cut_merge_distance:
+                    this_pos = int(this_weighted_mean)
+                    #add this assignment to the lookup
+                    for curr_point in curr_points:
+                        closest_cut_point_lookup[cut_chr+":"+str(curr_point)] = cut_chr+":"+str(this_pos)
+
+                    #reset current points
+                    curr_points = []
+
+                if i < len(these_cut_points):
+                    curr_points.append(these_cut_points[i])
+
+    #make final assignments - either to the next homologous site (if available), to the origin (if nearby), or to the next closest site
+    all_cut_points_count = 0
+    all_cut_points_assigned_to_homology_count = 0 #how many cut sites were assigned to their nearest homologous/known site
+    all_cut_points_assigned_to_origin_count = 0 #how many cut sites were assigned to the origin site
+    all_cut_points_collapsed_count = 0 #how many cut sites were collapsed (not assigned to origin or homologous sites)
+    for cut_chr in cut_points_by_chr:
+        for cut_point in cut_points_by_chr[cut_chr]:
+            all_cut_points_count += 1
+            cut_key = cut_chr+":"+str(cut_point)
+            if closest_origin_known_homology_lookup[cut_key] is not None:
+                cut_assignment = closest_origin_known_homology_lookup[cut_key]
+                all_cut_points_assigned_to_homology_count += 1
+            elif cut_chr == origin_chr and cut_point >= origin_range_min and cut_point <= origin_range_max:
+                cut_assignment = origin_chr+":"+str(origin_cut_pos)
+                all_cut_points_assigned_to_origin_count += 1
+            else:
+                cut_assignment = closest_cut_point_lookup[cut_key]
+                all_cut_points_collapsed_count += 1
+
+            cut_assignment_pos = int(cut_assignment.split(":")[1])
+            final_cut_point_lookup[cut_key] = cut_assignment
+            final_cut_points_by_chr[cut_chr][cut_assignment_pos] += cut_points_by_chr[cut_chr][cut_point]
+
+    logger.info('Processed ' + str(all_cut_points_count) + ' observed cut points')
+    logger.info(str(all_cut_points_assigned_to_homology_count) + ' cut points were collapsed to known/given/homologous cut sites')
+    logger.info(str(all_cut_points_assigned_to_origin_count) + ' cut points were collapsed to the origin site')
+    logger.info(str(all_cut_points_collapsed_count) + ' cut points were collapsed to nearby cut sites')
+
+    return origin_chr, origin_cut_pos, origin_direction, final_cut_point_lookup, final_cut_points_by_chr, found_cut_point_total
+
 def plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,figure_root,max_translocations_to_plot=100,include_all_chrs=False,plot_black_white=True):
     """Plot a circos plot showing translocations.
 
@@ -3657,8 +3744,8 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         read_ids_for_crispresso: dict of readID=>cut assignment
         cut_counts_for_crispresso: dict of cut=>count for # reads assigned to each cut
         cut_classification_lookup: dict of cutID=> type (e.g. Linear, Translocation, etc)
-        cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
-            (type=On-target, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
+        cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction, guide_sequence] 
+            (type=Programmed, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
         av_read_length: average read length (used to calculate reference region size for CRISPResso)
         origin_seq: common amplified region at primer (to first cut site)
         cleavage_offset: position where cleavage occurs (relative to end of spacer seq -- for Cas9 this is -3)
@@ -4224,8 +4311,8 @@ def makeTxCountPlot(left_labs = [],
 
     rects = []
     for ind in range(num_boxes):
-        rects.append(Rectangle((0,ys[ind]+count_bar_ydiff),counts[ind],y_height-(count_bar_ydiff*2)))
         val = max(1,counts[ind]) #min value is 1 or matplotlib flips out
+        rects.append(Rectangle((1,ys[ind]+count_bar_ydiff),val,y_height-(count_bar_ydiff*2)))
         ax2.text(x=val,y=ys[ind]+y_height/2,s=" " + str(counts[ind]),ha='left',va='center')
 
     pc = PatchCollection(rects)
@@ -4909,4 +4996,8 @@ if __name__ == "__main__":
             logger.error(e, exc_info=True)
         else:
             logger.error(e)
-        raise e
+        if '--debug' in sys.argv:
+            raise e
+        else:
+            print(str(e))
+            sys.exit(1)

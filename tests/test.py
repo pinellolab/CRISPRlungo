@@ -22,9 +22,13 @@ if not os.path.exists(temp_outputs_folder):
 verbose = True
 
 def main():
+    #function tests
+    assert_prep_input(this_genome,this_bowtie2_genome,verbose)
+    assert_collapse_cuts(verbose)
+
+    #full runs
     assert_primer(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
-    assert_prep_input(this_genome,this_bowtie2_genome,verbose)
     assert_no_results(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     print('----------------')
@@ -156,6 +160,124 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     assert(primer_is_genomic == True)
     assert(av_read_length == 99)
     assert(num_reads_input == 4)
+
+    print('TESTS PASSED')
+
+def assert_collapse_cuts(verbose):
+    print('Testing cut collapsing')
+    novel_cut_merge_distance = 10
+    known_cut_merge_distance = 15
+    origin_cut_merge_distance = 50
+    cut_points_by_chr = {
+            'chr1':{100:1,
+                    101:3,
+                    102:5,
+                    112:5,
+                    123:5,
+                    133:5,
+                    144:5
+                    },
+            'chr2':{49:1,
+                    50:1,
+                    80:1,
+                    90:1,
+                    100:1, #origin
+                    101:3,
+                    102:5,
+                    110:1,
+                    111:1,
+                    115:1,
+                    120:1, #programmed not-origin
+                    125:1,
+                    135:1,
+                    136:1,
+                    140:1,
+                    150:1,
+                    280:1,
+                    290:1,
+                    300:1, #programmed not-origin
+                    310:1,
+                    320:1,
+                    330:1
+                    },
+            'chr3':{100:10,
+                    110:3,
+                    180:1,
+                    190:1,
+                    200:1, #homology
+                    210:1,
+                    220:1},
+            'chr4':{100:10},
+            'chr5':{100:10},#homology
+            }
+    cut_annotations = {
+            'chr2:100':['Programmed','Origin:left','FW','AATTCG'],
+            'chr2:120':['Programmed','Not-origin','FW','AATTCG'],
+            'chr2:300':['Programmed','Not-origin','FW','AATTCG']
+            }
+    cut_point_homology_info = {
+            'chr3:200':['Programmed','Not-origin','FW','AATTCG'],
+            'chr5:100':['Programmed','Not-origin','FW','AATTCG']
+            }
+    origin_chr, origin_cut_pos, origin_direction, final_cut_point_lookup, final_cut_points_by_chr, found_cut_point_total = CRISPRlungo.collapse_cut_points(
+        novel_cut_merge_distance = novel_cut_merge_distance,
+        known_cut_merge_distance = known_cut_merge_distance,
+        origin_cut_merge_distance = origin_cut_merge_distance,
+        cut_points_by_chr = cut_points_by_chr,
+        cut_annotations = cut_annotations,
+        cut_point_homology_info = cut_point_homology_info
+        )
+
+    if verbose:
+        print(f'{origin_chr=} {origin_cut_pos=} {origin_direction=}')
+        print('Final cut point lookup: ' + str(final_cut_point_lookup))
+        print('Final cut points by chr: ' + str(final_cut_points_by_chr))
+        print(f'{found_cut_point_total=}')
+
+    def assert_pair(chr1,pos1,pos2):
+        assert(final_cut_point_lookup[chr1+":"+str(pos1)] == chr1+":"+str(pos2))
+
+    assert_pair('chr1',100,101) # |
+    assert_pair('chr1',101,101) # | collapsed novel (10bp)
+    assert_pair('chr1',102,101) # |
+    assert_pair('chr1',112,112) #   not collapsed novel (because even though it's within 10bp from 102, the mean for 100-102 is 101)
+    assert_pair('chr1',123,128) # | collapsed novel (10bp)
+    assert_pair('chr1',133,128) # | collapsed novel (10bp)
+    assert_pair('chr1',144,144) #   not collapsed novel, tests for novel not-collapsed at end of chr
+
+    assert_pair('chr2',49,49)   # not collapsed novel
+    assert_pair('chr2',50,100)  # |
+    assert_pair('chr2',80,100)  # |
+    assert_pair('chr2',90,100)  # |
+    assert_pair('chr2',100,100) # | origin - collapsed to origin (50bp)
+    assert_pair('chr2',101,100) # |
+    assert_pair('chr2',102,100) # |
+    assert_pair('chr2',110,100) # |   site is closer to origin than 120
+    assert_pair('chr2',111,120) # |  |
+    assert_pair('chr2',115,120) # |  |
+    assert_pair('chr2',120,120) # |  |  programmed not-origin -collapsed to known (15bp)
+    assert_pair('chr2',125,120) # |  |
+    assert_pair('chr2',135,120) # |  |
+    assert_pair('chr2',136,100) # |
+    assert_pair('chr2',140,100) # |
+    assert_pair('chr2',150,100) # |
+    assert_pair('chr2',280,280) # not collapsed novel
+    assert_pair('chr2',290,300) # |
+    assert_pair('chr2',300,300) # |   programmed not-origin -collapsed to known (15bp)
+    assert_pair('chr2',310,300) # |
+    assert_pair('chr2',320,325) #   | collapsed novel, #tests for collapsing at end of chr
+    assert_pair('chr2',330,325) #   | collapsed novel
+
+    assert_pair('chr3',100,102) # | collapsed, weighted novel
+    assert_pair('chr3',110,102) # |
+    assert_pair('chr3',180,180) # not collapsed novel
+    assert_pair('chr3',190,200) # |
+    assert_pair('chr3',200,200) # | homology - collapsed to known (15bp)
+    assert_pair('chr3',210,200) # |
+    assert_pair('chr3',220,220) # not collapsed novel
+
+    assert_pair('chr4',100,100) # not collapsed novel, tests for single novel site
+    assert_pair('chr5',100,100) # homology, tests for single homology site
 
     print('TESTS PASSED')
 
@@ -378,7 +500,14 @@ def assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 
     print('Running Cuts - testing for collapsing cut distance')
     this_root = 'cuts_collapse'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --homology_cut_merge_distance 10 --novel_cut_merge_distance 10'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10'.split(" "))
+    CRISPRlungo.processCRISPRlungo(settings)
+    for file_root in file_roots_to_compare:
+        assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+    print('Running Cuts - testing for cut annotations')
+    this_root = 'cuts_annotation'
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10 --cut_classification_annotations chr11_sm:301:left:My__Annotation'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
@@ -394,7 +523,7 @@ def assert_primer(this_genome,this_bowtie2_genome,test_inputs_folder,temp_output
             ]
     print('Running Exogenous Primer - testing for exogenous primer functionality')
     this_root = 'exogenous'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/exogenous.fa --primer_seq aagagggttgactatgattgtttggggt --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --root {temp_outputs_folder}/{this_root} --keep_intermediate --min_primer_length 20 --debug'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/exogenous.fa --primer_seq aagagggttgactatgattgtttggggt --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --root {temp_outputs_folder}/{this_root} --keep_intermediate --min_primer_length 20 --known_cut_merge_distance 104 --debug'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))

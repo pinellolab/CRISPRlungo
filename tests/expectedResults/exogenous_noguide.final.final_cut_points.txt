@@ -1,3 +1,4 @@
 chr	pos	count	annotation
-chr11_sm	258	7	Novel,Not-origin,NA
+chr11_sm	201	3	Novel,Not-origin,NA
+chr11_sm	301	4	Novel,Not-origin,NA
 chr21_sm	189	1	Novel,Not-origin,NA

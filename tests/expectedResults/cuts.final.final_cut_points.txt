@@ -1,3 +1,3 @@
 chr	pos	count	annotation
-chr11_sm	201	7	On-target,Origin:left,FW,CTTAGGGAACAAAGGAACCT
+chr11_sm	201	7	Programmed,Origin:left,FW,CTTAGGGAACAAAGGAACCT
 chr21_sm	189	1	Cas-OFFinder OB 3,Not-origin,FW,CTTAGGGAACAAAGGAACCT

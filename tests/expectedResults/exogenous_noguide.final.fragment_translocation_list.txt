@@ -1,4 +1,5 @@
 fragment	cut_annotation	fragment_annotation	count
-chr11_sm:258:left	Novel	Novel	2
-chr11_sm:258:right	Novel	Novel	5
+chr11_sm:201:right	Novel	Novel	3
+chr11_sm:301:left	Novel	Novel	2
+chr11_sm:301:right	Novel	Novel	2
 chr21_sm:189:right	Novel	Novel	1

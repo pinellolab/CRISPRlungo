@@ -1,4 +1,4 @@
 fragment	cut_annotation	fragment_annotation	count
-chr11_sm:201:left	On-target	Chimera	2
-chr11_sm:201:right	On-target	Linear	5
+chr11_sm:201:left	Programmed	Chimera	2
+chr11_sm:201:right	Programmed	Linear	5
 chr21_sm:189:right	Cas-OFFinder OB 3	Cas-OFFinder OB 3 translocation	1

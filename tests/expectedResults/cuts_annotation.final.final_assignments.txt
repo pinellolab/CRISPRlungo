@@ -1,0 +1,9 @@
+read_id	curr_position	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	final_cut_pos	final_cut_indel	classification
+read1#linear	chr11_sm:201-300	chr11_sm:201	right	0	0	None	None	None	None	chr11_sm:201:right	0	Linear
+read2#2dPrimer	chr11_sm:201-300	chr11_sm:201	right	2	0	None	None	None	None	chr11_sm:201:right	-2	Linear
+read5#100inversion	chr11_sm:301-202	chr11_sm:301	left	0	0	None	None	None	None	chr11_sm:301:left	1	My Annotation
+read7#100inversion3del	chr11_sm:298-202	chr11_sm:298	left	0	0	None	None	None	None	chr11_sm:301:left	-2	My Annotation
+read3#2dRead	chr11_sm:203-300	chr11_sm:203	right	0	0	None	None	None	None	chr11_sm:201:right	-2	Linear
+read4#100deletion	chr11_sm:301-400	chr11_sm:301	right	0	0	None	None	None	None	chr11_sm:301:right	0	Novel large inversion
+read4#100deletion4del	chr11_sm:305-400	chr11_sm:305	right	0	0	None	None	None	None	chr11_sm:301:right	-4	Novel large inversion
+read8#tx	chr21_sm:189-288	chr21_sm:189	right	0	0	None	None	None	None	chr21_sm:189:right	0	Cas-OFFinder OB 3 translocation

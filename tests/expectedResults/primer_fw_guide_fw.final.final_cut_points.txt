@@ -1,2 +1,2 @@
 chr	pos	count	annotation
-chr11_sm	161	6	On-target,Origin:left,FW,CTCAAGGCCCTTCATAATAT
+chr11_sm	161	6	Programmed,Origin:left,FW,CTCAAGGCCCTTCATAATAT

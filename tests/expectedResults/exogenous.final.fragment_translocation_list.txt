@@ -1,4 +1,4 @@
 fragment	cut_annotation	fragment_annotation	count
-chr11_sm:201:left	On-target	On-target	2
-chr11_sm:201:right	On-target	On-target	5
+chr11_sm:201:left	Programmed	Programmed	2
+chr11_sm:201:right	Programmed	Programmed	5
 chr21_sm:189:right	Novel	Homologous	1

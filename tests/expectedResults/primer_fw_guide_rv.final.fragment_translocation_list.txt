@@ -1,2 +1,2 @@
 fragment	cut_annotation	fragment_annotation	count
-chr11_sm:161:right	On-target	Linear	6
+chr11_sm:161:right	Programmed	Linear	6
