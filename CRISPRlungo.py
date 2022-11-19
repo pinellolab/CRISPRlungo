@@ -8,7 +8,7 @@ import matplotlib
 matplotlib.use('AGG')
 import matplotlib.pyplot as plt
 from matplotlib.collections import PatchCollection
-from matplotlib.patches import Rectangle,Patch
+from matplotlib.patches import Rectangle, Patch
 import multiprocessing as mp
 import math
 import numpy as np
@@ -27,6 +27,7 @@ mpl.rcParams['pdf.fonttype'] = 42
 
 __version__ = "v0.1.9"
 
+
 def processCRISPRlungo(settings):
     """Run the CRISPRlungo pipeline
 
@@ -39,7 +40,7 @@ def processCRISPRlungo(settings):
         logger.info('Successfully completed!')
         return final_file
 
-    #data structures for plots for report
+    # data structures for plots for report
     summary_plot_objects = []  # list of PlotObjects for plotting
 
     assert_dependencies(
@@ -50,37 +51,36 @@ def processCRISPRlungo(settings):
             casoffinder_command=settings['casoffinder_command']
             )
 
-    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = prep_input(
-            root = settings['root']+'.primerInfo',
-            primer_seq = settings['primer_seq'],
-            min_primer_length = settings['min_primer_length'],
-            guide_seqs = settings['guide_sequences'],
-            cleavage_offset = settings['cleavage_offset'],
-            fastq_r1 = settings['fastq_r1'],
-            samtools_command = settings['samtools_command'],
-            genome = settings['genome'],
-            bowtie2_command = settings['bowtie2_command'],
-            bowtie2_genome = settings['bowtie2_genome'],
-            can_use_previous_analysis = settings['can_use_previous_analysis']
+    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = prep_input(
+            root=settings['root']+'.primerInfo',
+            primer_seq=settings['primer_seq'],
+            min_primer_length=settings['min_primer_length'],
+            guide_seqs=settings['guide_sequences'],
+            cleavage_offset=settings['cleavage_offset'],
+            fastq_r1=settings['fastq_r1'],
+            samtools_command=settings['samtools_command'],
+            genome=settings['genome'],
+            bowtie2_command=settings['bowtie2_command'],
+            bowtie2_genome=settings['bowtie2_genome'],
+            can_use_previous_analysis=settings['can_use_previous_analysis']
             )
     logger.info('%d reads in input'%num_reads_input)
 
     if settings['PAM'] is not None and settings['casoffinder_num_mismatches'] > 0:
-        casoffinder_cut_sites,casoffinder_cut_annotations = get_cut_sites_casoffinder(
-                root = settings['root']+'.casoffinder',
+        casoffinder_cut_sites, casoffinder_cut_annotations = get_cut_sites_casoffinder(
+                root=settings['root']+'.casoffinder',
                 genome=settings['genome'],
                 pam=settings['PAM'],
                 guides=settings['guide_sequences'],
                 cleavage_offset=settings['cleavage_offset'],
                 num_mismatches=settings['casoffinder_num_mismatches'],
                 casoffinder_command=settings['casoffinder_command'],
-                can_use_previous_analysis = settings['can_use_previous_analysis']
+                can_use_previous_analysis=settings['can_use_previous_analysis']
                 )
         for cut_site in casoffinder_cut_sites:
             if cut_site not in cut_sites:
                 cut_sites.append(cut_site)
                 cut_annotations[cut_site] = casoffinder_cut_annotations[cut_site]
-
 
     curr_r1_file = settings['fastq_r1'] #keep track of current input files (through UMI adding, etc.)
     curr_r2_file = settings['fastq_r2']
@@ -89,14 +89,14 @@ def processCRISPRlungo(settings):
         curr_r1_file = settings['fastq_r2']
         curr_r2_file = settings['fastq_r1']
 
-    #if umis are provided, add them to the fastqs
+    # if umis are provided, add them to the fastqs
     if settings['fastq_umi']:
         umi_r1, umi_r2 = add_umi_from_umi_file(
-            root = settings['root']+'.addUMI',
-            fastq_r1 = curr_r1_file,
-            fastq_r2 = curr_r2_file,
-            fastq_umi = settings['fastq_umi'],
-            can_use_previous_analysis = settings['can_use_previous_analysis']
+            root=settings['root']+'.addUMI',
+            fastq_r1=curr_r1_file,
+            fastq_r2=curr_r2_file,
+            fastq_umi=settings['fastq_umi'],
+            can_use_previous_analysis=settings['can_use_previous_analysis']
         )
         curr_r1_file = umi_r1
         curr_r2_file = umi_r2
@@ -105,47 +105,47 @@ def processCRISPRlungo(settings):
     if settings['dedup_input_on_UMI']:
         (dedup_r1, dedup_r2, dedup_tot_read_count, dedup_count_with_regex, post_dedup_count, post_dedup_read_count
                 ) = dedup_input_file(
-                        root = settings['root']+'.dedup',
-                        fastq_r1 = curr_r1_file,
-                        fastq_r2 = curr_r2_file,
-                        umi_regex = settings['umi_regex'],
-                        can_use_previous_analysis = settings['can_use_previous_analysis']
+                        root=settings['root']+'.dedup',
+                        fastq_r1=curr_r1_file,
+                        fastq_r2=curr_r2_file,
+                        umi_regex=settings['umi_regex'],
+                        can_use_previous_analysis=settings['can_use_previous_analysis']
         )
         curr_r1_file = dedup_r1
         curr_r2_file = dedup_r2
 
     filtered_on_primer_fastq_r1, filtered_on_primer_fastq_r2, post_filter_on_primer_read_count, filter_on_primer_plot_obj = filter_on_primer(
-            root = settings['root']+'.trimPrimers',
-            fastq_r1 = curr_r1_file,
-            fastq_r2 = curr_r2_file,
-            origin_seq = origin_seq,
-            min_primer_aln_score = settings['min_primer_aln_score'],
-            min_primer_length = settings['min_primer_length'],
-            min_read_length = settings['min_read_length'],
-            transposase_adapter_seq = settings['transposase_adapter_seq'],
-            n_processes = settings['n_processes'],
-            cutadapt_command = settings['cutadapt_command'],
-            keep_intermediate = settings['keep_intermediate'],
-            suppress_plots = settings['suppress_plots'],
-            can_use_previous_analysis = settings['can_use_previous_analysis'],
+            root=settings['root']+'.trimPrimers',
+            fastq_r1=curr_r1_file,
+            fastq_r2=curr_r2_file,
+            origin_seq=origin_seq,
+            min_primer_aln_score=settings['min_primer_aln_score'],
+            min_primer_length=settings['min_primer_length'],
+            min_read_length=settings['min_read_length'],
+            transposase_adapter_seq=settings['transposase_adapter_seq'],
+            n_processes=settings['n_processes'],
+            cutadapt_command=settings['cutadapt_command'],
+            keep_intermediate=settings['keep_intermediate'],
+            suppress_plots=settings['suppress_plots'],
+            can_use_previous_analysis=settings['can_use_previous_analysis'],
             )
 
     if filter_on_primer_plot_obj is not None:
         filter_on_primer_plot_obj.order = 3
         summary_plot_objects.append(filter_on_primer_plot_obj)
 
-    #perform alignment
+    # perform alignment
     (genome_mapped_bam
             ) = align_reads(
-                root = settings['root']+'.genomeAlignment',
-                fastq_r1 = filtered_on_primer_fastq_r1,
-                fastq_r2 = filtered_on_primer_fastq_r2,
-                bowtie2_reference = settings['bowtie2_genome'],
-                bowtie2_command = settings['bowtie2_command'],
-                bowtie2_threads = settings['n_processes'],
-                samtools_command = settings['samtools_command'],
-                keep_intermediate = settings['keep_intermediate'],
-                can_use_previous_analysis = settings['can_use_previous_analysis']
+                root=settings['root']+'.genomeAlignment',
+                fastq_r1=filtered_on_primer_fastq_r1,
+                fastq_r2=filtered_on_primer_fastq_r2,
+                bowtie2_reference=settings['bowtie2_genome'],
+                bowtie2_command=settings['bowtie2_command'],
+                bowtie2_threads=settings['n_processes'],
+                samtools_command=settings['samtools_command'],
+                keep_intermediate=settings['keep_intermediate'],
+                can_use_previous_analysis=settings['can_use_previous_analysis']
                 )
     if not settings['keep_intermediate']:
         if os.path.exists(filtered_on_primer_fastq_r1):
@@ -155,160 +155,163 @@ def processCRISPRlungo(settings):
             logger.debug('Deleting intermediate file ' + filtered_on_primer_fastq_r2)
             os.remove(filtered_on_primer_fastq_r2)
 
-    (final_assignment_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
-        chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,tx_circos_plot_obj,classification_plot_obj,classification_indel_plot_obj,
-        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
-        r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj) = make_final_read_assignments(
-                root = settings['root']+'.final',
-                genome_mapped_bam = genome_mapped_bam,
-                origin_seq = origin_seq,
-                cut_sites = cut_sites,
-                cut_annotations = cut_annotations,
-                cut_classification_annotations = settings['cut_classification_annotations'],
-                guide_seqs = settings['guide_sequences'],
-                cleavage_offset = settings['cleavage_offset'],
-                min_primer_length = settings['min_primer_length'],
-                genome = settings['genome'],
-                r1_r2_support_max_distance = settings['r1_r2_support_max_distance'],
-                novel_cut_merge_distance = settings['novel_cut_merge_distance'],
-                known_cut_merge_distance = settings['known_cut_merge_distance'],
-                origin_cut_merge_distance = settings['origin_cut_merge_distance'],
-                arm_min_matched_start_bases = settings['arm_min_matched_start_bases'],
-                arm_max_clipped_bases = settings['arm_max_clipped_bases'],
-                genome_map_resolution = 1000000,
-                crispresso_max_indel_size = settings['crispresso_max_indel_size'],
-                suppress_dedup_on_aln_pos_and_UMI_filter = settings['suppress_dedup_on_aln_pos_and_UMI_filter'],
-                suppress_r2_support_filter = settings['suppress_r2_support_filter'],
-                suppress_poor_alignment_filter = settings['suppress_poor_alignment_filter'],
-                write_discarded_read_info = settings['write_discarded_read_info'],
-                samtools_command = settings['samtools_command'],
-                keep_intermediate = settings['keep_intermediate'],
-                suppress_plots = settings['suppress_plots'],
-                can_use_previous_analysis = settings['can_use_previous_analysis']
+    (final_assignment_file, final_read_ids_for_crispresso, final_cut_counts, cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
+        chr_aln_plot_obj, tlen_plot_obj, deduplication_plot_obj, tx_order_plot_obj, tx_count_plot_obj, tx_circos_plot_obj, classification_plot_obj, classification_indel_plot_obj,
+        origin_indel_hist_plot_obj, origin_inversion_hist_plot_obj, origin_deletion_hist_plot_obj, origin_indel_depth_plot_obj,
+        r1_r2_support_plot_obj, r1_r2_support_dist_plot_obj, discarded_reads_plot_obj) = make_final_read_assignments(
+                root=settings['root']+'.final',
+                genome_mapped_bam=genome_mapped_bam,
+                origin_seq=origin_seq,
+                cut_sites=cut_sites,
+                cut_annotations=cut_annotations,
+                cut_classification_annotations=settings['cut_classification_annotations'],
+                guide_seqs=settings['guide_sequences'],
+                cleavage_offset=settings['cleavage_offset'],
+                min_primer_length=settings['min_primer_length'],
+                genome=settings['genome'],
+                r1_r2_support_max_distance=settings['r1_r2_support_max_distance'],
+                novel_cut_merge_distance=settings['novel_cut_merge_distance'],
+                known_cut_merge_distance=settings['known_cut_merge_distance'],
+                origin_cut_merge_distance=settings['origin_cut_merge_distance'],
+                arm_min_matched_start_bases=settings['arm_min_matched_start_bases'],
+                arm_max_clipped_bases=settings['arm_max_clipped_bases'],
+                genome_map_resolution=1000000,
+                crispresso_max_indel_size=settings['crispresso_max_indel_size'],
+                suppress_dedup_on_aln_pos_and_UMI_filter=settings['suppress_dedup_on_aln_pos_and_UMI_filter'],
+                suppress_r2_support_filter=settings['suppress_r2_support_filter'],
+                suppress_poor_alignment_filter=settings['suppress_poor_alignment_filter'],
+                write_discarded_read_info=settings['write_discarded_read_info'],
+                samtools_command=settings['samtools_command'],
+                keep_intermediate=settings['keep_intermediate'],
+                suppress_homology_detection=settings['suppress_homology_detection'],
+                suppress_plots=settings['suppress_plots'],
+                can_use_previous_analysis=settings['can_use_previous_analysis']
                 )
 
     if chr_aln_plot_obj is not None:
-        chr_aln_plot_obj.order=20
+        chr_aln_plot_obj.order = 20
         summary_plot_objects.append(chr_aln_plot_obj)
 
     if tlen_plot_obj is not None:
-        tlen_plot_obj.order=15
+        tlen_plot_obj.order = 15
         summary_plot_objects.append(tlen_plot_obj)
 
     if tlen_plot_obj is not None:
-        deduplication_plot_obj.order=16
+        deduplication_plot_obj.order = 16
         summary_plot_objects.append(deduplication_plot_obj)
 
     if classification_plot_obj is not None:
-        classification_plot_obj.order=36
+        classification_plot_obj.order = 36
         summary_plot_objects.append(classification_plot_obj)
 
     if classification_indel_plot_obj is not None:
-        classification_indel_plot_obj.order=2
+        classification_indel_plot_obj.order = 2
         summary_plot_objects.append(classification_indel_plot_obj)
 
     if tx_order_plot_obj is not None:
-        tx_order_plot_obj.order= 38
+        tx_order_plot_obj.order = 38
         summary_plot_objects.append(tx_order_plot_obj)
 
     if tx_count_plot_obj is not None:
-        tx_count_plot_obj.order= 40
+        tx_count_plot_obj.order = 40
         summary_plot_objects.append(tx_count_plot_obj)
 
     if tx_circos_plot_obj is not None:
-        tx_circos_plot_obj.order= 41
+        tx_circos_plot_obj.order = 41
         summary_plot_objects.append(tx_circos_plot_obj)
 
     if origin_indel_hist_plot_obj is not None:
-        origin_indel_hist_plot_obj.order=25
+        origin_indel_hist_plot_obj.order = 25
         summary_plot_objects.append(origin_indel_hist_plot_obj)
 
     if origin_inversion_hist_plot_obj is not None:
-        origin_inversion_hist_plot_obj.order=26
+        origin_inversion_hist_plot_obj.order = 26
         summary_plot_objects.append(origin_inversion_hist_plot_obj)
 
     if origin_deletion_hist_plot_obj is not None:
-        origin_deletion_hist_plot_obj.order=27
+        origin_deletion_hist_plot_obj.order = 27
         summary_plot_objects.append(origin_deletion_hist_plot_obj)
 
     if origin_indel_depth_plot_obj is not None:
-        origin_indel_depth_plot_obj.order=28
+        origin_indel_depth_plot_obj.order = 28
         summary_plot_objects.append(origin_indel_depth_plot_obj)
 
     if r1_r2_support_plot_obj is not None:
-        r1_r2_support_plot_obj.order=29
+        r1_r2_support_plot_obj.order = 29
         summary_plot_objects.append(r1_r2_support_plot_obj)
+
     if r1_r2_support_dist_plot_obj is not None:
-        r1_r2_support_dist_plot_obj.order=30
+        r1_r2_support_dist_plot_obj.order = 30
         summary_plot_objects.append(r1_r2_support_dist_plot_obj)
 
     if discarded_reads_plot_obj is not None:
-        discarded_reads_plot_obj.order=3
+        discarded_reads_plot_obj.order = 3
         summary_plot_objects.append(discarded_reads_plot_obj)
 
-    #crispresso_infos: dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
+    # crispresso_infos: dict of: cut, name, type, cut_loc, amp_seq, output_folder, reads_file, printed_read_count, command
     crispresso_infos = prep_crispresso2(
-                root = settings['root']+'.CRISPResso_r1',
-                input_fastq_file = curr_r1_file,
-                read_ids_for_crispresso = final_read_ids_for_crispresso,
-                cut_counts_for_crispresso = final_cut_counts,
-                cut_classification_lookup = cut_classification_lookup,
-                cut_annotations = cut_annotations,
-                av_read_length = av_read_length,
-                origin_seq = origin_seq,
-                cleavage_offset = settings['cleavage_offset'],
-                genome = settings['genome'],
-                genome_len_file = settings['genome']+'.fai',
-                crispresso_min_count = settings['crispresso_min_count'],
-                crispresso_min_aln_score = settings['crispresso_min_aln_score'],
-                crispresso_quant_window_size = settings['crispresso_quant_window_size'],
-                run_crispresso_on_novel_sites = settings['run_crispresso_on_novel_sites'],
+                root=settings['root']+'.CRISPResso_r1',
+                input_fastq_file=curr_r1_file,
+                read_ids_for_crispresso=final_read_ids_for_crispresso,
+                cut_counts_for_crispresso=final_cut_counts,
+                cut_classification_lookup=cut_classification_lookup,
+                cut_annotations=cut_annotations,
+                av_read_length=av_read_length,
+                origin_seq=origin_seq,
+                cleavage_offset=settings['cleavage_offset'],
+                genome=settings['genome'],
+                genome_len_file=settings['genome']+'.fai',
+                crispresso_min_count=settings['crispresso_min_count'],
+                crispresso_min_aln_score=settings['crispresso_min_aln_score'],
+                crispresso_quant_window_size=settings['crispresso_quant_window_size'],
+                run_crispresso_on_novel_sites=settings['run_crispresso_on_novel_sites'],
                 samtools_command=settings['samtools_command'],
                 crispresso_command=settings['crispresso_command'],
-                n_processes = settings['n_processes']
+                n_processes=settings['n_processes']
                 )
     crispresso_results, crispresso_classification_plot_obj = run_and_aggregate_crispresso(
-                root = settings['root']+".CRISPResso",
-                crispresso_infos = crispresso_infos,
-                final_assignment_file = final_assignment_file,
-                n_processes = settings['n_processes'],
-                keep_intermediate = settings['keep_intermediate'],
-                suppress_plots = settings['suppress_plots'],
-                can_use_previous_analysis = settings['can_use_previous_analysis']
+                root=settings['root']+".CRISPResso",
+                crispresso_infos=crispresso_infos,
+                final_assignment_file=final_assignment_file,
+                n_processes=settings['n_processes'],
+                keep_intermediate=settings['keep_intermediate'],
+                suppress_plots=settings['suppress_plots'],
+                can_use_previous_analysis=settings['can_use_previous_analysis']
                 )
     if crispresso_classification_plot_obj is not None:
-        crispresso_classification_plot_obj.order=40
+        crispresso_classification_plot_obj.order = 40
         summary_plot_objects.append(crispresso_classification_plot_obj)
 
     final_summary_file, final_summary_plot_obj = make_final_summary(
-            root = settings['root']+'.summary',
-            num_reads_input = num_reads_input,
-            post_dedup_count = post_dedup_count,
-            post_filter_on_primer_read_count = post_filter_on_primer_read_count,
-            final_read_count = final_read_count,
-            discarded_read_counts = discarded_read_counts,
-            classification_read_counts = classification_read_counts,
-            classification_indel_read_counts = classification_indel_read_counts,
-            suppress_plots = settings['suppress_plots']
+            root=settings['root']+'.summary',
+            num_reads_input=num_reads_input,
+            post_dedup_count=post_dedup_count,
+            post_filter_on_primer_read_count=post_filter_on_primer_read_count,
+            final_read_count=final_read_count,
+            discarded_read_counts=discarded_read_counts,
+            classification_read_counts=classification_read_counts,
+            classification_indel_read_counts=classification_indel_read_counts,
+            suppress_plots=settings['suppress_plots']
             )
 
     if final_summary_plot_obj is not None:
-        final_summary_plot_obj.order= 1
+        final_summary_plot_obj.order = 1
         summary_plot_objects.append(final_summary_plot_obj)
 
     if not settings['suppress_plots']:
         make_report(report_file=settings['root']+".html",
-                report_name = 'Report',
-                crisprlungo_folder = '',
-                crispresso_run_names = crispresso_results['run_names'],
-                crispresso_sub_html_files = crispresso_results['run_sub_htmls'],
-                summary_plot_objects = summary_plot_objects,
-                )
+                    report_name='Report',
+                    crisprlungo_folder='',
+                    crispresso_run_names=crispresso_results['run_names'],
+                    crispresso_sub_html_files=crispresso_results['run_sub_htmls'],
+                    summary_plot_objects=summary_plot_objects,
+                    )
 
     logger.info('Successfully completed!')
     return final_summary_file
 
     # FINISHED
+
 
 def parse_settings(args):
     """
@@ -331,7 +334,6 @@ def parse_settings(args):
     parser.add_argument('--write_discarded_read_info',action='store_true',help='If true, a file with information for discarded reads is produced')
     parser.add_argument('--suppress_plots',action='store_true',help='If true, no plotting will be performed')
 
-
     parser.add_argument('--guide_sequences', nargs='+', help='Spacer sequences of guides (multiple guide sequences are separated by spaces). Spacer sequences must be provided without the PAM sequence, but oriented so the PAM would immediately follow the provided spacer sequence', action='extend', default=[])
     parser.add_argument('--cut_classification_annotations', nargs='+', help='User-customizable annotations for cut products in the form: chr1:234:left:Custom_label (multiple annotations are separated by spaces)', action='extend', default=[])
     parser.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
@@ -347,23 +349,23 @@ def parse_settings(args):
     parser.add_argument('--known_cut_merge_distance', type=int, help='Novel cut sites discovered within this distance (bp) with a known/provided/homologous site (that is not the origin) will be merged to that site. Homologous sites are defined as those that have homology to guide_sequences. Novel cut sites farther than known_cut_merge_distance will be merged into novel cut sites based on the parameter novel_cut_merge_distance.', default=50)
     parser.add_argument('--origin_cut_merge_distance', type=int, help='Reads aligned within this distance (bp) to the origin site will be merged to that origin.', default=10000)
     parser.add_argument('--short_indel_length_cutoff', type=int, help='For reads aligned to a cut site, indels this size or shorter are classified as "short indels" while indels larger than this size are classified as "long indels" ', default=50)
+    parser.add_argument('--suppress_homology_detection', help='If set, detection of guide sequence homology at cut sites is skipped. By default, novel cut sites are checked for homology, which can be computationally demanding if there are many cut sites.', action='store_true')
 
-    #for finding offtargets with casoffinder
+    # for finding offtargets with casoffinder
     ot_group = parser.add_argument_group('In silico off-target search parameters')
     ot_group.add_argument('--PAM', type=str, help='PAM for in-silico off-target search', default=None)
     ot_group.add_argument('--casoffinder_num_mismatches', type=int, help='If greater than zero, the number of Cas-OFFinder mismatches for in-silico off-target search. If this value is zero, Cas-OFFinder is not run', default=0)
 
-    #specify primer filtering information
+    # specify primer filtering information
     p_group = parser.add_argument_group('Primer and filtering parameters and settings')
-    p_group.add_argument('--primer_seq', type=str, help='Sequence of primer',default=None)
+    p_group.add_argument('--primer_seq', type=str, help='Sequence of primer', default=None)
     p_group.add_argument('--primer_in_r2', help='If true, the primer is in R2. By default, the primer is required to be in R1.',action='store_true')
     p_group.add_argument('--min_primer_aln_score', type=int, help='Minimum primer/origin alignment score for trimming.',default=40)
     p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=30)
     p_group.add_argument('--min_read_length', type=int, help='Minimum length of read after all filtering',default=30)
     p_group.add_argument('--transposase_adapter_seq', type=str, help='Transposase adapter sequence to be trimmed from reads',default='CTGTCTCTTATACACATCTGACGCTGCCGACGA')
 
-
-    #min alignment cutoffs for alignment to each arm/side of read
+    # min alignment cutoffs for alignment to each arm/side of read
     a_group = parser.add_argument_group('Alignment cutoff parameters')
     a_group.add_argument('--arm_min_matched_start_bases', type=int, help='Number of bases that are required to be matching (no indels or mismatches) at the beginning of the read on each "side" of the alignment. E.g. if arm_min_matched_start_bases is set to 5, the first and last 5bp of the read alignment would have to match exactly to the aligned location.', default=10)
     a_group.add_argument('--arm_max_clipped_bases', type=int, help='Maximum number of clipped bases at the beginning of the alignment. Bowtie2 alignment marks reads on the beginning or end of the read as "clipped" if they do not align to the genome. This could arise from CRISPR-induced insertions, or bad alignments. ' + \
@@ -371,7 +373,7 @@ def parse_settings(args):
     a_group.add_argument('--ignore_n', help='If set, "N" bases will be ignored. By default (False) N bases will count as mismatches in the number of bases required to match at each arm/side of the read', action='store_true')
     a_group.add_argument('--suppress_poor_alignment_filter', help='If set, reads with poor alignment (fewer than --arm_min_matched_start_bases matches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) are included in final analysis and counts. By default they are excluded.', action='store_true')
 
-    #CRISPResso settings
+    # CRISPResso settings
     c_group = parser.add_argument_group('CRISPResso settings')
     c_group.add_argument('--crispresso_min_count', type=int, help='Min number of reads required to be seen at a site for it to be analyzed by CRISPResso', default=50)
     c_group.add_argument('--crispresso_max_indel_size', type=int, help='Maximum length of indel (as determined by genome alignment) for a read to be analyzed by CRISPResso. Reads with indels longer than this length will not be analyzed by CRISPResso, but the indel length will be reported elsewhere.', default=50)
@@ -658,10 +660,15 @@ def parse_settings(args):
         settings['origin_cut_merge_distance'] = int(settings_file_args['origin_cut_merge_distance'])
         settings_file_args.pop('origin_cut_merge_distance')
 
-    settings['short_indel_length_cutoff'] = cmd_args.short_indel_length_cutoff
-    if 'short_indel_length_cutoff' in settings_file_args:
-        settings['short_indel_length_cutoff'] = int(settings_file_args['short_indel_length_cutoff'])
-        settings_file_args.pop('short_indel_length_cutoff')
+    settings['suppress_homology_detection'] = cmd_args.suppress_homology_detection
+    if 'suppress_homology_detection' in settings_file_args:
+        settings['suppress_homology_detection'] = int(settings_file_args['suppress_homology_detection'])
+        settings_file_args.pop('suppress_homology_detection')
+
+    settings['dedup_input_on_UMI'] = cmd_args.dedup_input_on_UMI
+    if 'dedup_input_on_UMI' in settings_file_args:
+        settings['dedup_input_on_UMI'] = (settings_file_args['dedup_input_on_UMI'].lower() == 'true')
+        settings_file_args.pop('dedup_input_on_UMI')
 
     settings['dedup_input_on_UMI'] = cmd_args.dedup_input_on_UMI
     if 'dedup_input_on_UMI' in settings_file_args:
@@ -1040,7 +1047,6 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
             (type=Programmed, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
         primer_chr: chromosome location of primer
         primer_loc: position of primer
-        primer_is_genomic: boolean, true if primer is genomic
         av_read_length: float, average length of reads in fastq_r1
         num_reads_input: int, number of reads in input fastq_r1
     """
@@ -1070,7 +1076,7 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
 
                 if read_cut_site_count == cut_site_count:
                     logger.info('Using previously-prepared primer, cut-site, and sequencing information')
-                    return (origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input)
+                    return (origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input)
         logger.info('Could not recover previously-created primer, cut-site, and sequencing information. Reanalyzing.')
 
     logger.info('Preparing primer and cut-site information')
@@ -1209,7 +1215,7 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
 
     logger.info('Finished preparing primer, cut-site, and sequencing information')
 
-    return (origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input)
+    return (origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input)
 
 def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False,can_use_previous_analysis=False):
     """
@@ -1790,7 +1796,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     novel_cut_merge_distance=50,known_cut_merge_distance=50,origin_cut_merge_distance=10000,short_indel_length_cutoff=50,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
     arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,suppress_dedup_on_aln_pos_and_UMI_filter=False,
     suppress_r2_support_filter=False,suppress_poor_alignment_filter=False,write_discarded_read_info=False,
-    samtools_command='samtools',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
+    samtools_command='samtools',keep_intermediate=False,suppress_homology_detection=False,suppress_plots=False,can_use_previous_analysis=False):
     """
     Makes final read assignments (after deduplicating based on UMI and alignment location)
 
@@ -2026,7 +2032,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     r1_r2_support_status_counts = defaultdict(int)
     final_file_tmp = root + '.final_assignments.tmp'
     with open(final_file_tmp,'w') as af1:
-        af1.write("\t".join([str(x) for x in ['read_id','curr_position','cut_pos','cut_direction','del_primer','ins_target','insert_size','r1_r2_support_status','r1_r2_support_dist','r1_r2_orientation_str']])+"\n")
+        af1.write("\t".join([str(x) for x in ['read_id','curr_position','cut_pos','cut_direction','del_primer','ins_target','insert_size','r1_r2_support_status','r1_r2_support_dist','r1_r2_orientation_str','umi_pos_dedup_key']])+"\n")
 
         if not os.path.exists(genome_mapped_bam):
             raise Exception('Cannot find bam file at ' + genome_mapped_bam)
@@ -2172,17 +2178,17 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             aln1 = line_els[2] + ":" + line_els[3]
             aln2 = line_els[6] + ":" + line_els[7] # if unpaired, this will just be *:0, so we can still use it in our key
             tlen = abs(int(line_els[8]))
-            key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
-            if key in seen_reads_for_dedup:
-                seen_read_counts_for_dedup[key] += 1
+            umi_dedup_key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
+            if umi_dedup_key in seen_reads_for_dedup:
+                seen_read_counts_for_dedup[umi_dedup_key] += 1
                 if not suppress_dedup_on_aln_pos_and_UMI_filter:
                     discarded_reads_duplicates += 1
                     if write_discarded_read_info:
-                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[key]+'('+key+')\n')
+                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[umi_dedup_key]+'('+umi_dedup_key+')\n')
                     continue
             else:
-                seen_reads_for_dedup[key] = line_els[0]
-                seen_read_counts_for_dedup[key] = 1
+                seen_reads_for_dedup[umi_dedup_key] = line_els[0]
+                seen_read_counts_for_dedup[umi_dedup_key] = 1
             #finished deduplication by barcode and aln position
 
             cut_points_by_chr[line_chr][line_start] += 1
@@ -2195,13 +2201,15 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             aln_pos_window = int(line_start)/genome_map_resolution
             aln_pos_by_chr[line_chr][aln_pos_window] += 1
 
-            af1.write("\t".join([str(x) for x in [line_info,curr_position,cut_pos,cut_direction,del_primer,ins_target,insert_size, r1_r2_support_status, r1_r2_support_dist, r1_r2_orientation_str]]) + "\n")
+            af1.write("\t".join([str(x) for x in [line_info, curr_position, cut_pos, cut_direction, del_primer,
+                      ins_target, insert_size, r1_r2_support_status, r1_r2_support_dist, r1_r2_orientation_str, umi_dedup_key]]) + "\n")
 
         #done iterating through bam file
     #close assignments file
-    logger.debug('Finished first pass through alignments')
     if write_discarded_read_info:
         fout_discarded.close()
+
+    logger.debug('Finished first pass through alignments')
 
     chr_aln_plot_root = root + ".chr_alignments"
     keys = sorted(aligned_chr_counts.keys())
@@ -2214,6 +2222,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     if suppress_plots:
         chr_aln_plot_obj = None
     else:
+        logger.debug('Plotting alignment summary')
+
         fig = plt.figure(figsize=(12,6))
         ax = plt.subplot(111)
         if len(vals) > 0:
@@ -2248,6 +2258,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 fout.write(str(key) + '\t' + str(aligned_tlens[key]) + '\n')
 
         if not suppress_plots:
+            logger.debug('Plotting insert size summary')
             fig = plt.figure(figsize=(12,6))
             ax = plt.subplot(111)
             if len(vals) > 0:
@@ -2284,6 +2295,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
     deduplication_plot_obj = None
     if total_reads_processed > 0 and not suppress_plots:
+        logger.debug('Plotting duplication summary')
         labels = ['Not duplicate','Duplicate']
         values = [total_r1_processed-discarded_reads_duplicates,discarded_reads_duplicates]
 
@@ -2325,55 +2337,57 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
 
     cut_point_homology_info = {} #dict containing cut points with sufficient homology
-    with open(root+".cut_homology.txt",'w') as fout:
-        fout.write("\t".join([str(x) for x in ['guide_seq','cut_chr','cut_point','is_valid_homology_site','potential_guide','best_score','match_direction','n_matches','n_mismatches','n_gaps','aln_guide','aln_ref']])+"\n")
-        aln_match_score = 2
-        aln_mismatch_score = -1
-        aln_gap_extend_score = -2
-        aln_gap_open_score = -5
-        aln_matrix = CRISPResso2Align.make_matrix(match_score=aln_match_score,mismatch_score=aln_mismatch_score)
-        padded_seq_len = 30 #how many bp to extend around cut to search for guide
-        guide_homology_max_gaps = 2
-        guide_homology_max_mismatches = 5
-        for guide_seq in guide_seqs:
-            for cut_chr in cut_points_by_chr:
-                these_cut_points = sorted(cut_points_by_chr[cut_chr])
-                for cut_point in these_cut_points:
-                    faidx_cmd = '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,cut_point-padded_seq_len,cut_point+padded_seq_len)
-                    logger.debug('Searching for homology. Getting sequence around cut site ' + cut_chr + ':' + str(cut_point) + ': ' + str(faidx_cmd))
-                    cut_padded_seq = subprocess.check_output(faidx_cmd,shell=True).decode(sys.stdout.encoding).strip()
-                    potential_guide = None
-                    amp_incentive = np.zeros(len(cut_padded_seq)+1,dtype=int)
-                    f1,f2,fw_score=CRISPResso2Align.global_align(guide_seq.upper(),cut_padded_seq.upper(),matrix=aln_matrix,gap_incentive=amp_incentive,gap_open=aln_gap_open_score,gap_extend=aln_gap_extend_score)
-                    r1,r2,rv_score=CRISPResso2Align.global_align(reverse_complement(guide_seq.upper()),cut_padded_seq.upper(),matrix=aln_matrix,gap_incentive=amp_incentive,gap_open=aln_gap_open_score,gap_extend=aln_gap_extend_score)
+    if not suppress_homology_detection:
+        logger.info('Analyzing sequence homology at cut points')
+        with open(root+".cut_homology.txt",'w') as fout:
+            fout.write("\t".join([str(x) for x in ['guide_seq','cut_chr','cut_point','is_valid_homology_site','potential_guide','best_score','match_direction','n_matches','n_mismatches','n_gaps','aln_guide','aln_ref']])+"\n")
+            aln_match_score = 2
+            aln_mismatch_score = -1
+            aln_gap_extend_score = -2
+            aln_gap_open_score = -5
+            aln_matrix = CRISPResso2Align.make_matrix(match_score=aln_match_score,mismatch_score=aln_mismatch_score)
+            padded_seq_len = 30 #how many bp to extend around cut to search for guide
+            guide_homology_max_gaps = 2
+            guide_homology_max_mismatches = 5
+            for guide_seq in guide_seqs:
+                for cut_chr in cut_points_by_chr:
+                    these_cut_points = sorted(cut_points_by_chr[cut_chr])
+                    for cut_point in these_cut_points:
+                        faidx_cmd = '%s faidx -n 10000 %s %s:%d-%d | tail -n 1'%(samtools_command,genome,cut_chr,cut_point-padded_seq_len,cut_point+padded_seq_len)
+                        #logger.debug('Searching for homology. Getting sequence around cut site ' + cut_chr + ':' + str(cut_point) + ': ' + str(faidx_cmd))
+                        cut_padded_seq = subprocess.check_output(faidx_cmd,shell=True).decode(sys.stdout.encoding).strip()
+                        potential_guide = None
+                        amp_incentive = np.zeros(len(cut_padded_seq)+1,dtype=int)
+                        f1,f2,fw_score=CRISPResso2Align.global_align(guide_seq.upper(),cut_padded_seq.upper(),matrix=aln_matrix,gap_incentive=amp_incentive,gap_open=aln_gap_open_score,gap_extend=aln_gap_extend_score)
+                        r1,r2,rv_score=CRISPResso2Align.global_align(reverse_complement(guide_seq.upper()),cut_padded_seq.upper(),matrix=aln_matrix,gap_incentive=amp_incentive,gap_open=aln_gap_open_score,gap_extend=aln_gap_extend_score)
 
-                    is_rc = False
-                    best_score = fw_score
-                    best_1 = f1
-                    best_2 = f2
-                    if fw_score > rv_score:
-                        n_matches,n_mismatches,n_gaps,cleavage_ind,potential_guide = get_guide_match_from_aln(f1,f2,len(guide_seq)+cleavage_offset-1) #cleavage ind returns
-                    else:
-                        is_rc = True
-                        best_score = rv_score
-                        best_1 = r1
-                        best_2 = r2
-                        n_matches,n_mismatches,n_gaps,cleavage_ind,potential_guide = get_guide_match_from_aln(r1,r2,-1*cleavage_offset-1) #cleavage ind returns 
-                        potential_guide = reverse_complement(potential_guide)
+                        is_rc = False
+                        best_score = fw_score
+                        best_1 = f1
+                        best_2 = f2
+                        if fw_score > rv_score:
+                            n_matches,n_mismatches,n_gaps,cleavage_ind,potential_guide = get_guide_match_from_aln(f1,f2,len(guide_seq)+cleavage_offset-1) #cleavage ind returns
+                        else:
+                            is_rc = True
+                            best_score = rv_score
+                            best_1 = r1
+                            best_2 = r2
+                            n_matches,n_mismatches,n_gaps,cleavage_ind,potential_guide = get_guide_match_from_aln(r1,r2,-1*cleavage_offset-1) #cleavage ind returns 
+                            potential_guide = reverse_complement(potential_guide)
 
-                    cut_key = cut_chr+":"+str(cut_point-padded_seq_len+cleavage_ind+1)
-                    is_rc_string = 'Reverse' if is_rc else 'Forward'
-                    is_valid_homology = False
-
-                    if n_gaps <= guide_homology_max_gaps and n_mismatches <= guide_homology_max_mismatches:
-                        is_valid_homology = True
                         cut_key = cut_chr+":"+str(cut_point-padded_seq_len+cleavage_ind+1)
-                        if cut_key not in cut_point_homology_info:
-                            cut_point_homology_info[cut_key] = (best_score,potential_guide,n_matches,n_mismatches,n_gaps,is_rc)
-                        elif best_score > cut_point_homology_info[cut_key][0]: #sometimes a suboptimal alignment (guide is aligned partially beyond the amplicon) could already identify this cut, so take the one with the better alignment score
-                            cut_point_homology_info[cut_key] = (best_score,potential_guide,n_matches,n_mismatches,n_gaps,is_rc)
+                        is_rc_string = 'Reverse' if is_rc else 'Forward'
+                        is_valid_homology = False
 
-                    fout.write("\t".join([str(x) for x in [guide_seq,cut_chr,cut_point,is_valid_homology,potential_guide,best_score,is_rc_string,n_matches,n_mismatches,n_gaps,best_1,best_2]])+"\n")
+                        if n_gaps <= guide_homology_max_gaps and n_mismatches <= guide_homology_max_mismatches:
+                            is_valid_homology = True
+                            cut_key = cut_chr+":"+str(cut_point-padded_seq_len+cleavage_ind+1)
+                            if cut_key not in cut_point_homology_info:
+                                cut_point_homology_info[cut_key] = (best_score,potential_guide,n_matches,n_mismatches,n_gaps,is_rc)
+                            elif best_score > cut_point_homology_info[cut_key][0]: #sometimes a suboptimal alignment (guide is aligned partially beyond the amplicon) could already identify this cut, so take the one with the better alignment score
+                                cut_point_homology_info[cut_key] = (best_score,potential_guide,n_matches,n_mismatches,n_gaps,is_rc)
+
+                        fout.write("\t".join([str(x) for x in [guide_seq,cut_chr,cut_point,is_valid_homology,potential_guide,best_score,is_rc_string,n_matches,n_mismatches,n_gaps,best_1,best_2]])+"\n")
 
     #the counts in cut_points include only reads that weren't marked as duplicates
     #final_cut_point_lookup = dict from old(fuzzy/imprecise) position to new
@@ -2496,10 +2510,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     r1_r2_support_status_ind = 7
     r1_r2_support_dist_ind = 8
     r1_r2_orientation_str_ind = 9
+    umi_dedup_key_ind = 10
 
     with open(final_file_tmp,'r') as fin, open(final_file,'w') as fout:
         old_head = fin.readline().strip()
-        fout.write(old_head + "\t" + "\t".join([str(x) for x in ['final_cut_pos','final_cut_indel','classification']]) +"\n")
+        fout.write(old_head + "\t" + "\t".join([str(x) for x in ['reads_with_same_umi_pos','final_cut_pos','final_cut_indel','indel_classification','classification']]) +"\n")
         for line in fin:
             line = line.rstrip('\n')
             final_total_count += 1
@@ -2534,16 +2549,18 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             final_classification = cut_classification_lookup[final_cut_point_and_direction]
             final_classification_counts[final_classification] += 1
 
-            indel_str = ' no indels'
+            indel_str = 'no indels'
             if abs(final_cut_indel) > 0:
                 if abs(final_cut_indel) > short_indel_length_cutoff:
-                    indel_str = ' long indels'
+                    indel_str = 'long indels'
                 else:
-                    indel_str = ' short indels'
+                    indel_str = 'short indels'
 
-            final_classification_indel_counts[final_classification+indel_str] += 1
+            final_classification_indel_counts[final_classification+' '+indel_str] += 1
+            umi_dedup_key = line_els[umi_dedup_key_ind]
+            num_barcodes_seen_umi_pos = seen_read_counts_for_dedup[umi_dedup_key]
 
-            fout.write(line + "\t" + "\t".join([str(x) for x in [final_cut_point_and_direction,final_cut_indel,final_classification]]) +"\n")
+            fout.write(line + "\t" + "\t".join([str(x) for x in [num_barcodes_seen_umi_pos,final_cut_point_and_direction,final_cut_indel,indel_str,final_classification]]) +"\n")
 #            fout.write(line + "\t" + "\t".join([str(x) for x in [final_cut_point_and_direction,'it:'+str(ins_target)+';dp:'+str(del_primer)+';ai:'+str(aln_indel)+';fci:'+str(final_cut_indel),final_classification]]) +"\n")
 
             if final_cut_point_chr == origin_chr:
@@ -2695,7 +2712,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         summary.write("\t".join(classification_indel_labels)+"\n")
         summary.write("\t".join([str(x) for x in classification_indel_counts])+"\n")
     if len(top_sorted_tx_list) > 0 and not suppress_plots:
-        logger.debug('Plotting translocations')
+        logger.debug('Plotting translocation list')
         # make tx order plot
         pos_list = [':'.join(x.split(':')[0:2]) for x in top_sorted_tx_list]
         pos_list = sorted(list(set(pos_list)))
@@ -2877,6 +2894,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 )
 
         #plot circos plot
+        logger.debug('Plotting translocation circos plot')
         plot_name = tx_list_report_root + ".circos"
         plot_tx_circos(genome,final_cut_counts,origin_chr,origin_cut_pos,plot_name)
         tx_circos_plot_obj = PlotObject(plot_name = plot_name,
@@ -2886,6 +2904,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 )
 
         #assignment plot
+        logger.debug('Plotting read classification assignment plot')
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         ax.pie(pie_values, labels=pie_labels, autopct="%1.2f%%")
@@ -2916,8 +2935,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         ax.pie(outer_pie_values, labels=None,
             wedgeprops=wedge_properties,autopct="%1.2f%%",colors=['silver','pink','crimson'],pctdistance=1.08)
         patch1 = Patch(color='silver', label='No indels')
-        patch2 = Patch(color='pink', label='Short indels')
-        patch3 = Patch(color='crimson', label='Long indels')
+        patch2 = Patch(color='pink', label='Short indels <=' +str(short_indel_length_cutoff)+'bp')
+        patch3 = Patch(color='crimson', label='Long indels >'+str(short_indel_length_cutoff)+'bp')
 
         plt.legend(handles=[patch1, patch2, patch3])
 
@@ -3089,6 +3108,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             ax.set_ymargin(0.05)
         else:
             ax.bar(0,0)
+        ax.set_xlabel('Position (bp)')
         ax.set_ylabel('Read depth (Number of reads)')
         ax.set_title('Read depth of 100bp after origin')
         line1 = ax.axvline(xs_primer[min_primer_length]+0.5,color='k',ls='dotted')
@@ -3097,21 +3117,34 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
         # plot of coverage of {long_distance} after cut
         ax = plt.subplot(212)
-        all_long_xs = xs_long_primer+xs_long_post
-        all_long_ys = ys_long_primer+ys_long_post
-        inds_to_keep = list(range(0,len(all_long_xs),int(len(all_long_xs)/100)))
+        all_long_xs = xs_long_post
+        all_long_ys = ys_long_post
+        num_downsampled = 250
+        endPow = math.log(len(all_long_xs),10)
+        log_space_num = endPow/num_downsampled
+        inds_to_keep = sorted(list(set([int(10**(x*log_space_num)) if x > 0 else 1 for x in range(num_downsampled)]))) + [len(all_long_xs)-1]
+
         subset_long_xs = [all_long_xs[x] for x in inds_to_keep]
         subset_long_ys = [all_long_ys[x] for x in inds_to_keep]
+        # bottom right corner
+        subset_long_xs.append(all_long_xs[-1])
+        subset_long_ys.append(0)
+        # bottom left corner
+        subset_long_xs.append(0)
+        subset_long_ys.append(0)
         if len(origin_depth_counts_long) > 0:
-            ax.bar(subset_long_xs,subset_long_ys)
+            #ax.bar(subset_long_xs,subset_long_ys,width=0.5*subset_long_xs)
+            ax.fill(subset_long_xs,subset_long_ys)
             ax.set_ymargin(0.05)
+            ax.set_xscale('log',base=10)
+            ax.set_xlabel('Position (Log scale bp)')
         else:
             ax.bar(0,0)
         ax.set_ylabel('Read depth (Number of reads)')
         ax.set_title('Read depth of '+long_distance_str+' after origin')
-        line1 = ax.axvline(xs_long_primer[min_primer_length]+0.5,color='k',ls='dotted')
+
         line2 = ax.axvline(0,color='r',ls='dotted')
-        ax.legend([line1,line2],['min primer length','origin location'],loc='lower right',bbox_to_anchor=(1,0))
+        ax.legend([line2],['origin location'],loc='lower right',bbox_to_anchor=(1,0))
 
         plt.savefig(origin_indel_depth_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
         plt.savefig(origin_indel_depth_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
@@ -3149,6 +3182,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         summary.write("\t".join([str(x) for x in values])+"\n")
 
     if total_reads_processed > 0 and not suppress_plots:
+        logger.debug('Plotting R1/R2 support plots')
         fig = plt.figure(figsize=(8,8))
         ax = plt.subplot(111)
         pie_values = []
@@ -3194,6 +3228,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             summary.write(str(key) + '\t' + str(r1_r2_not_support_distances[key]) + '\n')
 
     if total_reads_processed > 0 and not suppress_plots:
+        logger.debug('Plotting R1/R2 distance plots')
         #plot of distance between R1 and R2 for R1/R2 supportive read pairs
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(211)
@@ -3242,6 +3277,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     if suppress_plots:
         discarded_reads_plot_obj = None
     else:
+        logger.debug
         fig = plt.figure(figsize=(12,12))
         ax = plt.subplot(111)
         pie_values = []
