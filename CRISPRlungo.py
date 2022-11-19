@@ -3130,7 +3130,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         subset_long_xs.append(all_long_xs[-1])
         subset_long_ys.append(0)
         # bottom left corner
-        subset_long_xs.append(0)
+        subset_long_xs.append(1)
         subset_long_ys.append(0)
         if len(origin_depth_counts_long) > 0:
             #ax.bar(subset_long_xs,subset_long_ys,width=0.5*subset_long_xs)
