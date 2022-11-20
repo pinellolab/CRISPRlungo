@@ -38,7 +38,7 @@ def main():
 def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     #test primer fw, guide fw
     print('Testing Primer FW Guide FW')
-    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = CRISPRlungo.prep_input(
+    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
                     root = 'test.py.primer_fw_guide_fw',
                     primer_seq = 'TTGCAATGAAAATAAATGTTT',
                     min_primer_length = 0,
@@ -58,18 +58,16 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
         print(f"{cut_annotations=}")
         print(f"{primer_chr=}")
         print(f"{primer_loc=}")
-        print(f"{primer_is_genomic=}")
         print(f"{av_read_length=}")
         print(f"{num_reads_input=}")
     assert(origin_seq == 'TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAA')
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 101)
-    assert(primer_is_genomic == True)
     assert(av_read_length == 99)
     assert(num_reads_input == 4)
 
     print('Testing Primer FW Guide RV')
-    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = CRISPRlungo.prep_input(
+    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
                     root = 'test.py.primer_fw_guide_rv',
                     primer_seq = 'TTGCAATGAAAATAAATGTTT',
                     min_primer_length = 0,
@@ -89,18 +87,16 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
         print(f"{cut_annotations=}")
         print(f"{primer_chr=}")
         print(f"{primer_loc=}")
-        print(f"{primer_is_genomic=}")
         print(f"{av_read_length=}")
         print(f"{num_reads_input=}")
     assert(origin_seq == 'TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAA')
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 101)
-    assert(primer_is_genomic == True)
     assert(av_read_length == 99)
     assert(num_reads_input == 4)
 
     print('Testing Primer RV Guide RW')
-    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = CRISPRlungo.prep_input(
+    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
                     root = 'test.py.primer_rv_guide_fw',
                     primer_seq = 'TTCCTTTGTTCCCTAAGTCCA',
                     min_primer_length = 0,
@@ -120,18 +116,16 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
         print(f"{cut_annotations=}")
         print(f"{primer_chr=}")
         print(f"{primer_loc=}")
-        print(f"{primer_is_genomic=}")
         print(f"{av_read_length=}")
         print(f"{num_reads_input=}")
     assert(origin_seq == 'TTCCTTTGTTCCCTAAGTCCAACTACTAAACTGGGGGATA')
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 201)
-    assert(primer_is_genomic == True)
     assert(av_read_length == 99)
     assert(num_reads_input == 4)
 
     print('Testing Primer RV Guide RV')
-    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, primer_is_genomic, av_read_length, num_reads_input = CRISPRlungo.prep_input(
+    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
                     root = 'test.py.primer_rv_guide_rv',
                     primer_seq = 'TTCCTTTGTTCCCTAAGTCCA',
                     min_primer_length = 0,
@@ -151,13 +145,11 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
         print(f"{cut_annotations=}")
         print(f"{primer_chr=}")
         print(f"{primer_loc=}")
-        print(f"{primer_is_genomic=}")
         print(f"{av_read_length=}")
         print(f"{num_reads_input=}")
     assert(origin_seq == 'TTCCTTTGTTCCCTAAGTCCAACTACTAAACTGGGGGATA')
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 201)
-    assert(primer_is_genomic == True)
     assert(av_read_length == 99)
     assert(num_reads_input == 4)
 

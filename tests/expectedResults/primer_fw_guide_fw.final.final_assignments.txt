@@ -1,7 +1,7 @@
-read_id	curr_position	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	final_cut_pos	final_cut_indel	classification
-WT1	chr11_sm:161-199	chr11_sm:161	right	0	0	None	None	None	None	chr11_sm:161:right	0	Linear
-origin_del1	chr11_sm:161-200	chr11_sm:161	right	0	0	None	None	None	None	chr11_sm:161:right	0	Linear
-origin_ins1	chr11_sm:161-198	chr11_sm:161	right	0	0	None	None	None	None	chr11_sm:161:right	0	Linear
-del1Left	chr11_sm:161-200	chr11_sm:161	right	1	0	None	None	None	None	chr11_sm:161:right	-1	Linear
-ins1	chr11_sm:161-198	chr11_sm:161	right	0	1	None	None	None	None	chr11_sm:161:right	1	Linear
-del1Right	chr11_sm:162-200	chr11_sm:162	right	0	0	None	None	None	None	chr11_sm:161:right	-1	Linear
+read_id	curr_position	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	umi_pos_dedup_key	reads_with_same_umi_pos	final_cut_pos	final_cut_indel	indel_classification	classification
+WT1	chr11_sm:161-199	chr11_sm:161	right	0	0	None	None	None	None	WT1 chr11_sm:161 *:0 0	1	chr11_sm:161:right	0	no indels	Linear
+origin_del1	chr11_sm:161-200	chr11_sm:161	right	0	0	None	None	None	None	origin_del1 chr11_sm:161 *:0 0	1	chr11_sm:161:right	0	no indels	Linear
+origin_ins1	chr11_sm:161-198	chr11_sm:161	right	0	0	None	None	None	None	origin_ins1 chr11_sm:161 *:0 0	1	chr11_sm:161:right	0	no indels	Linear
+del1Left	chr11_sm:161-200	chr11_sm:161	right	1	0	None	None	None	None	del1Left chr11_sm:161 *:0 0	1	chr11_sm:161:right	-1	short indels	Linear
+ins1	chr11_sm:161-198	chr11_sm:161	right	0	1	None	None	None	None	ins1 chr11_sm:161 *:0 0	1	chr11_sm:161:right	1	short indels	Linear
+del1Right	chr11_sm:162-200	chr11_sm:162	right	0	0	None	None	None	None	del1Right chr11_sm:162 *:0 0	1	chr11_sm:161:right	-1	short indels	Linear
