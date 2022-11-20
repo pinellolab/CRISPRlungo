@@ -1969,8 +1969,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                         head_line = fin.readline().rstrip('\n')
                         head_line_els = head_line.split("\t")
                         read_total_read_count = 0
-                        final_cut_ind = 10
-                        final_cut_indel_ind = 11
+                        final_cut_ind = 12
+                        final_cut_indel_ind = 13
                         if head_line_els[final_cut_ind] == "final_cut_pos" and head_line_els[final_cut_indel_ind] == 'final_cut_indel':
                             logger.info('Reading previously-processed assignments')
                             #if header matches, read file
@@ -3310,8 +3310,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 plot_name = discarded_reads_plot_obj_root,
                 plot_title = 'Discarded read count summary',
                 plot_label = str(discarded_count) + '/'+str(total_r1_processed) + ' reads were discarded.<br>'+str(final_total_count) + ' R1 reads were used for the final analysis. <br>' + plot_count_str + '<br>' +
-                    discard_dup_str + '<br>' + discard_poor_aln_str + '<br>' + discard_r1r2_str + '<br>Poor alignment: Reads are aligned such that the front AND back of the read have greater than ' +
-                    str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have greater than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
+                    discard_dup_str + '<br>' + discard_poor_aln_str + '<br>' + discard_r1r2_str + '<br>Poor alignments are alignments of reads such that the front AND back of the read have greater than ' +
+                    str(arm_max_clipped_bases) +'bp clipped, or the start or the end of the read have fewer than ' + str(arm_min_matched_start_bases) + 'bp matching the reference. These cutoffs can be adjusted using the --arm_max_clipped_bases and --arm_min_matched_start_bases parameters.',
                 plot_datas = [
                     ('Discarded reads summary',discarded_reads_plot_obj_root + ".txt")
                     ]
@@ -4165,7 +4165,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
     with open(final_assignment_file,'r') as f_assignments, open(annotated_final_assignments_file,'w') as fout:
         head = f_assignments.readline().rstrip('\n')
         head_line_els = head.split("\t")
-        final_classification_ind = 12
+        final_classification_ind = 15
         if head_line_els[final_classification_ind] != "classification":
             raise Exception("Couldn't parse final assignment file " + final_assignment_file)
         fout.write(head+"\tcrispresso_status\n")
