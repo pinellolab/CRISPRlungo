@@ -69,21 +69,37 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
   --novel_cut_merge_distance NOVEL_CUT_MERGE_DISTANCE
                         Novel cut sites discovered within this distance (bp)
                         from each other (and not within
-                        homology_cut_merge_distance to a known/provided cut
-                        site or a site with homology to guide_sequences) will
-                        be merged into a single cut site. Variation in the cut
+                        known_cut_merge_distance to a known/provided cut site
+                        or a site with homology to guide_sequences) will be
+                        merged into a single cut site. Variation in the cut
                         sites or in the fragments produced may produce
                         clusters of cut sites in a certain region. This
                         parameter will merge novel cut sites within this
-                        distance into a single cut site. (default: 100)
-  --homology_cut_merge_distance HOMOLOGY_CUT_MERGE_DISTANCE
+                        distance into a single cut site. (default: 50)
+  --known_cut_merge_distance KNOWN_CUT_MERGE_DISTANCE
                         Novel cut sites discovered within this distance (bp)
-                        with a known/provided/homologous site will be merged
-                        to that site. Homologous sites are defined as those
-                        that have homology to guide_sequences. Novel cut sites
-                        farther than homology_cut_merge_distance will be
-                        merged into novel cut sites based on the parameter
-                        novel_cut_merge_distance. (default: 10000)
+                        with a known/provided/homologous site (that is not the
+                        origin) will be merged to that site. Homologous sites
+                        are defined as those that have homology to
+                        guide_sequences. Novel cut sites farther than
+                        known_cut_merge_distance will be merged into novel cut
+                        sites based on the parameter novel_cut_merge_distance.
+                        (default: 50)
+  --origin_cut_merge_distance ORIGIN_CUT_MERGE_DISTANCE
+                        Reads aligned within this distance (bp) to the origin
+                        site will be merged to that origin. (default: 10000)
+  --short_indel_length_cutoff SHORT_INDEL_LENGTH_CUTOFF
+                        For reads aligned to a cut site, indels this size or
+                        shorter are classified as "short indels" while indels
+                        larger than this size are classified as "long indels"
+                        (default: 50)
+  --suppress_homology_detection
+                        If set, detection of guide sequence homology at cut
+                        sites is skipped. By default, novel cut sites are
+                        checked for homology, which can be computationally
+                        demanding if there are many cut sites. (default:
+                        False)
+
 ```
 
 #### In silico off-target search parameters:
