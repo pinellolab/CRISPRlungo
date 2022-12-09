@@ -1,0 +1,2 @@
+chr	pos	count	annotation
+chr11_sm	161	1	Programmed,Origin:left,FW,CTCAAGGCCCTTCATAATAT

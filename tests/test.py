@@ -22,12 +22,14 @@ if not os.path.exists(temp_outputs_folder):
 verbose = True
 
 def main():
+    assert_r1r2_agreement(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     #function tests
     assert_prep_input(this_genome,this_bowtie2_genome,verbose)
     assert_collapse_cuts(verbose)
 
     #full runs
     assert_primer(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
+    assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_no_results(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
@@ -44,7 +46,7 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
                     min_primer_length = 0,
                     guide_seqs = ['CTCAAGGCCCTTCATAATAT'],
                     cleavage_offset = -3,
-                    fastq_r1 = 'testOrientations/primer_fw.fa',
+                    fastq_r1 = 'testInputs/primer_fw.fq',
                     samtools_command = 'samtools',
                     genome = this_genome,
                     bowtie2_command = 'bowtie2',
@@ -64,7 +66,7 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 101)
     assert(av_read_length == 99)
-    assert(num_reads_input == 4)
+    assert(num_reads_input == 6)
 
     print('Testing Primer FW Guide RV')
     origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
@@ -73,7 +75,7 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
                     min_primer_length = 0,
                     guide_seqs = ['TACTAAACTGGGGGATATTA'],
                     cleavage_offset = -3,
-                    fastq_r1 = 'testOrientations/primer_fw.fa',
+                    fastq_r1 = 'testInputs/primer_fw.fq',
                     samtools_command = 'samtools',
                     genome = this_genome,
                     bowtie2_command = 'bowtie2',
@@ -93,7 +95,7 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 101)
     assert(av_read_length == 99)
-    assert(num_reads_input == 4)
+    assert(num_reads_input == 6)
 
     print('Testing Primer RV Guide RW')
     origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
@@ -102,7 +104,7 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
                     min_primer_length = 0,
                     guide_seqs = ['CTCAAGGCCCTTCATAATAT'],
                     cleavage_offset = -3,
-                    fastq_r1 = 'testOrientations/primer_fw.fa',
+                    fastq_r1 = 'testInputs/primer_fw.fq',
                     samtools_command = 'samtools',
                     genome = this_genome,
                     bowtie2_command = 'bowtie2',
@@ -122,7 +124,7 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 201)
     assert(av_read_length == 99)
-    assert(num_reads_input == 4)
+    assert(num_reads_input == 6)
 
     print('Testing Primer RV Guide RV')
     origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
@@ -131,7 +133,7 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
                     min_primer_length = 0,
                     guide_seqs = ['TACTAAACTGGGGGATATTA'],
                     cleavage_offset = -3,
-                    fastq_r1 = 'testOrientations/primer_fw.fa',
+                    fastq_r1 = 'testInputs/primer_fw.fq',
                     samtools_command = 'samtools',
                     genome = this_genome,
                     bowtie2_command = 'bowtie2',
@@ -151,7 +153,45 @@ def assert_prep_input(this_genome, this_bowtie2_genome, verbose):
     assert(primer_chr == 'chr11_sm')
     assert(primer_loc == 201)
     assert(av_read_length == 99)
-    assert(num_reads_input == 4)
+    assert(num_reads_input == 6)
+
+    print('Testing additional cut site file')
+    origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input = CRISPRlungo.prep_input(
+                    root = 'test.py.primer_fw_guide_fw',
+                    primer_seq = 'TTGCAATGAAAATAAATGTTT',
+                    min_primer_length = 0,
+                    guide_seqs = ['CTCAAGGCCCTTCATAATAT'],
+                    cleavage_offset = -3,
+                    fastq_r1 = 'testInputs/primer_fw.fq',
+                    samtools_command = 'samtools',
+                    genome = this_genome,
+                    bowtie2_command = 'bowtie2',
+                    bowtie2_genome = this_bowtie2_genome,
+                    additional_cut_site_file='testInputs/sample_cuts.txt',
+                    can_use_previous_analysis = False,
+                    suppress_file_output = True,
+                    )
+    if verbose:
+        print(f"{origin_seq=}")
+        print(f"{cut_sites=}")
+        print(f"{cut_annotations=}")
+        for cut in cut_sites:
+            print(f'{cut}: {cut_annotations[cut]}')
+        print(f"{primer_chr=}")
+        print(f"{primer_loc=}")
+        print(f"{av_read_length=}")
+        print(f"{num_reads_input=}")
+    #here, we inserted a new cut site at chr11_sm:150. The old closest cut site was chr11_sm:161
+    assert(origin_seq == 'TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAG')
+    assert(primer_chr == 'chr11_sm')
+    assert(primer_loc == 101)
+    assert(cut in cut_sites for cut in ['chr11_sm:500', 'chr11_sm:700', 'chr11_sm:150', 'chr1:120', 'chr2:300', 'chr11_sm:161'])
+    assert(len(cut_sites) == 6)
+    # assert that new site is now the origin cut site
+    assert(cut_annotations['chr11_sm:150'] == ['newprimer', 'Origin:left', 'RC', 'ATTCCG'])
+    # assert that old site is no longer the origin cut site
+    assert(cut_annotations['chr11_sm:161'] == ['Programmed', 'Not-origin', 'FW', 'CTCAAGGCCCTTCATAATAT'])
+
 
     print('TESTS PASSED')
 
@@ -284,19 +324,167 @@ def assert_no_results(this_genome,this_bowtie2_genome,test_inputs_folder,temp_ou
     print('Running no results (tests program when no results)')
     this_root = 'no_results'
     delete_files_with_prefix(f'{temp_outputs_folder}/{this_root}')
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/badReads.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/badReads.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
     print('Running no results from previous cached run')
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/badReads.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/badReads.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
     assert(settings['can_use_previous_analysis'] == True)
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
     print('TESTS PASSED')
+
+def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose):
+    file_roots_to_compare = [
+            '.final.classifications.txt',
+            '.final.final_assignments.txt',
+            '.final.final_cut_points.txt',
+            '.final.fragment_translocation_list.txt',
+            ]
+
+    print('Checking initial deduplication')
+    this_root = 'initial_dedup'
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/dedup.r1.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate --fastq_umi {test_inputs_folder}/dedup_UMIs.fq'.split(" "))
+
+    umi_r1, umi_r2 = CRISPRlungo.add_umi_from_umi_file(
+            root=settings['root']+'.addUMI',
+            fastq_r1=settings['fastq_r1'],
+            fastq_r2=settings['fastq_r2'],
+            fastq_umi=settings['fastq_umi'],
+            can_use_previous_analysis=False,
+        )
+
+    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+            ) = CRISPRlungo.analyze_UMIs_initial(
+                    root=settings['root']+'.analyzeInputUMI',
+                    fastq_r1=umi_r1,
+                    fastq_r2=umi_r2,
+                    umi_regex=None,
+                    dedup_input_on_UMI=False,
+                    can_use_previous_analysis=False,
+        )
+    if verbose:
+        print(f'{analyze_UMI_tot_read_count=}')
+        print(f'{post_UMI_regex_count=}')
+        print(f'{post_initial_dedup_count=}')
+        print(f'{post_analyze_UMI_read_count=}')
+    assert(analyze_UMI_tot_read_count == 8)
+    assert(post_UMI_regex_count == 8)
+    assert(post_initial_dedup_count == 8)
+    assert(post_analyze_UMI_read_count == 8)
+
+
+    print('Testing with UMI regex')
+    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+            ) = CRISPRlungo.analyze_UMIs_initial(
+                    root=settings['root']+'.analyzeInputUMI',
+                    fastq_r1=umi_r1,
+                    fastq_r2=umi_r2,
+                    umi_regex='AAAAA',
+                    dedup_input_on_UMI=False,
+                    can_use_previous_analysis=False,
+        )
+    if verbose:
+        print(f'{analyze_UMI_tot_read_count=}')
+        print(f'{post_UMI_regex_count=}')
+        print(f'{post_initial_dedup_count=}')
+        print(f'{post_analyze_UMI_read_count=}')
+    assert(analyze_UMI_tot_read_count == 8)
+    assert(post_UMI_regex_count == 7)
+    assert(post_initial_dedup_count == 7)
+    assert(post_analyze_UMI_read_count == 7)
+
+    print('Testing dedup')
+    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+            ) = CRISPRlungo.analyze_UMIs_initial(
+                    root=settings['root']+'.analyzeInputUMI',
+                    fastq_r1=umi_r1,
+                    fastq_r2=umi_r2,
+                    umi_regex=None,
+                    dedup_input_on_UMI=True,
+                    can_use_previous_analysis=False,
+        )
+    if verbose:
+        print(f'{analyze_UMI_tot_read_count=}')
+        print(f'{post_UMI_regex_count=}')
+        print(f'{post_initial_dedup_count=}')
+        print(f'{post_analyze_UMI_read_count=}')
+    assert(analyze_UMI_tot_read_count == 8)
+    assert(post_UMI_regex_count == 8)
+    assert(post_initial_dedup_count == 2) #2 UMIs seen (WT; one bad, one good)
+    assert(post_analyze_UMI_read_count == 3) #2 of WT and 1 bad UMI = 3 reads
+
+    print('Testing UMI regex and dedup')
+    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+            ) = CRISPRlungo.analyze_UMIs_initial(
+                    root=settings['root']+'.analyzeInputUMI',
+                    fastq_r1=umi_r1,
+                    fastq_r2=umi_r2,
+                    umi_regex='AAAAA',
+                    dedup_input_on_UMI=True,
+                    can_use_previous_analysis=False,
+        )
+    if verbose:
+        print(f'{analyze_UMI_tot_read_count=}')
+        print(f'{post_UMI_regex_count=}')
+        print(f'{post_initial_dedup_count=}')
+        print(f'{post_analyze_UMI_read_count=}')
+    assert(analyze_UMI_tot_read_count == 8)
+    assert(post_UMI_regex_count == 7)
+    assert(post_initial_dedup_count == 1) # 1 UMI/WT read combination with
+    assert(post_analyze_UMI_read_count == 2) # 2 reads
+
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/dedup.r1.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate --fastq_umi {test_inputs_folder}/dedup_UMIs.fq --umi_regex AAAAA --dedup_input_on_UMI'.split(" "))
+    CRISPRlungo.processCRISPRlungo(settings)
+
+    for file_root in file_roots_to_compare:
+        assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+    print('Testing UMI regex and dedup for paired sample')
+    this_root = 'initial_dedup_paired'
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/dedup.r1.fq --fastq_r2 {test_inputs_folder}/dedup.r2.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate --fastq_umi {test_inputs_folder}/dedup_UMIs.fq --umi_regex AAAAA --dedup_input_on_UMI'.split(" "))
+    CRISPRlungo.processCRISPRlungo(settings)
+
+    for file_root in file_roots_to_compare:
+        assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+def assert_r1r2_agreement(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose):
+    file_roots_to_compare = [
+            '.final.classifications.txt',
+            '.final.final_assignments.txt',
+            '.final.final_cut_points.txt',
+            '.final.fragment_translocation_list.txt',
+            ]
+    #Primer forward, guide forward
+#primer>>>>>>>>>>>>>>>                                                              guide>          ><cut
+#TTGCAATGAAAATAAATGTTT                                                              CTTAGGGAACAAAGGAACCT
+#TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAATATCCCCCAGTTTAGTAGTTGGACTTAGGGAACAAAGGAACCTTTAATAGAAATTGGACAGCAAGAAAGCGAGCTTAGTG
+#
+#chr21_sm
+#                      guide>          ><cut
+#guide:                CTTAGGGAACAAAGGAACCT
+#ob3:                  CTCAGGGAAAAAAGGAACCC
+#TTGGAAGCTCTGAAATTCACATCTCAGGGAAAAAAGGAACCCCGGAAAGTGTATTCCTAGAAAGGCATCCATAGTGAACAATGAGCTCATT
+
+#
+
+    print('Testing R1/R2 agreement')
+    this_root = 'r1r2_agreement'
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/r1r2_agreement.r1.fq --fastq_r2 {test_inputs_folder}/r1r2_agreement.r2.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate --write_discarded_read_info'.split(" "))
+    CRISPRlungo.processCRISPRlungo(settings)
+    for file_root in file_roots_to_compare:
+        assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+    print('Testing R1/R2 agreement with smaller max distance')
+    this_root = 'r1r2_agreement_small'
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/r1r2_agreement.r1.fq --fastq_r2 {test_inputs_folder}/r1r2_agreement.r2.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate --write_discarded_read_info --r1_r2_support_max_distance 100'.split(" "))
+    CRISPRlungo.processCRISPRlungo(settings)
+    for file_root in file_roots_to_compare:
+        assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
 def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose):
     file_roots_to_compare = [
@@ -328,13 +516,13 @@ def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 
     print('Running Primer FW Guide FW')
     this_root = 'primer_fw_guide_fw'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_fw.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_fw.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
     print('Running Primer FW Guide FW on cached run')
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_fw.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_fw.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate'.split(" "))
     assert(settings['can_use_previous_analysis'] == True)
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
@@ -355,7 +543,7 @@ def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 #TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAAATCCCCCAGTTTAGTAGTTGGACTTAGGGAACAAAGGAA
     print('Running Primer FW Guide RV')
     this_root = 'primer_fw_guide_rv'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_fw.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences TACTAAACTGGGGGATATTA --root {temp_outputs_folder}/{this_root} --keep_intermediate'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_fw.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences TACTAAACTGGGGGATATTA --root {temp_outputs_folder}/{this_root} --keep_intermediate'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
@@ -378,7 +566,7 @@ def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 #TTCCTTTGTTCCCTAAGTCCAACTACTAAACTGGGGGATTTATGAAGGGCCTTGAGCATCTGGATTCTGCCTAATAAAAAACATTTATTTTCATTGCAA
     print('Running Primer RV Guide FW')
     this_root = 'primer_rv_guide_fw'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_rv.fa --primer_seq TTCCTTTGTTCCCTAAGTCCA --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --keep_intermediate --suppress_plots'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_rv.fq --primer_seq TTCCTTTGTTCCCTAAGTCCA --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --keep_intermediate --suppress_plots'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
@@ -402,7 +590,7 @@ def assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 
     print('Running Primer RV Guide RV')
     this_root = 'primer_rv_guide_rv'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_rv.fa --primer_seq TTCCTTTGTTCCCTAAGTCCA --guide_sequences TACTAAACTGGGGGATATTA --root {temp_outputs_folder}/{this_root} --keep_intermediate --suppress_plots'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/primer_rv.fq --primer_seq TTCCTTTGTTCCCTAAGTCCA --guide_sequences TACTAAACTGGGGGATATTA --root {temp_outputs_folder}/{this_root} --keep_intermediate --suppress_plots'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
@@ -485,21 +673,21 @@ def assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 
     print('Running Cuts - testing for casoffinder functionality')
     this_root = 'cuts'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
     print('Running Cuts - testing for collapsing cut distance')
     this_root = 'cuts_collapse'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
     print('Running Cuts - testing for cut annotations')
     this_root = 'cuts_annotation'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fa --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10 --cut_classification_annotations chr11_sm:301:left:My__Annotation'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10 --cut_classification_annotations chr11_sm:301:left:My__Annotation'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
@@ -515,14 +703,14 @@ def assert_primer(this_genome,this_bowtie2_genome,test_inputs_folder,temp_output
             ]
     print('Running Exogenous Primer - testing for exogenous primer functionality')
     this_root = 'exogenous'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/exogenous.fa --primer_seq aagagggttgactatgattgtttggggt --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --root {temp_outputs_folder}/{this_root} --keep_intermediate --min_primer_length 20 --known_cut_merge_distance 104 --debug'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/exogenous.fq --primer_seq aagagggttgactatgattgtttggggt --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --root {temp_outputs_folder}/{this_root} --keep_intermediate --min_primer_length 20 --known_cut_merge_distance 104 --debug'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
     print('Running Primer - testing for primer functionality without guide provided')
     this_root = 'exogenous_noguide'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/exogenous.fa --primer_seq aagagggttgactatgattgtttggggt --root {temp_outputs_folder}/{this_root} --keep_intermediate --min_primer_length 20 --debug'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/exogenous.fq --primer_seq aagagggttgactatgattgtttggggt --root {temp_outputs_folder}/{this_root} --keep_intermediate --min_primer_length 20 --debug'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))

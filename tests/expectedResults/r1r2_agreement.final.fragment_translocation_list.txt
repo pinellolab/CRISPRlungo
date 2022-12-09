@@ -1,0 +1,3 @@
+fragment	cut_annotation	fragment_annotation	count
+chr11_sm:201:right	Programmed	Linear	2
+chr21_sm:189:right	Novel	Homologous translocation	2

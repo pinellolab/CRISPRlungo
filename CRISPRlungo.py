@@ -90,29 +90,38 @@ def processCRISPRlungo(settings):
         curr_r2_file = settings['fastq_r1']
 
     # if umis are provided, add them to the fastqs
+    umi_fastq_r1 = None
+    umi_fastq_r2 = None
     if settings['fastq_umi']:
-        umi_r1, umi_r2 = add_umi_from_umi_file(
+        umi_fastq_r1, umi_fastq_r2 = add_umi_from_umi_file(
             root=settings['root']+'.addUMI',
             fastq_r1=curr_r1_file,
             fastq_r2=curr_r2_file,
             fastq_umi=settings['fastq_umi'],
             can_use_previous_analysis=settings['can_use_previous_analysis']
         )
-        curr_r1_file = umi_r1
-        curr_r2_file = umi_r2
+        curr_r1_file = umi_fastq_r1
+        curr_r2_file = umi_fastq_r2
 
-    post_dedup_count = num_reads_input
-    if settings['dedup_input_on_UMI']:
-        (dedup_r1, dedup_r2, dedup_tot_read_count, dedup_count_with_regex, post_dedup_count, post_dedup_read_count
-                ) = dedup_input_file(
-                        root=settings['root']+'.dedup',
-                        fastq_r1=curr_r1_file,
-                        fastq_r2=curr_r2_file,
-                        umi_regex=settings['umi_regex'],
-                        can_use_previous_analysis=settings['can_use_previous_analysis']
+    post_UMI_regex_count = num_reads_input
+    post_initial_dedup_count = num_reads_input
+    (experiment_had_UMIs, analyze_UMI_r1, analyze_UMI_r2, post_UMI_regex_count, post_initial_dedup_count
+            ) = analyze_UMIs_initial(
+                    root=settings['root']+'.analyzeInputUMI',
+                    fastq_r1=curr_r1_file,
+                    fastq_r2=curr_r2_file,
+                    umi_regex=settings['umi_regex'],
+                    dedup_input_on_UMI=settings['dedup_input_on_UMI'],
+                    min_umi_seen_to_keep_read=settings['min_umi_seen_to_keep_read'],
+                    write_UMI_counts=settings['write_UMI_counts'],
+                    can_use_previous_analysis=settings['can_use_previous_analysis']
         )
-        curr_r1_file = dedup_r1
-        curr_r2_file = dedup_r2
+    if not experiment_had_UMIs:
+        post_UMI_regex_count = num_reads_input
+        post_initial_dedup_count = num_reads_input
+    else:
+        curr_r1_file = analyze_UMI_r1
+        curr_r2_file = analyze_UMI_r2
 
     filtered_on_primer_fastq_r1, filtered_on_primer_fastq_r2, post_filter_on_primer_read_count, filter_on_primer_plot_obj = filter_on_primer(
             root=settings['root']+'.trimPrimers',
@@ -148,12 +157,10 @@ def processCRISPRlungo(settings):
                 can_use_previous_analysis=settings['can_use_previous_analysis']
                 )
     if not settings['keep_intermediate']:
-        if os.path.exists(filtered_on_primer_fastq_r1):
-            logger.debug('Deleting intermediate file ' + filtered_on_primer_fastq_r1)
-            os.remove(filtered_on_primer_fastq_r1)
-        if filtered_on_primer_fastq_r2 is not None and os.path.exists(filtered_on_primer_fastq_r2):
-            logger.debug('Deleting intermediate file ' + filtered_on_primer_fastq_r2)
-            os.remove(filtered_on_primer_fastq_r2)
+        for file_to_delete in [umi_fastq_r1,umi_fastq_r2,analyze_UMI_r1,analyze_UMI_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2]:
+            if file_to_delete is not None and os.path.exists(file_to_delete):
+                logger.debug('Deleting intermediate file ' + file_to_delete)
+                os.remove(file_to_delete)
 
     (final_assignment_file, final_read_ids_for_crispresso, final_cut_counts, cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
         chr_aln_plot_obj, tlen_plot_obj, deduplication_plot_obj, tx_order_plot_obj, tx_count_plot_obj, tx_circos_plot_obj, classification_plot_obj, classification_indel_plot_obj,
@@ -286,7 +293,8 @@ def processCRISPRlungo(settings):
     final_summary_file, final_summary_plot_obj = make_final_summary(
             root=settings['root']+'.summary',
             num_reads_input=num_reads_input,
-            post_dedup_count=post_dedup_count,
+            post_UMI_regex_count=post_UMI_regex_count,
+            post_initial_dedup_count=post_initial_dedup_count,
             post_filter_on_primer_read_count=post_filter_on_primer_read_count,
             final_read_count=final_read_count,
             discarded_read_counts=discarded_read_counts,
@@ -398,7 +406,9 @@ def parse_settings(args):
     u_group.add_argument('--dedup_input_on_UMI', help='If set, input reads will be deduplicated based on UMI before alignment.  Note that if this flag is set deduplication by alignment position will be redundant (only one read will exist with a UMI after this step). This will also affect the values in the column "reads_with_same_umi_pos" in the final_assignments.txt file, which will only show 1 for all reads.', action='store_true')
     u_group.add_argument('--suppress_dedup_on_aln_pos_and_UMI_filter', help='If set, reads that are called as deduplicates based on alignment position and UMI will be included in final analysis and counts. By default, these reads are excluded.', action='store_true')
     u_group.add_argument('--dedup_by_final_cut_assignment_and_UMI', help='If set, deduplicates based on final cut assignment - so that reads with the same UMI with different start/stop alignment positions will be deduplicated if they are assigned to the same final cut position', action='store_true')
-    u_group.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match', default='NNWNNWNNN')
+    u_group.add_argument('--umi_regex', type=str, help='String specifying regex that UMI must match (e.g NNWNNWNNN)', default=None)
+    u_group.add_argument('--min_umi_seen_to_keep_read', type=int, help='Minimum times a UMI/read combination must be seen in order to keep that for downstream analysis. If many PCR cycles are performed in library preparation, UMI/read combinations that are highly amplified may be more trusted than UMI/read combinations that appear in low abundance. However, this probably only applies for sequencing libraries with members with uniform PCR amplification properties.', default=0)
+    u_group.add_argument('--write_UMI_counts', help='If set, a file will be produced containing each UMI and the number of reads that were associated with that UMI', action='store_true')
 
     #R1/R2 support settings
     r_group = parser.add_argument_group('R1/R2 support settings')
@@ -697,6 +707,16 @@ def parse_settings(args):
         settings['umi_regex'] = settings_file_args['umi_regex']
         settings_file_args.pop('umi_regex')
 
+    settings['min_umi_seen_to_keep_read'] = cmd_args.min_umi_seen_to_keep_read
+    if 'min_umi_seen_to_keep_read' in settings_file_args:
+        settings['min_umi_seen_to_keep_read'] = int(settings_file_args['min_umi_seen_to_keep_read'])
+        settings_file_args.pop('min_umi_seen_to_keep_read')
+
+    settings['write_UMI_counts'] = cmd_args.suppress_dedup_on_aln_pos_and_UMI_filter
+    if 'write_UMI_counts' in settings_file_args:
+        settings['write_UMI_counts'] = (settings_file_args['write_UMI_counts'].lower() == 'true')
+        settings_file_args.pop('write_UMI_counts')
+
     settings['r1_r2_support_max_distance'] = cmd_args.r1_r2_support_max_distance
     if 'r1_r2_support_max_distance' in settings_file_args:
         settings['r1_r2_support_max_distance'] = int(settings_file_args['r1_r2_support_max_distance'])
@@ -767,7 +787,7 @@ def parse_settings(args):
     if not settings['primer_seq']:
         parser.print_usage()
         raise Exception('Error: the primer sequences used must be provided (--primer_seq)')
-    
+
     for guide in settings['guide_sequences']:
         wrong_nt=CRISPRessoShared.find_wrong_nt(guide)
         if wrong_nt:
@@ -1093,6 +1113,8 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
         logger.info('Could not recover previously-created primer, cut-site, and sequencing information. Reanalyzing.')
 
     logger.info('Preparing primer and cut-site information')
+    cut_sites = []
+    cut_annotations = {}
 
     if additional_cut_site_file is not None:
         #format:
@@ -1104,7 +1126,7 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
 
         with open(additional_cut_site_file,'r') as fin:
             for line in fin:
-                line_els = line.strip.split("\t")
+                line_els = line.strip().split("\t")
                 try:
                     cut_loc = int(line_els[1])
                 except ValueError:
@@ -1119,6 +1141,8 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
                     cut_orientation = 'FW'
                 if cut_orientation == '-':
                     cut_orientation = 'RC'
+                if cut_orientation == 'RV':
+                    cut_orientation = 'RC'
 
                 if cut_orientation not in ['FW','RC']:
                     logger.warn('Could not parse line %s from additional cut site file %s. Unexpected guide alignment in column 3 (expecting "FW" or "RC", got %s).'%(line.strip(),additional_cut_site_file,line_els[2]))
@@ -1128,7 +1152,7 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
                 cut_sites.append(key)
                 if cut_annotation == '':
                     cut_annotation = 'Additional cut site'
-                cut_annotations[key] = [cut_annotation,'Not-origin',guide_orientation,cut_guide_seq]
+                cut_annotations[key] = [cut_annotation,'Not-origin',cut_orientation,cut_guide_seq]
 
     primer_is_genomic = False # Whether the primer is genomic (e.g. if priming off an exogenous sequence (GUIDE-seq) this would be false) This value is set below after aligning to the genome
     primer_chr = 'exogenous'
@@ -1163,8 +1187,6 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
     else:
         logger.info('Primer is not aligned to genome. Assuming exogenous primer sequence')
 
-    cut_sites = []
-    cut_annotations = {}
     for guide_seq in guide_seqs:
         logger.info('Finding genomic coordinates of guide %s'%(guide_seq))
         guide_aln_cmd = '%s --no-sq --seed 2248 --end-to-end -x %s -c %s' %(bowtie2_command,bowtie2_genome,guide_seq)
@@ -1215,11 +1237,11 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
             cut_pos = int(cut_pos_str)
             if primer_is_genomic and primer_chr == cut_chr:
                 if closest_cut_site_loc == -1:
-                    closest_cut_site_dist = abs(primer_loc - cut_loc)
-                    closest_cut_site_loc = cut_loc
-                elif abs(primer_loc - cut_loc) < closest_cut_site_dist:
-                    closest_cut_site_dist = abs(primer_loc - cut_loc)
-                    closest_cut_site_loc = cut_loc
+                    closest_cut_site_dist = abs(primer_loc - cut_pos)
+                    closest_cut_site_loc = cut_pos
+                elif abs(primer_loc - cut_pos) < closest_cut_site_dist:
+                    closest_cut_site_dist = abs(primer_loc - cut_pos)
+                    closest_cut_site_loc = cut_pos
 
     origin_seq = primer_seq
     if primer_is_genomic and closest_cut_site_loc == -1:
@@ -1264,93 +1286,169 @@ def prep_input(root, primer_seq, min_primer_length, guide_seqs, cleavage_offset,
 
     return (origin_seq, cut_sites, cut_annotations, primer_chr, primer_loc, av_read_length, num_reads_input)
 
-def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=0,write_UMI_counts=False,can_use_previous_analysis=False):
+def analyze_UMIs_initial(root,fastq_r1,fastq_r2,umi_regex,dedup_input_on_UMI=False,min_umi_seen_to_keep_read=0,write_UMI_counts=False,can_use_previous_analysis=False):
     """
-    Deduplicates fastq files based on UMI (UMI is assumed to be the last part of the read ID after the ':'
+    Analyzes fastq files based on UMI (UMI is assumed to be the last part of the read ID after the ':' character)
+    Removes reads that don't contain a valid UMI
+    Calculates pre-deduplication UMI stats (GINI index)
+    If dedup_input_on_UMI is True,
+        For each UMI/read sequence pair, store the read with the highest sequence quality scores
+        For each UMI, select the UMI/read sequence pair with the most number of reads
+            Print the read with the highest sequence quality, stored above
+
+    Calculates the GINI score on post regex-filtered, pre-duplicated UMIs
 
     Args:
-        root: root for written files
-        fastq_r1: R1 reads to dedup
-        fastq_r2: R2 reads to dedup
-        umi_regex: string specifying regex that UMI must match
-        min_umi_seen_to_keep_read: min number of times a umi must be seen to keep the umi and read (e.g. if set to 2, a read-UMI pair that is only seen once will be discarded)
-        write_UMI_counts: if True, writes a file with the UMI counts
-        can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
+        root (str): root for written files
+        fastq_r1 (str): R1 reads containing UMIs
+        fastq_r2 (str): R2 reads (or None if single-end)
+        umi_regex (str): string specifying regex that UMI must match
+        dedup_input_on_UMI (bool): if True, deduplicates reads based on UMI before alignment, so only one read/UMI will appear in the final analysis
+        min_umi_seen_to_keep_read (int): min number of times a umi must be seen to keep the umi and read if deduplicating (e.g. if set to 2, a read-UMI pair that is only seen once will be discarded)
+        write_UMI_counts (bool): if True, writes a file with the UMI counts
+        can_use_previous_analysis (bool): boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
     Returns:
-        fastq_r1_dedup: fastq_r1 file of deduplicated reads
-        fastq_r2_dedup: fastq_r2 file of deduplicated reads
-        tot_read_count: number of total reads read
+        experiment_had_UMIs (bool): true if UMIs were detected, false otherwise
+        fastq_analyze_UMI_r1: fastq_r1 file of reads containing valid UMIs, deduplicated by UMI if dedup_input_on_UMI is True
+        fastq_analyze_UMI_r2: fastq_r2 file of reads corresponding to those in fastq_analyze_UMI_r1
         count_with_regex: number of reads with umi matching regex
-        post_dedup_count: number of reads post deduplication
-        post_dedup_read_count: number of reads that contributed to the deduplicated reads (post_dedup_read_count reads were seen that were deduplicated to post_dedup_count reads. If post_dedup_count == post_dedup_read_count then every UMI-read pair was seen once.)
+        post_analyze_UMI_count: number of reads post UMI analysis (assert UMI regex and/or initial dedup on UMI)
     """
 
     logger = logging.getLogger('CRISPRlungo')
 
-    dedup_stats_file = root + ".info"
-    fastq_r1_dedup = None
-    fastq_r2_dedup = None
+    analyze_UMI_stats_file = root + ".info"
+    fastq_analyze_UMI_r1 = None
+    fastq_analyze_UMI_r2 = None
     tot_read_count = -1
     count_with_regex = -1
-    post_dedup_count = -1
-    post_dedup_read_count = -1
+    post_analyze_UMI_count = -1
+    post_analyze_UMI_read_count = -1
     #if already finished, attempt to read in stats
-    if os.path.isfile(dedup_stats_file) and can_use_previous_analysis:
-        with open(dedup_stats_file,'r') as fin:
+    if os.path.isfile(analyze_UMI_stats_file) and can_use_previous_analysis:
+        with open(analyze_UMI_stats_file,'r') as fin:
             head_line = fin.readline()
+            while head_line.startswith('#'):
+                head_line = fin.readline()
             line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) > 3:
-                (fastq_r1_dedup_str,fastq_r2_dedup_str,tot_read_count_str,count_with_regex_str,post_dedup_count_str,post_dedup_read_count_str) = line_els
-                fastq_r1_dedup = None if fastq_r1_dedup_str == "None" else fastq_r1_dedup_str
-                fastq_r2_dedup = None if fastq_r2_dedup_str == "None" else fastq_r2_dedup_str
+                (experiment_had_UMIs_str,fastq_analyze_UMI_r1_str,fastq_analyze_UMI_r2_str,tot_read_count_str,count_with_regex_str,post_analyze_UMI_count_str,post_analyze_UMI_read_count_str,UMI_GINI_str) = line_els
+                experiment_had_UMIs = True if experiment_had_UMIs_str == "True" else False
+                if not experiment_had_UMIs:
+                    return(False,None,None,None,None)
+                fastq_analyze_UMI_r1 = None if fastq_analyze_UMI_r1_str == "None" else fastq_analyze_UMI_r1_str
+                fastq_analyze_UMI_r2 = None if fastq_analyze_UMI_r2_str == "None" else fastq_analyze_UMI_r2_str
                 tot_read_count = int(tot_read_count_str)
                 count_with_regex = int(count_with_regex_str)
-                post_dedup_count = int(post_dedup_count_str)
-                post_dedup_read_count = int(post_dedup_read_count_str)
+                post_analyze_UMI_count = int(post_analyze_UMI_count_str)
+                post_analyze_UMI_read_count = int(post_analyze_UMI_read_count_str)
     if tot_read_count != -1:
-        logger.info('Using previously-deduplicated fastqs with %d reads'%post_dedup_count)
-        return(fastq_r1_dedup,fastq_r2_dedup, tot_read_count, count_with_regex, post_dedup_count, post_dedup_read_count)
+        logger.info('Using previous analysis of UMIs in fastqs with %d reads'%post_analyze_UMI_count)
+        return(experiment_had_UMIs, fastq_analyze_UMI_r1, fastq_analyze_UMI_r2, count_with_regex, post_analyze_UMI_count)
 
-    #otherwise perform deduplication (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
-    logger.info('Deduplicating input fastqs')
+    #otherwise perform analysis (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
+    if umi_regex is not None and dedup_input_on_UMI:
+        logger.info('Analyzing UMIs - asserting UMI regex (%s) and deduplicating on UMIs'%umi_regex)
+    elif umi_regex is not None:
+        logger.info('Analyzing UMIs - asserting UMI regex (%s)'%umi_regex)
+    elif dedup_input_on_UMI:
+        logger.info('Analyzing UMIs - deduplicating on UMIs')
+    else:
+        logger.info('Analyzing UMI distribution')
 
-    #first, create the regex that matches UMIs
-    umi_regex_string = umi_regex
+    #first check to see if there are valid UMIs (if there are numbers, just return
+    if fastq_r1.endswith('.gz'):
+        f1_in = gzip.open(fastq_r1,'rt')
+    else:
+        f1_in = open(fastq_r1,'rt')
 
-    umi_regex_string = umi_regex_string.replace('I','([ATCG])')
-    umi_regex_string = umi_regex_string.replace('N','([ATCG])')
-    umi_regex_string = umi_regex_string.replace('R','([AG])')
-    umi_regex_string = umi_regex_string.replace('Y','([CT])')
-    umi_regex_string = umi_regex_string.replace('S','([GC])')
-    umi_regex_string = umi_regex_string.replace('W','([AT])')
-    umi_regex_string = umi_regex_string.replace('K','([GT])')
-    umi_regex_string = umi_regex_string.replace('M','([AC])')
-    umi_regex_string = umi_regex_string.replace('B','([CGT])')
-    umi_regex_string = umi_regex_string.replace('D','([AGT])')
-    umi_regex_string = umi_regex_string.replace('H','([ACT])')
-    umi_regex_string = umi_regex_string.replace('V','([ACG])')
+    umi_check_lines = 0
+    f1_has_umi = True
+    while (1):
+        f1_id_line   = f1_in.readline().strip()
+        f1_seq_line  = f1_in.readline().strip()
+        f1_plus_line = f1_in.readline()
+        f1_qual_line = f1_in.readline().strip()
+        umi_check_lines+= 1
+        if umi_check_lines > 10: break
 
-    umi_regex = re.compile(umi_regex_string)
+        if not f1_qual_line : break
+        if not f1_plus_line.startswith("+"):
+            raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
 
-    tot_read_count = 0
-    count_with_regex = 0
+        this_UMI = f1_id_line.split(":")[-1].upper()
+        bad_chars = list(set(this_UMI.upper()).difference({'A', 'T', 'C', 'G', 'N'}))
+        if len(this_UMI) < 3 or len(bad_chars) > 0:
+            f1_has_umi = False
+        
+    if not f1_has_umi:
+        logger.info('UMIs were not detected in this sample')
+        with open(analyze_UMI_stats_file,'w') as fout:
+            fout.write("# experiment_had_UMIs (bool): whether the experiment had UMIs or not\n")
+            fout.write("\t".join(["experiment_had_UMIs","fastq_analyze_UMI_r1","fastq_analyze_UMI_r2","tot_read_count","count_with_regex","post_analyze_UMI_count","post_analyze_UMI_read_count","UMI_input_GINI"])+"\n")
+            fout.write("\t".join([str(x) for x in [False,None,None,None,None,None,None,None]])+"\n")
+        return(False,None,None,None,None)
 
-    umi_keys_with_most_counts = {} #umi->key (key has most counts)
-    umi_key_counts = {} #umi->count (count of fastqs key has seen)
 
-    umi_seq_counts = {} #umi_seq->count of that pair
-    umi_seq_best_qual_fastqs = {} #umi_seq->fastq to be printed
-    umi_seq_best_qual_sum = {} #best qual sum for the best fastq
+    umi_regex_string = ".*"
+    if umi_regex is not None:
+        #first, create the regex that matches UMIs
+        umi_regex_string = umi_regex
+
+        umi_regex_string = umi_regex_string.replace('I','([ATCG])')
+        umi_regex_string = umi_regex_string.replace('N','([ATCG])')
+        umi_regex_string = umi_regex_string.replace('R','([AG])')
+        umi_regex_string = umi_regex_string.replace('Y','([CT])')
+        umi_regex_string = umi_regex_string.replace('S','([GC])')
+        umi_regex_string = umi_regex_string.replace('W','([AT])')
+        umi_regex_string = umi_regex_string.replace('K','([GT])')
+        umi_regex_string = umi_regex_string.replace('M','([AC])')
+        umi_regex_string = umi_regex_string.replace('B','([CGT])')
+        umi_regex_string = umi_regex_string.replace('D','([AGT])')
+        umi_regex_string = umi_regex_string.replace('H','([ACT])')
+        umi_regex_string = umi_regex_string.replace('V','([ACG])')
+
+        umi_regex_pattern = re.compile("^"+umi_regex_string+"$")
+
+    tot_read_count = 0 # number of reads read in input
+    count_with_regex = 0 # number of reads containing correct regex
+    collision_count = 0 # number of UMIs associated with more than one read sequence
+    collision_count_reads = 0 # number of reads discarded because they have a sequence that is less frequent than the most-frequent read associated with a UMI
+    too_few_reads_count = 0 # number of UMIs with too few reads (less than min_umi_seen_to_keep_read)
+    too_few_reads_count_reads = 0 # number of reads discarded because they had a UMI with too few reads
+    post_analyze_UMI_count = 0 # number of UMIs surviving regex assertion and duplication
+    post_analyze_UMI_read_count = 0 # number of reads with UMIs surviving regex assertion and deduplication
+
+    umi_keys_with_most_counts = defaultdict(int) #umi_seq->umi_key (key has most counts for that umi_seq)
+    umi_key_counts = defaultdict(int) #umi_key->count (count of fastqs key has seen)
+    umi_key_best_qual_fastqs = defaultdict(int) #umi_key->fastq to be printed
+    umi_key_best_qual_sum = defaultdict(int) #umi_key->qual_sum = best qual sum for the best fastq
+
+    umi_seq_counts = defaultdict(int) #umi_seq->count of that umi sequence
 
     if fastq_r1.endswith('.gz'):
         f1_in = gzip.open(fastq_r1,'rt')
     else:
         f1_in = open(fastq_r1,'rt')
 
-    if fastq_r2.endswith('.gz'):
-        f2_in = gzip.open(fastq_r2,'rt')
-    else:
-        f2_in = open(fastq_r2,'rt')
+    if fastq_r2 is not None:
+        if fastq_r2.endswith('.gz'):
+            f2_in = gzip.open(fastq_r2,'rt')
+        else:
+            f2_in = open(fastq_r2,'rt')
+
+    fastq_analyze_UMI_r1 = root + '.r1.gz'
+    f1_out = gzip.open(fastq_analyze_UMI_r1, 'wt')
+    fastq_analyze_UMI_r2 = None
+    if fastq_r2 is not None:
+        fastq_analyze_UMI_r2 = root + '.r2.gz'
+        f2_out = gzip.open(fastq_analyze_UMI_r2, 'wt')
+
+
+    f2_id_line = ""  # dummy values if there is no r2 file
+    f2_seq_line = ""
+    f2_plus_line = ""
+    f2_qual_line = ""
 
     #now iterate through f1/f2/umi files
     while (1):
@@ -1364,56 +1462,73 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
             raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
         tot_read_count += 1
 
-        f2_id_line   = f2_in.readline().strip()
-        f2_seq_line  = f2_in.readline().strip()
-        f2_plus_line = f2_in.readline()
-        f2_qual_line = f2_in.readline().strip()
+        if fastq_r2 is not None:
+            f2_id_line   = f2_in.readline().strip()
+            f2_seq_line  = f2_in.readline().strip()
+            f2_plus_line = f2_in.readline()
+            f2_qual_line = f2_in.readline().strip()
 
         this_UMI = f1_id_line.split(":")[-1].upper()
 
-        if umi_regex.match(this_UMI):
-            count_with_regex += 1
 
-            #group 1 is the whole string
-            #this_key = this_UMI + " # " + f1_seq_line + f2_seq_line
-            this_key = this_UMI
+        if umi_regex is not None:
+            if umi_regex_pattern.match(this_UMI):
+                count_with_regex += 1
+            else:
+                continue
 
+        #umi key is the UMI plus the seuqences of the R1 and R2
+        this_key = this_UMI + " # " + f1_seq_line + f2_seq_line
 
+        #if dedupping by UMI, for each UMI, keep only the most-seen read sequence, and of those read sequences, keep only the read with the highest quality
+        # here we keep track of the read with the highest quality for each UMI/read_sequence
+        #umi_key_best_qual_fastqs contains (for a given UMI/read_sequence) the id, seq, plus and quality of the highest quality
+        if dedup_input_on_UMI:
             qual_sum = np.sum(np.frombuffer(bytes(f1_qual_line + f2_qual_line,'utf-8'),dtype=np.uint8))
-            if this_key not in umi_seq_counts:
-                umi_seq_counts[this_key] = 1
-                umi_seq_best_qual_sum[this_key] = qual_sum
-                umi_seq_best_qual_fastqs[this_key] = (
+            if this_key not in umi_key_counts:
+                umi_key_counts[this_key] += 1
+                umi_key_best_qual_sum[this_key] = qual_sum
+                umi_key_best_qual_fastqs[this_key] = (
                         f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line,
                         f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line
                         )
             else:
-                umi_seq_counts[this_key] += 1
-                #if this sequence has the highest quality, store it
-                if umi_seq_best_qual_sum[this_key] < qual_sum:
-                    umi_seq_best_qual_sum[this_key] = qual_sum
-                    umi_seq_best_qual_fastqs[this_key] = (
+                umi_key_counts[this_key] += 1
+                #if this UMI/sequence has the highest quality, store it in umi_key_best_qual_fastqs
+                if umi_key_best_qual_sum[this_key] < qual_sum:
+                    umi_key_best_qual_sum[this_key] = qual_sum
+                    umi_key_best_qual_fastqs[this_key] = (
                             f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line,
                             f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line
                             )
 
-            if this_UMI not in umi_key_counts:
-                umi_key_counts[this_UMI] = 1
+            if this_UMI not in umi_seq_counts:
+                umi_seq_counts[this_UMI] = 1
                 umi_keys_with_most_counts[this_UMI] = this_key
             else:
-                umi_key_counts[this_UMI] += 1
+                umi_seq_counts[this_UMI] += 1
                 #if this sequence is the most seen for this UMI, store it
-                if umi_seq_counts[this_key] > umi_key_counts[this_UMI]:
+                if umi_key_counts[this_key] > umi_key_counts[umi_keys_with_most_counts[this_UMI]]:
                     umi_keys_with_most_counts[this_UMI] = this_key
+        else: # if not deduplicating, just keep track of how many times we see each UMI and write the sequences to the files (because they had a valid barcode)
+            post_analyze_UMI_count += 1
+            post_analyze_UMI_read_count += 1
+            umi_seq_counts[this_UMI] += 1
+            f1_out.write(f1_id_line + "\n" + f1_seq_line + "\n" + f1_plus_line + f1_qual_line+"\n")
+            if fastq_r2 is not None:
+                f2_out.write(f2_id_line + "\n" + f2_seq_line + "\n" + f2_plus_line + f2_qual_line+"\n")
+
     #finished iterating through fastq file
     f1_in.close()
-    f2_in.close()
+    if fastq_r2 is not None:
+        f2_in.close()
 
 
     if tot_read_count == 0:
         raise Exception("UMI dedup failed. Got no reads from " + fastq_r1 + " and " + fastq_r2 )
 
-    umi_list = sorted(umi_key_counts, key=lambda k: umi_key_counts[k])
+    umi_list = sorted(umi_seq_counts, key=lambda k: umi_seq_counts[k])
+    umi_counts = [umi_seq_counts[k] for k in umi_list]
     umi_count = len(umi_list)
 
     logger.info('Read %d reads'%tot_read_count)
@@ -1421,46 +1536,70 @@ def dedup_input_file(root,fastq_r1,fastq_r2,umi_regex,min_umi_seen_to_keep_read=
     if umi_count == 1 and umi_list[0] == '':
         raise Exception("Error: only the empty barcode '' was found.")
 
-    fastq_r1_dedup = root + '.r1.gz'
-    f1_out = gzip.open(fastq_r1_dedup, 'wt')
-    fastq_r2_dedup = root + '.r2.gz'
-    f2_out = gzip.open(fastq_r2_dedup, 'wt')
+    umi_gini = None
+    umi_gini_string = "#Initial UMI GINI:\tNA\n"
+    if umi_count > 0:
+        umi_gini = compute_gini(np.array(umi_counts))
+        umi_gini_string = "#Initial UMI GINI:\t"+str(umi_gini)+"\n"
 
-    collision_count = 0
-    collision_count_reads = 0
-    too_few_reads_count = 0
-    too_few_reads_count_reads = 0
-    post_dedup_count = 0
-    post_dedup_read_count = 0
-    collided_umi_reads = []
-    for umi_seq in umi_seq_counts:
-        if umi_seq_counts[umi_seq] < min_umi_seen_to_keep_read:
-            too_few_reads_count += 1
-            too_few_reads_count_reads += umi_seq_counts[umi_seq]
-        else:
-            (seq1,seq2) = umi_seq_best_qual_fastqs[umi_seq]
-            f1_out.write(seq1+"\n")
-            f2_out.write(seq2+"\n")
-            post_dedup_count += 1
-            post_dedup_read_count += umi_seq_counts[umi_seq]
+    if dedup_input_on_UMI:
+        collided_umi_reads = []
+        for umi_seq in umi_list:
+            # UMIs can be paired with more than one sequence (in the umi_key)
+            # when using the filter for min_umi_seen_to_keep_read,
+            #  we want to only consider the times the UMI/sequence were seen (because the UMI supports that sequence), not the absolute times the UMI was seen (in which case it may support mulitple read sequences in a non-specific way)
+            most_seen_umi_key = umi_keys_with_most_counts[umi_seq] #UMI/sequence pair
+            most_seen_umi_key_count = umi_key_counts[most_seen_umi_key] #times UMI/sequence pair was seen
+            if most_seen_umi_key_count < min_umi_seen_to_keep_read:
+                too_few_reads_count += 1
+                #too_few_reads_count_reads will increased by the count of all the UMI/sequence pairs associated with this UMI
+                too_few_reads_count_reads += umi_seq_counts[umi_seq]
+            else:
+                if most_seen_umi_key_count != umi_seq_counts[umi_seq]:
+                    collision_count += 1
+                    collision_count_reads += umi_seq_counts[umi_seq] - most_seen_umi_key_count
+                (seq1,seq2) = umi_key_best_qual_fastqs[most_seen_umi_key]
+                f1_out.write(seq1+"\n")
+                if fastq_r2 is not None:
+                    f2_out.write(seq2+"\n")
+                post_analyze_UMI_count += 1
+                post_analyze_UMI_read_count += umi_key_counts[most_seen_umi_key]
 
     f1_out.close()
-    f2_out.close()
+    if fastq_r2 is not None:
+        f2_out.close()
 
-    if write_UMI_counts:
+    if write_UMI_counts and dedup_input_on_UMI:
         fout = open(root+".umiCounts.txt","w")
-        fout.write('UMI\tCount\n')
-        for umi in sorted(umi_key_counts):
-            fout.write(umi + "\t" + str(umi_key_counts[umi]) + "\n")
+        umi_regex_info_str = ''
+        if umi_regex is not None:
+            umi_regex_info_str = 'Only valid UMIs matching the regex %s (%s) are reported here'%(umi_regex,umi_regex_str)
+        fout.write('#UMI: the UMI sequence. '+umi_regex_info_str+'\n')
+        fout.write('#seen_count: the number of times the UMI was seen in the input (the same UMI may be paired with reads with different sequences)\n')
+        fout.write('#printed_count: the number of times the UMI/read pair printed was seen in the input\n')
+        fout.write('UMI\tseen_count\tprinted_count\n')
+        for umi_seq in sorted(umi_key_counts):
+            most_seen_umi_key = umi_keys_with_most_counts[umi_seq] #UMI/sequence pair
+            fout.write('%s\t%s\t%s\n'%(umi_seq,umi_seq_counts[umi_seq],umi_key_counts[most_seen_umi_key]))
         logger.info('Wrote UMI counts to ' + root+".umiCounts.txt")
 
+    if umi_regex is None:
+        count_with_regex = tot_read_count
 
-    logger.info('Wrote %d deduplicated reads'%post_dedup_count)
-    with open(dedup_stats_file,'w') as fout:
-        fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count","count_with_regex","post_dedup_count","post_dedup_read_count"])+"\n")
-        fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count,count_with_regex,post_dedup_count,post_dedup_read_count]])+"\n")
+    logger.info('Wrote %d reads'%post_analyze_UMI_count)
+    with open(analyze_UMI_stats_file,'w') as fout:
+        fout.write("# experiment_had_UMIs (bool): whether the experiment had UMIs or not\n")
+        fout.write("# fastq_analyze_UMI_r1 (str): file containing analyzed reads - filtered for correct UMIs if umi_regex is provided, and deduplicated if dedup_input_on_UMI is provided\n")
+        fout.write("# fastq_analyze_UMI_r2 (str): file containing analyzed r2 reads or None if input is single-ended\n")
+        fout.write("# tot_read_count (int): number of reads in input\n")
+        fout.write("# count_with_regex (int): number of reads matching the umi_regex '%s'\n"%umi_regex)
+        fout.write("# post_analyze_UMI_count (int): number of reads post UMI analysis (after asserting UMI regex and/or initial deduplication on UMI)\n")
+        fout.write("# post_analyze_UMI_read_count (int): number of reads that contributed to the deduplicated reads (post_analyze_UMI_read_count reads were seen that were deduplicated to post_analyze_UMI_count reads. If post_analyze_UMI_count == post_analyze_UMI_read_count then every UMI-read pair was seen once.)\n")
+        fout.write("# umi_gini (float): GINI index for distribution of reads among UMIs (passing the umi_regex filter if umi_regex is set). (0 = perfect equality and 1 = perfect inequality in reads/UMI)\n")
+        fout.write("\t".join(["experiment_had_UMIs","fastq_analyze_UMI_r1","fastq_analyze_UMI_r2","tot_read_count","count_with_regex","post_analyze_UMI_count","post_analyze_UMI_read_count","UMI_input_GINI"])+"\n")
+        fout.write("\t".join([str(x) for x in [True,fastq_analyze_UMI_r1,fastq_analyze_UMI_r2,tot_read_count,count_with_regex,post_analyze_UMI_count,post_analyze_UMI_read_count,umi_gini]])+"\n")
 
-    return(fastq_r1_dedup,fastq_r2_dedup, tot_read_count, count_with_regex, post_dedup_count, post_dedup_read_count)
+    return(True, fastq_analyze_UMI_r1, fastq_analyze_UMI_r2, count_with_regex, post_analyze_UMI_count)
 
 def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_analysis=False):
     """
@@ -1468,21 +1607,21 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
 
     Args:
         root: root for written files
-        fastq_r1: R1 reads to dedup
-        fastq_r2: R2 reads to dedup
-        fastq_umi: UMI fastq to dedup on
+        fastq_r1: R1 reads to add UMI to
+        fastq_r2: R2 reads to add UMI to
+        fastq_umi: UMI fastq to add UMI from
         can_use_previous_analysis: boolean for whether we can use previous analysis or whether the params have changed and we have to rerun from scratch
     Returns:
-        fastq_r1_umi: fastq_r1 with umi added
-        fastq_r2_umi: fastq_r2 with umi added
+        fastq_r1_with_UMI: fastq_r1 with umi added
+        fastq_r2_with_UMI: fastq_r2 with umi added
         tot_read_count: number of total reads read
     """
 
     logger = logging.getLogger('CRISPRlungo')
     umi_stats_file = root + ".log"
 
-    fastq_r1_dedup = "NA"
-    fastq_r2_dedup = "NA"
+    fastq_r1_with_UMI = "NA"
+    fastq_r2_with_UMI = "NA"
     tot_read_count = -1
     #if already finished, attempt to read in stats
     if os.path.isfile(umi_stats_file) and can_use_previous_analysis:
@@ -1491,7 +1630,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
             line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) == 3:
                 logger.info('Using previously-generated fastqs with UMIs')
-                (fastq_r1_dedup,fastq_r2_dedup,tot_read_count_str) = line_els
+                (fastq_r1_with_UMI,fastq_r2_with_UMI,tot_read_count_str) = line_els
                 tot_read_count = int(tot_read_count_str)
 
     #otherwise perform umi adding (check if we were able to read in stats as well -- if we couldn't read them in, tot_read_count will be -1
@@ -1505,20 +1644,29 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
         else:
             f1_in = open(fastq_r1,'r')
 
-        if fastq_r2.endswith('.gz'):
-            f2_in = gzip.open(fastq_r2,'rt')
-        else:
-            f2_in = open(fastq_r2,'r')
+        fastq_r1_with_UMI = root + '.r1.fq.gz'
+        f1_out = gzip.open(fastq_r1_with_UMI, 'wt')
+
+        fastq_r2_with_UMI = None
+        if fastq_r2 is not None:
+            if fastq_r2.endswith('.gz'):
+                f2_in = gzip.open(fastq_r2,'rt')
+            else:
+                f2_in = open(fastq_r2,'r')
+
+            fastq_r2_with_UMI = root + '.r2.fq.gz'
+            f2_out = gzip.open(fastq_r2_with_UMI, 'wt')
+
 
         if fastq_umi.endswith('.gz'):
             umi_in = gzip.open(fastq_umi,'rt')
         else:
             umi_in = open(fastq_umi,'r')
 
-        fastq_r1_dedup = root + '.r1.gz'
-        f1_out = gzip.open(fastq_r1_dedup, 'wt')
-        fastq_r2_dedup = root + '.r2.gz'
-        f2_out = gzip.open(fastq_r2_dedup, 'wt')
+        f2_id_line   = '' # dummy variables in case r2 is none (not paried end)
+        f2_seq_line  = ''
+        f2_plus_line = ''
+        f2_qual_line = ''
 
         #now iterate through f1/f2/umi files
         while (1):
@@ -1532,10 +1680,6 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
                 raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
             tot_read_count += 1
 
-            f2_id_line   = f2_in.readline().strip()
-            f2_seq_line  = f2_in.readline()
-            f2_plus_line = f2_in.readline()
-            f2_qual_line = f2_in.readline()
 
             umi_id_line   = umi_in.readline()
             umi_seq_line  = umi_in.readline().strip()
@@ -1544,16 +1688,26 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
 
             this_UMI = umi_seq_line
 
+            if not umi_qual_line:
+                raise Exception('Insufficient number of UMI entries in the UMI file %s'%fastq_umi)
+
             f1_out.write(f1_id_line + ":" + this_UMI + "\n" + f1_seq_line + f1_plus_line + f1_qual_line)
-            f2_out.write(f2_id_line + ":" + this_UMI + "\n" + f2_seq_line + f2_plus_line + f2_qual_line)
+            if fastq_r2 is not None:
+                f2_id_line   = f2_in.readline().strip()
+                f2_seq_line  = f2_in.readline()
+                f2_plus_line = f2_in.readline()
+                f2_qual_line = f2_in.readline()
+
+                f2_out.write(f2_id_line + ":" + this_UMI + "\n" + f2_seq_line + f2_plus_line + f2_qual_line)
 
 
         #finished iterating through fastq file
         f1_in.close()
-        f2_in.close()
-        umi_in.close()
         f1_out.close()
-        f2_out.close()
+        umi_in.close()
+        if fastq_r2 is not None:
+            f2_in.close()
+            f2_out.close()
 
 
         if tot_read_count == 0:
@@ -1561,11 +1715,12 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
 
         logger.info('Added UMIs fo %d reads'%tot_read_count)
         with open(umi_stats_file,'w') as fout:
-            fout.write("\t".join(["fastq_r1_dedup","fastq_r2_dedup","tot_read_count"])+"\n")
-            fout.write("\t".join([str(x) for x in [fastq_r1_dedup,fastq_r2_dedup,tot_read_count]])+"\n")
+            fout.write("\t".join(["fastq_r1_with_UMI","fastq_r2_with_UMI","tot_read_count"])+"\n")
+            fout.write("\t".join([str(x) for x in [fastq_r1_with_UMI,fastq_r2_with_UMI,tot_read_count]])+"\n")
 
     #done processing just plotting now
-    return(fastq_r1_dedup,fastq_r2_dedup)
+    return(fastq_r1_with_UMI,fastq_r2_with_UMI)
+
 
 def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
     """
@@ -2192,9 +2347,10 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 r2_aln_chr_for_support = line_els[6]
                 r2_orientation_for_support = "-" if int(line_els[1]) & 0x20 else "+"
                 r1_r2_support_dist = abs(int(line_els[8]))
+                mate_is_unmapped = int(line_els[1]) & 0x8
 
                 #determine R1/R2 support
-                if r1_aln_chr_for_support == "*" or r2_aln_chr_for_support == "*":
+                if r1_aln_chr_for_support == "*" or r2_aln_chr_for_support == "*" or mate_is_unmapped:
                     r1_r2_support_status = r1_r2_support_str_not_supported_not_aln
                 elif r2_aln_chr_for_support == "=" or r1_aln_chr_for_support == r2_aln_chr_for_support:
                     #distance must be within cutoff
@@ -4500,14 +4656,15 @@ def makeTxCountPlot(left_labs = [],
 
     return plt
 
-def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,suppress_plots=False):
+def make_final_summary(root, num_reads_input, post_UMI_regex_count, post_initial_dedup_count, post_filter_on_primer_read_count, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,suppress_plots=False):
     """
     Make final summary plot object showing number of reads deduplicated, filtered, and classified, etc.
 
     Args:
         root: where file should be written to
         num_reads_input (int): Number of reads in input
-        post_dedup_count (int): Number of reads post-deduplication (of initial UMIs)
+        post_UMI_regex_count (int): Number of reads that survived assertion of UMI regex
+        post_initial_dedup_count (int): Number of reads post-deduplication (of initial UMIs)
         post_filter_on_primer_read_count (int): Number of reads post filtering on primers
         final_read_count (int): Number of reads in final analysis
         discarded_read_counts (list): List of tuples (why read was discarded, number of reads)
@@ -4523,17 +4680,24 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
     final_summary_head = ['total_input_reads']
     final_summary_vals = [num_reads_input]
 
-    post_dedup_count_pct = None
+    post_UMI_regex_count_pct = None
     if num_reads_input > 0:
-        post_dedup_count_pct=round(100*post_dedup_count/num_reads_input,2)
-    final_summary_str += '\tSurvived initial UMI deduplication: %d/%d (%s%%)\n'%(post_dedup_count,num_reads_input,post_dedup_count_pct)
-    final_summary_head.append('post_dedup_reads')
-    final_summary_vals.append(post_dedup_count)
+        post_UMI_regex_count_pct=round(100*post_UMI_regex_count/num_reads_input,2)
+    final_summary_str += '\tSurvived assertion of UMI regex: %d/%d (%s%%)\n'%(post_UMI_regex_count,num_reads_input,post_UMI_regex_count_pct)
+    final_summary_head.append('post_UMI_regex_reads')
+    final_summary_vals.append(post_UMI_regex_count)
+
+    post_initial_dedup_count_pct = None
+    if post_UMI_regex_count > 0:
+        post_initial_dedup_count_pct=round(100*post_initial_dedup_count/post_UMI_regex_count,2)
+    final_summary_str += '\tSurvived initial UMI deduplication: %d/%d (%s%%)\n'%(post_initial_dedup_count,post_UMI_regex_count,post_initial_dedup_count_pct)
+    final_summary_head.append('post_initial_dedup_reads')
+    final_summary_vals.append(post_initial_dedup_count)
 
     post_filter_on_primer_read_count_pct = None
-    if post_dedup_count > 0:
-        post_filter_on_primer_read_count_pct =round(100* post_filter_on_primer_read_count/post_dedup_count,2)
-    final_summary_str += '\tSurvived filtering for primer/origin presence: %d/%d (%s%%)\n'%(post_filter_on_primer_read_count,post_dedup_count,post_filter_on_primer_read_count_pct)
+    if post_initial_dedup_count > 0:
+        post_filter_on_primer_read_count_pct =round(100* post_filter_on_primer_read_count/post_initial_dedup_count,2)
+    final_summary_str += '\tSurvived filtering for primer/origin presence: %d/%d (%s%%)\n'%(post_filter_on_primer_read_count,post_initial_dedup_count,post_filter_on_primer_read_count_pct)
     final_summary_head.append('post_primer_filter_reads')
     final_summary_vals.append(post_filter_on_primer_read_count)
 
@@ -4588,8 +4752,8 @@ def make_final_summary(root, num_reads_input, post_dedup_count, post_filter_on_p
         final_summary_vals.append(category_count)
 
     #plot summary
-    filter_labels = ['Deduplicated by initial UMI deduplication','Did not contain origin/primer seqeunce','Failed quality filtering','Used for final analyses']
-    values = [num_reads_input - post_dedup_count,post_dedup_count - post_filter_on_primer_read_count,post_filter_on_primer_read_count - final_read_count, final_read_count]
+    filter_labels = ['Did not pass UMI regex filter','Deduplicated by initial UMI deduplication','Did not contain origin/primer seqeunce','Failed quality filtering','Used for final analyses']
+    values = [num_reads_input - post_UMI_regex_count, post_UMI_regex_count - post_initial_dedup_count,post_initial_dedup_count - post_filter_on_primer_read_count,post_filter_on_primer_read_count - final_read_count, final_read_count]
     summary_plot_obj_root = root
     with open(summary_plot_obj_root+".txt","w") as fout:
         fout.write("\t".join(final_summary_head)+"\n")

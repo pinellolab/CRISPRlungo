@@ -1,0 +1,8 @@
+cut	start	strand	seq	anno
+badline	notint	+	asdf	anno1
+chr11_sm	500	FW	ATTCCG	anno2
+chr11_sm	700	RC	ATTCCG	anno 700
+chr11_sm	150	RC	ATTCCG	newprimer
+chr1	120	-	ATTCCG	anno2
+chr2	300	+	AGGTTA	anno3
+chr2	300	bad	AGGTTA	anno3
