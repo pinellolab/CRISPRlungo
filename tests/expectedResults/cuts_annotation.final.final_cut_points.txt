@@ -1,4 +1,4 @@
 chr	pos	count	annotation
 chr11_sm	201	3	Programmed,Origin:left,FW,CTTAGGGAACAAAGGAACCT
-chr11_sm	301	4	Novel,Not-origin,NA
+chr11_sm	301	4	custom file anno,Not-origin,NA
 chr21_sm	189	1	Cas-OFFinder OB 3,Not-origin,FW,CTTAGGGAACAAAGGAACCT

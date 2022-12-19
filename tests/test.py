@@ -718,7 +718,6 @@ def assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
     print('test!')
-    asdf()
 
     print('TESTS PASSED')
 
