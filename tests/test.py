@@ -22,7 +22,6 @@ if not os.path.exists(temp_outputs_folder):
 verbose = True
 
 def main():
-    assert_r1r2_agreement(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     #function tests
     assert_prep_input(this_genome,this_bowtie2_genome,verbose)
     assert_collapse_cuts(verbose)
@@ -32,6 +31,7 @@ def main():
     assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_no_results(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
+    assert_r1r2_agreement(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     assert_runs(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose)
     print('----------------')
     print('TESTING COMPLETE')
@@ -358,7 +358,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
             can_use_previous_analysis=False,
         )
 
-    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+    (experiment_had_UMIs, analyze_UMI_r1, analyze_UMI_r2, post_UMI_regex_count, post_initial_dedup_count
             ) = CRISPRlungo.analyze_UMIs_initial(
                     root=settings['root']+'.analyzeInputUMI',
                     fastq_r1=umi_r1,
@@ -367,6 +367,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
                     dedup_input_on_UMI=False,
                     can_use_previous_analysis=False,
         )
+    (analyze_UMI_tot_read_count, post_analyze_UMI_read_count) = parse_UMI_stats_file(settings['root']+'.analyzeInputUMI')
     if verbose:
         print(f'{analyze_UMI_tot_read_count=}')
         print(f'{post_UMI_regex_count=}')
@@ -379,7 +380,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
 
 
     print('Testing with UMI regex')
-    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+    (experiment_had_UMIs, analyze_UMI_r1, analyze_UMI_r2, post_UMI_regex_count, post_initial_dedup_count
             ) = CRISPRlungo.analyze_UMIs_initial(
                     root=settings['root']+'.analyzeInputUMI',
                     fastq_r1=umi_r1,
@@ -388,6 +389,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
                     dedup_input_on_UMI=False,
                     can_use_previous_analysis=False,
         )
+    (analyze_UMI_tot_read_count, post_analyze_UMI_read_count) = parse_UMI_stats_file(settings['root']+'.analyzeInputUMI')
     if verbose:
         print(f'{analyze_UMI_tot_read_count=}')
         print(f'{post_UMI_regex_count=}')
@@ -399,7 +401,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
     assert(post_analyze_UMI_read_count == 7)
 
     print('Testing dedup')
-    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+    (experiment_had_UMIs, analyze_UMI_r1, analyze_UMI_r2, post_UMI_regex_count, post_initial_dedup_count
             ) = CRISPRlungo.analyze_UMIs_initial(
                     root=settings['root']+'.analyzeInputUMI',
                     fastq_r1=umi_r1,
@@ -408,6 +410,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
                     dedup_input_on_UMI=True,
                     can_use_previous_analysis=False,
         )
+    (analyze_UMI_tot_read_count, post_analyze_UMI_read_count) = parse_UMI_stats_file(settings['root']+'.analyzeInputUMI')
     if verbose:
         print(f'{analyze_UMI_tot_read_count=}')
         print(f'{post_UMI_regex_count=}')
@@ -419,7 +422,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
     assert(post_analyze_UMI_read_count == 3) #2 of WT and 1 bad UMI = 3 reads
 
     print('Testing UMI regex and dedup')
-    (analyze_UMI_r1, analyze_UMI_r2, analyze_UMI_tot_read_count, post_UMI_regex_count, post_initial_dedup_count, post_analyze_UMI_read_count
+    (experiment_had_UMIs, analyze_UMI_r1, analyze_UMI_r2, post_UMI_regex_count, post_initial_dedup_count
             ) = CRISPRlungo.analyze_UMIs_initial(
                     root=settings['root']+'.analyzeInputUMI',
                     fastq_r1=umi_r1,
@@ -428,6 +431,7 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
                     dedup_input_on_UMI=True,
                     can_use_previous_analysis=False,
         )
+    (analyze_UMI_tot_read_count, post_analyze_UMI_read_count) = parse_UMI_stats_file(settings['root']+'.analyzeInputUMI')
     if verbose:
         print(f'{analyze_UMI_tot_read_count=}')
         print(f'{post_UMI_regex_count=}')
@@ -451,6 +455,28 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
 
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+def parse_UMI_stats_file(root):
+    analyze_UMI_stats_file = root+".info"
+    with open(analyze_UMI_stats_file,'r') as fin:
+        head_line = fin.readline()
+        while head_line.startswith('#'):
+            head_line = fin.readline()
+        line_els = fin.readline().rstrip('\n').split("\t")
+        if len(line_els) > 3:
+            assert(len(line_els) == 9)
+            (experiment_had_UMIs_str,fastq_analyze_UMI_r1_str,fastq_analyze_UMI_r2_str,tot_read_count_str,count_with_regex_str,post_analyze_UMI_count_str,post_analyze_UMI_read_count_str,UMI_GINI_str,UMI_count) = line_els
+            experiment_had_UMIs = True if experiment_had_UMIs_str == "True" else False
+            if not experiment_had_UMIs:
+                return(None,None)
+            fastq_analyze_UMI_r1 = None if fastq_analyze_UMI_r1_str == "None" else fastq_analyze_UMI_r1_str
+            fastq_analyze_UMI_r2 = None if fastq_analyze_UMI_r2_str == "None" else fastq_analyze_UMI_r2_str
+            tot_read_count = int(tot_read_count_str)
+            count_with_regex = int(count_with_regex_str)
+            post_analyze_UMI_count = int(post_analyze_UMI_count_str)
+            post_analyze_UMI_read_count = int(post_analyze_UMI_read_count_str)
+            return(tot_read_count, post_analyze_UMI_read_count)
+    raise Exception('Could not parse UMI stats file ' + analyze_UMI_stats_file)
 
 def assert_r1r2_agreement(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_folder,expected_outputs_folder,verbose):
     file_roots_to_compare = [
@@ -687,10 +713,12 @@ def assert_cuts(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs_
 
     print('Running Cuts - testing for cut annotations')
     this_root = 'cuts_annotation'
-    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10 --cut_classification_annotations chr11_sm:301:left:My__Annotation'.split(" "))
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/cuts.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTTAGGGAACAAAGGAACCT --PAM NGG --casoffinder_num_mismatches 3 --root {temp_outputs_folder}/{this_root} --keep_intermediate --debug --origin_cut_merge_distance 10 --known_cut_merge_distance 10 --novel_cut_merge_distance 10 --cut_classification_annotations chr11_sm:301:left:My__Annotation --cut_region_annotation_file {test_inputs_folder}/cut_region_annos.txt'.split(" "))
     CRISPRlungo.processCRISPRlungo(settings)
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+    print('test!')
+    asdf()
 
     print('TESTS PASSED')
 
