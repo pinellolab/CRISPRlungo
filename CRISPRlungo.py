@@ -25,7 +25,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.9"
+__version__ = "v0.1.10"
 
 
 def processCRISPRlungo(settings):
@@ -164,7 +164,7 @@ def processCRISPRlungo(settings):
 
     (final_assignment_file, final_read_ids_for_crispresso, final_cut_counts, cut_classification_lookup, final_read_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
         chr_aln_plot_obj, tlen_plot_obj, deduplication_plot_obj, tx_order_plot_obj, tx_count_plot_obj, tx_circos_plot_obj, classification_plot_obj, classification_indel_plot_obj,
-        origin_indel_hist_plot_obj, origin_inversion_hist_plot_obj, origin_deletion_hist_plot_obj, origin_indel_depth_plot_obj,
+        origin_indel_hist_plot_obj, origin_inversion_deletion_hist_plot_obj, origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj, r1_r2_support_dist_plot_obj, discarded_reads_plot_obj) = make_final_read_assignments(
                 root=settings['root']+'.final',
                 genome_mapped_bam=genome_mapped_bam,
@@ -172,10 +172,12 @@ def processCRISPRlungo(settings):
                 cut_sites=cut_sites,
                 cut_annotations=cut_annotations,
                 cut_classification_annotations=settings['cut_classification_annotations'],
+                cut_region_annotation_file = settings['cut_region_annotation_file'],
                 guide_seqs=settings['guide_sequences'],
                 cleavage_offset=settings['cleavage_offset'],
                 min_primer_length=settings['min_primer_length'],
                 genome=settings['genome'],
+                experiment_had_UMIs=experiment_had_UMIs,
                 r1_r2_support_max_distance=settings['r1_r2_support_max_distance'],
                 novel_cut_merge_distance=settings['novel_cut_merge_distance'],
                 known_cut_merge_distance=settings['known_cut_merge_distance'],
@@ -232,13 +234,9 @@ def processCRISPRlungo(settings):
         origin_indel_hist_plot_obj.order = 25
         summary_plot_objects.append(origin_indel_hist_plot_obj)
 
-    if origin_inversion_hist_plot_obj is not None:
-        origin_inversion_hist_plot_obj.order = 26
-        summary_plot_objects.append(origin_inversion_hist_plot_obj)
-
-    if origin_deletion_hist_plot_obj is not None:
-        origin_deletion_hist_plot_obj.order = 27
-        summary_plot_objects.append(origin_deletion_hist_plot_obj)
+    if origin_inversion_deletion_hist_plot_obj is not None:
+        origin_inversion_deletion_hist_plot_obj.order = 26
+        summary_plot_objects.append(origin_inversion_deletion_hist_plot_obj)
 
     if origin_indel_depth_plot_obj is not None:
         origin_indel_depth_plot_obj.order = 28
@@ -345,6 +343,7 @@ def parse_settings(args):
 
     parser.add_argument('--guide_sequences', nargs='+', help='Spacer sequences of guides (multiple guide sequences are separated by spaces). Spacer sequences must be provided without the PAM sequence, but oriented so the PAM would immediately follow the provided spacer sequence', action='extend', default=[])
     parser.add_argument('--cut_classification_annotations', nargs='+', help='User-customizable annotations for cut products in the form: chr1:234:left:Custom_label (multiple annotations are separated by spaces)', action='extend', default=[])
+    parser.add_argument('--cut_region_annotation_file', type=str, help='Bed file containing regions to annotate cut sites that are not otherwise annotated (e.g. fragile sites, etc.). This is a tab-separated file with at least 4 columns: chr, start, end, and region_name. Cut sites will be labeled with the following priority: 1) annotation given by --cut_classification_annotations, 2) annotations in --additional_cut_site_file 3) presence of homology to any guide 4) this region annotation', default=None)
     parser.add_argument('--additional_cut_site_file', type=str, help='File containing additional cut site annotations. This file should have five tab-separated columns. 1) chromosome of the cut site 2) position of the cut site 3) guide alignment orientation with respect to the genome (either "FW" or "RC") 4) guide sequence not including the PAM (this will be used to search for homology and may be left blank) 5) cut annotation (e.g. "Programmed" - this will appear in reports)', default=None)
     parser.add_argument('--cleavage_offset', type=int, help='Position where cleavage occurs, for in-silico off-target search (relative to end of spacer seq -- for Cas9 this is -3)', default=-3)
 
@@ -502,10 +501,23 @@ def parse_settings(args):
     if 'additional_cut_site_file' in settings_file_args:
         settings['additional_cut_site_file'] = settings_file_args['additional_cut_site_file']
         settings_file_args.pop('additional_cut_site_file')
+        if settings['additional_cut_site_file'] == 'None':
+            settings['additional_cut_site_file'] = None
     if settings['additional_cut_site_file'] is not None:
         if not os.path.isfile(settings['additional_cut_site_file']):
             parser.print_usage()
-            raise Exception('Error: additional_cut_site_file file %s does not exist',settings['additional_cut_site_file'])
+            raise Exception('Error: additional_cut_site_file file %s does not exist', settings['additional_cut_site_file'])
+
+    settings['cut_region_annotation_file'] = cmd_args.cut_region_annotation_file
+    if 'cut_region_annotation_file' in settings_file_args:
+        settings['cut_region_annotation_file'] = settings_file_args['cut_region_annotation_file']
+        settings_file_args.pop('cut_region_annotation_file')
+        if settings['cut_region_annotation_file'] == 'None':
+            settings['cut_region_annotation_file'] = None
+    if settings['cut_region_annotation_file'] is not None:
+        if not os.path.isfile(settings['cut_region_annotation_file']):
+            parser.print_usage()
+            raise Exception('Error: cut_region_annotation_file file %s does not exist', settings['cut_region_annotation_file'])
 
     settings['cut_classification_annotations'] = []
     annotations_arr = cmd_args.cut_classification_annotations
@@ -684,7 +696,7 @@ def parse_settings(args):
 
     settings['suppress_homology_detection'] = cmd_args.suppress_homology_detection
     if 'suppress_homology_detection' in settings_file_args:
-        settings['suppress_homology_detection'] = int(settings_file_args['suppress_homology_detection'])
+        settings['suppress_homology_detection'] = (settings_file_args['suppress_homology_detection'].lower() == 'true')
         settings_file_args.pop('suppress_homology_detection')
 
     settings['dedup_input_on_UMI'] = cmd_args.dedup_input_on_UMI
@@ -697,7 +709,7 @@ def parse_settings(args):
         settings['suppress_dedup_on_aln_pos_and_UMI_filter'] = (settings_file_args['suppress_dedup_on_aln_pos_and_UMI_filter'].lower() == 'true')
         settings_file_args.pop('suppress_dedup_on_aln_pos_and_UMI_filter')
 
-    settings['dedup_by_final_cut_assignment_and_UMI'] = cmd_args.suppress_dedup_on_aln_pos_and_UMI_filter
+    settings['dedup_by_final_cut_assignment_and_UMI'] = cmd_args.dedup_by_final_cut_assignment_and_UMI
     if 'dedup_by_final_cut_assignment_and_UMI' in settings_file_args:
         settings['dedup_by_final_cut_assignment_and_UMI'] = (settings_file_args['dedup_by_final_cut_assignment_and_UMI'].lower() == 'true')
         settings_file_args.pop('dedup_by_final_cut_assignment_and_UMI')
@@ -712,7 +724,7 @@ def parse_settings(args):
         settings['min_umi_seen_to_keep_read'] = int(settings_file_args['min_umi_seen_to_keep_read'])
         settings_file_args.pop('min_umi_seen_to_keep_read')
 
-    settings['write_UMI_counts'] = cmd_args.suppress_dedup_on_aln_pos_and_UMI_filter
+    settings['write_UMI_counts'] = cmd_args.write_UMI_counts
     if 'write_UMI_counts' in settings_file_args:
         settings['write_UMI_counts'] = (settings_file_args['write_UMI_counts'].lower() == 'true')
         settings_file_args.pop('write_UMI_counts')
@@ -1332,7 +1344,7 @@ def analyze_UMIs_initial(root,fastq_r1,fastq_r2,umi_regex,dedup_input_on_UMI=Fal
                 head_line = fin.readline()
             line_els = fin.readline().rstrip('\n').split("\t")
             if len(line_els) > 3:
-                (experiment_had_UMIs_str,fastq_analyze_UMI_r1_str,fastq_analyze_UMI_r2_str,tot_read_count_str,count_with_regex_str,post_analyze_UMI_count_str,post_analyze_UMI_read_count_str,UMI_GINI_str) = line_els
+                (experiment_had_UMIs_str,fastq_analyze_UMI_r1_str,fastq_analyze_UMI_r2_str,tot_read_count_str,count_with_regex_str,post_analyze_UMI_count_str,post_analyze_UMI_read_count_str,UMI_GINI_str,UMI_count) = line_els
                 experiment_had_UMIs = True if experiment_had_UMIs_str == "True" else False
                 if not experiment_had_UMIs:
                     return(False,None,None,None,None)
@@ -1385,8 +1397,8 @@ def analyze_UMIs_initial(root,fastq_r1,fastq_r2,umi_regex,dedup_input_on_UMI=Fal
         logger.info('UMIs were not detected in this sample')
         with open(analyze_UMI_stats_file,'w') as fout:
             fout.write("# experiment_had_UMIs (bool): whether the experiment had UMIs or not\n")
-            fout.write("\t".join(["experiment_had_UMIs","fastq_analyze_UMI_r1","fastq_analyze_UMI_r2","tot_read_count","count_with_regex","post_analyze_UMI_count","post_analyze_UMI_read_count","UMI_input_GINI"])+"\n")
-            fout.write("\t".join([str(x) for x in [False,None,None,None,None,None,None,None]])+"\n")
+            fout.write("\t".join(["experiment_had_UMIs","fastq_analyze_UMI_r1","fastq_analyze_UMI_r2","tot_read_count","count_with_regex","post_analyze_UMI_count","post_analyze_UMI_read_count","UMI_input_GINI","UMI_count"])+"\n")
+            fout.write("\t".join([str(x) for x in [False,None,None,None,None,None,None,None,None]])+"\n")
         return(False,None,None,None,None)
 
 
@@ -1537,10 +1549,8 @@ def analyze_UMIs_initial(root,fastq_r1,fastq_r2,umi_regex,dedup_input_on_UMI=Fal
         raise Exception("Error: only the empty barcode '' was found.")
 
     umi_gini = None
-    umi_gini_string = "#Initial UMI GINI:\tNA\n"
     if umi_count > 0:
         umi_gini = compute_gini(np.array(umi_counts))
-        umi_gini_string = "#Initial UMI GINI:\t"+str(umi_gini)+"\n"
 
     if dedup_input_on_UMI:
         collided_umi_reads = []
@@ -1595,9 +1605,10 @@ def analyze_UMIs_initial(root,fastq_r1,fastq_r2,umi_regex,dedup_input_on_UMI=Fal
         fout.write("# count_with_regex (int): number of reads matching the umi_regex '%s'\n"%umi_regex)
         fout.write("# post_analyze_UMI_count (int): number of reads post UMI analysis (after asserting UMI regex and/or initial deduplication on UMI)\n")
         fout.write("# post_analyze_UMI_read_count (int): number of reads that contributed to the deduplicated reads (post_analyze_UMI_read_count reads were seen that were deduplicated to post_analyze_UMI_count reads. If post_analyze_UMI_count == post_analyze_UMI_read_count then every UMI-read pair was seen once.)\n")
-        fout.write("# umi_gini (float): GINI index for distribution of reads among UMIs (passing the umi_regex filter if umi_regex is set). (0 = perfect equality and 1 = perfect inequality in reads/UMI)\n")
-        fout.write("\t".join(["experiment_had_UMIs","fastq_analyze_UMI_r1","fastq_analyze_UMI_r2","tot_read_count","count_with_regex","post_analyze_UMI_count","post_analyze_UMI_read_count","UMI_input_GINI"])+"\n")
-        fout.write("\t".join([str(x) for x in [True,fastq_analyze_UMI_r1,fastq_analyze_UMI_r2,tot_read_count,count_with_regex,post_analyze_UMI_count,post_analyze_UMI_read_count,umi_gini]])+"\n")
+        fout.write("# UMI_input_GINI (float): GINI index for distribution of reads among UMIs (passing the umi_regex filter if umi_regex is set). (0 = perfect equality and 1 = perfect inequality in reads/UMI)\n")
+        fout.write("# UMI_count (int): Number of unique UMI sequences observed\n")
+        fout.write("\t".join(["experiment_had_UMIs","fastq_analyze_UMI_r1","fastq_analyze_UMI_r2","tot_read_count","count_with_regex","post_analyze_UMI_count","post_analyze_UMI_read_count","UMI_input_GINI","UMI_count"])+"\n")
+        fout.write("\t".join([str(x) for x in [True,fastq_analyze_UMI_r1,fastq_analyze_UMI_r2,tot_read_count,count_with_regex,post_analyze_UMI_count,post_analyze_UMI_read_count,umi_gini,umi_count]])+"\n")
 
     return(True, fastq_analyze_UMI_r1, fastq_analyze_UMI_r2, count_with_regex, post_analyze_UMI_count)
 
@@ -1994,10 +2005,10 @@ def align_reads(root,fastq_r1,fastq_r2,bowtie2_reference,bowtie2_command='bowtie
     return(mapped_bam_file)
 
 def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
-    cut_sites,cut_annotations,cut_classification_annotations,guide_seqs,cleavage_offset,min_primer_length,genome,r1_r2_support_max_distance=100000,
+    cut_sites,cut_annotations,cut_classification_annotations,cut_region_annotation_file,guide_seqs,cleavage_offset,min_primer_length,genome,r1_r2_support_max_distance=100000,
     novel_cut_merge_distance=50,known_cut_merge_distance=50,origin_cut_merge_distance=10000,short_indel_length_cutoff=50,guide_homology_max_gaps=2,guide_homology_max_mismatches=5,
-    arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,suppress_dedup_on_aln_pos_and_UMI_filter=False,dedup_by_final_cut_assignment_and_UMI=True,
-    suppress_r2_support_filter=False,suppress_poor_alignment_filter=False,write_discarded_read_info=False,
+    arm_min_matched_start_bases=10,arm_max_clipped_bases=0,genome_map_resolution=1000000,crispresso_max_indel_size=50,suppress_dedup_on_aln_pos_and_UMI_filter=False,
+    dedup_by_final_cut_assignment_and_UMI=True,suppress_r2_support_filter=False,suppress_poor_alignment_filter=False,write_discarded_read_info=False,experiment_had_UMIs=False,
     samtools_command='samtools',keep_intermediate=False,suppress_homology_detection=False,suppress_plots=False,can_use_previous_analysis=False):
     """
     Makes final read assignments
@@ -2011,6 +2022,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         cut_annotations: dict of cut_chr:cut_site->annotation for description of cut [type, origin_status, guide_direction] 
             (type=Programmed, Off-target, Known, Casoffinder, etc) (origin_status=Not-origin or Origin:left or Origin:right) (guide_direction='FW' or 'RC' for which direction the guide binds)
         cut_classification_annotations: list of cut_chr:cut_site:direction:annotation (as provided by users as parameters)
+        cut_region_annotation_file: file with annotations for cut regions (chr, start, end, annotation) to annotate Novel (or otherwise unknown) sites
         guide_seqs: sequences of guides used in experiment (required here for finding homology at novel cut sites)
         cleavage_offset: position where cleavage occurs (relative to end of spacer seq -- for Cas9 this is -3)
         min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
@@ -2030,6 +2042,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         dedup_by_final_cut_assignment_and_UMI: if true, deduplicates based on final cut assignment - so that reads with the same UMI with different start/stop alignment positions will be deduplicated if they are assigned to the same final cut position
         suppress_r2_support_filter: if true, reads without r2 support will be included in final analysis and counts. If false, reads without r2 support will be filtered from the final analysis.
         suppress_poor_alignment_filter: if true, reads with poor alignment (fewer than --arm_min_matched_start_bases matches at the alignment ends or more than --arm_max_clipped_bases on both sides of the read) are included in the final analysis and counts. If false, reads with poor alignment are filtered from the final analysis.
+        experiment_had_UMIs (bool): True if experiment had UMIs. If false, sample is not deduplicated on UMIs
         write_discarded_read_info: if true, files are written containing info for reads that are discarded from final analysis
         samtools_command: location of samtools to run
         keep_intermediate: whether to keep intermediate files (if False, intermediate files will be deleted)
@@ -2054,8 +2067,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         tx_count_plot_obj: plot showing translocations and counts
         tx_circos_plot_obj: circos plot showing translocations and counts
         origin_indel_hist_plot_obj: plot of indel lenghts for origin
-        origin_inversion_hist_plot_obj: plot of inversion lengths at origin (reads pointing opposite directions)
-        origin_deletion_hist_plot_obj: plot of deletion lengths for ontarget (reads pointing same direction/away from the primer)
+        origin_inversion_deletion_hist_plot_obj: plot of inversion lengths at origin (reads pointing opposite directions) and deletions at origin (reads pointing in same direction)
         origin_indel_depth_plot_obj: plot of read depth around origin
         r1_r2_support_plot_obj: plot of how many reads for which r1 and r2 support each other
         r1_r2_support_dist_plot_obj: plot of how far apart the r1/r2 supporting reads were aligned from each other (showing reads supported and not supported by r2 separately)
@@ -2136,15 +2148,10 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 if origin_indel_hist_plot_obj_str != "" and origin_indel_hist_plot_obj_str != "None":
                     origin_indel_hist_plot_obj = PlotObject.from_json(origin_indel_hist_plot_obj_str)
 
-                origin_inversion_hist_plot_obj_str = fin.readline().rstrip('\n')
-                origin_inversion_hist_plot_obj = None
-                if origin_inversion_hist_plot_obj_str != "" and origin_inversion_hist_plot_obj_str != "None":
-                    origin_inversion_hist_plot_obj = PlotObject.from_json(origin_inversion_hist_plot_obj_str)
-
-                origin_deletion_hist_plot_obj_str = fin.readline().rstrip('\n')
-                origin_deletion_hist_plot_obj = None
-                if origin_deletion_hist_plot_obj_str != "" and origin_deletion_hist_plot_obj_str != "None":
-                    origin_deletion_hist_plot_obj = PlotObject.from_json(origin_deletion_hist_plot_obj_str)
+                origin_inversion_deletion_hist_plot_obj_str = fin.readline().rstrip('\n')
+                origin_inversion_deletion_hist_plot_obj = None
+                if origin_inversion_deletion_hist_plot_obj_str != "" and origin_inversion_deletion_hist_plot_obj_str != "None":
+                    origin_inversion_deletion_hist_plot_obj = PlotObject.from_json(origin_inversion_deletion_hist_plot_obj_str)
 
                 origin_indel_depth_plot_obj_str = fin.readline().rstrip('\n')
                 origin_indel_depth_plot_obj = None
@@ -2190,7 +2197,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                             logger.info('Using previously-processed assignments for ' + str(read_total_read_count) + ' total reads')
                             return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup,final_total_count,discarded_read_counts,classification_read_counts,classification_indel_read_counts,
                                 chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,tx_circos_plot_obj,classification_plot_obj,classification_indel_plot_obj,
-                                origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
+                                origin_indel_hist_plot_obj,origin_inversion_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
                                 r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
                         else:
                             logger.info('In attempting to recover previously-processed assignments, expecting ' + str(previous_total_read_count) + ' reads, but only read ' + str(read_total_read_count) + ' from ' + final_file + '. Reprocessing.')
@@ -2385,16 +2392,22 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             aln2 = line_els[6] + ":" + line_els[7] # if unpaired, this will just be *:0, so we can still use it in our key
             tlen = abs(int(line_els[8]))
             umi_dedup_key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
-            if umi_dedup_key in seen_reads_for_dedup:
-                seen_read_counts_for_dedup[umi_dedup_key] += 1
-                if not suppress_dedup_on_aln_pos_and_UMI_filter and not dedup_by_final_cut_assignment_and_UMI:
-                    discarded_reads_duplicates += 1
-                    if write_discarded_read_info:
-                        fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[umi_dedup_key]+'('+umi_dedup_key+')\n')
-                    continue
-            else:
-                seen_reads_for_dedup[umi_dedup_key] = line_els[0]
-                seen_read_counts_for_dedup[umi_dedup_key] = 1
+            if experiment_had_UMIs:
+                if umi_dedup_key in seen_reads_for_dedup:
+                    seen_read_counts_for_dedup[umi_dedup_key] += 1
+                    # avoid a double negative here.. 
+                    if suppress_dedup_on_aln_pos_and_UMI_filter or dedup_by_final_cut_assignment_and_UMI:
+                        pass
+                    else: #dedup by alignment position and UMI only if we're not suppressing this filter or if we're using the alternate dedup method
+                        discarded_reads_duplicates += 1
+                        if write_discarded_read_info:
+                            fout_discarded.write(line_els[0]+'\tDuplicate\tDuplicate of '+seen_reads_for_dedup[umi_dedup_key]+'('+umi_dedup_key+')\n')
+                        continue
+                else: # first time we've seen this UMI key
+                    seen_reads_for_dedup[umi_dedup_key] = line_els[0]
+                    seen_read_counts_for_dedup[umi_dedup_key] = 1
+            else: # if experiment doesn't have UMIs
+                umi_dedup_key = '(None)'
             #finished deduplication by barcode and aln position
 
             cut_points_by_chr[line_chr][line_start] += 1
@@ -2549,12 +2562,36 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         cut_point_homology_info = cut_point_homology_info
         )
 
+    cut_region_annotations_by_chr = defaultdict(list)  # chr -> [(start,end,annotation), ...]
+    if cut_region_annotation_file is not None:
+        logger.debug('Reading cut region annotations from file ' + cut_region_annotation_file)
+        read_line_count = 0
+        read_line_annos = 0
+        with open (cut_region_annotation_file,'r') as reg_in:
+            for line in reg_in:
+                read_line_count += 1
+                line_els = line.strip().split("\t")
+                if len(line_els) > 3:
+                    try:
+                        cut_region_annotations_by_chr[line_els[0]].append((int(line_els[1]),int(line_els[2]),line_els[3]))
+                        read_line_annos += 1
+                    except Exception as e:
+                        logger.debug('Could not parse line ' + line + ' : ' + str(e))
+                        pass
+        
+        logger.debug('Read %s from cut region annotation file %s. Added %s/%s annotations.'%(read_line_count,cut_region_annotation_file,read_line_annos,read_line_count))
+
     final_cut_point_total = 0
     cut_classification_lookup = {}
     for chrom in sorted(final_cut_points_by_chr.keys()):
         final_cut_point_total += len(final_cut_points_by_chr[chrom])
         for pos in sorted(final_cut_points_by_chr[chrom]):
-            this_anno=['Novel','Not-origin','NA']
+            this_region_annotation = 'Novel'
+            for region_annotation in cut_region_annotations_by_chr[chrom]:
+                if pos >= region_annotation[0] and pos <= region_annotation[1]:
+                    this_region_annotation = region_annotation[2]
+                    break
+            this_anno=[this_region_annotation,'Not-origin','NA']
             this_str = chrom+":"+str(pos)
             if this_str in cut_point_homology_info:
                 this_anno = ['Homologous','Not-origin','NA']
@@ -2601,7 +2638,12 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         fout.write('chr\tpos\tcount\tannotation\n')
         for chrom in sorted(final_cut_points_by_chr.keys()):
             for pos in sorted(final_cut_points_by_chr[chrom]):
-                this_anno=['Novel','Not-origin','NA']
+                this_region_annotation = 'Novel'
+                for region_annotation in cut_region_annotations_by_chr[chrom]:
+                    if pos >= region_annotation[0] and pos <= region_annotation[1]:
+                        this_region_annotation = region_annotation[2]
+                        break
+                this_anno=[this_region_annotation,'Not-origin','NA']
                 this_str = chrom+":"+str(pos)
                 if this_str in cut_point_homology_info:
                     this_anno = ['Homologous','Not-origin','NA']
@@ -2612,14 +2654,20 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     with open(root+".final_cut_points_lookup.txt",'w') as fout:
         fout.write('discovered cut point\tfinal mapped cut point\tcount\tannotation\n');
         for key in sorted(final_cut_point_lookup.keys(),key=lambda k: (k.split(":")[0],int(k.split(":")[1]))):
-            (chrom,pos)=key.split(":")
-            this_anno=['Novel','Not-origin','NA']
+            (chrom,pos_str)=key.split(":")
+            pos = int(pos_str)
+            this_region_annotation = 'Novel'
+            for region_annotation in cut_region_annotations_by_chr[chrom]:
+                if pos >= region_annotation[0] and pos <= region_annotation[1]:
+                    this_region_annotation = region_annotation[2]
+                    break
+            this_anno=[this_region_annotation,'Not-origin','NA']
             this_final = final_cut_point_lookup[key]
             if this_final in cut_point_homology_info:
                 this_anno = ['Homologous','Not-origin','NA']
             if this_final in cut_annotations: # overwrite homology annotation if present in cut_annotations
                 this_anno = cut_annotations[this_final]
-            fout.write("%s\t%s\t%d\t%s\n"%(key,final_cut_point_lookup[key],cut_points_by_chr[chrom][int(pos)],",".join(this_anno)))
+            fout.write("%s\t%s\t%d\t%s\n"%(key,final_cut_point_lookup[key],cut_points_by_chr[chrom][pos],",".join(this_anno)))
 
     final_total_count = 0
     final_classification_counts = defaultdict(int) # classification is Linear, Large Deletion, Translocation etc.
@@ -2660,11 +2708,11 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     r1_r2_orientation_str_ind = 9
     umi_dedup_key_ind = 10
 
-    # perform deduplication based on final cut point assignment instead of alignment position
-    # if dedup_by_final_cut_assignment_and_UMI is set:
-    #  - reads will not be deduplicated before assigning final cut points (many duplicates of a single read may bias the location of a novel inferred cut site whose position is calculated as the mean position of reads assigned to that novel cut site)
-    #  - reads with different alignment positions (but the same final cut point assignment) will be treated as duplicates
-    if dedup_by_final_cut_assignment_and_UMI:
+    # if experiment_had_UMIs, perform deduplication based on final cut point assignment instead of alignment position
+    #   if dedup_by_final_cut_assignment_and_UMI is set:
+    #    - reads will not be deduplicated before assigning final cut points (many duplicates of a single read may bias the location of a novel inferred cut site whose position is calculated as the mean position of reads assigned to that novel cut site)
+    #    - reads with different alignment positions (but the same final cut point assignment) will be treated as duplicates
+    if experiment_had_UMIs and dedup_by_final_cut_assignment_and_UMI:
         logger.debug('Deduplicating based on final cut assignments')
         seen_reads_for_dedup = {} # put read id into this dict for deduplicating
         seen_read_counts_for_dedup = {} # how many times each umi/loc was seen
@@ -2686,7 +2734,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 final_cut_point = final_cut_point_lookup[cut_point]
                 barcode = line_id.split(":")[-1]
                 umi_dedup_key = "%s %s %s"%(barcode,final_cut_point,cut_point_direction)
-                if umi_dedup_key in seen_reads_for_dedup:
+                if umi_dedup_key in seen_reads_for_dedup: #seen_reads_for_dedup will be empty if not experiment_had_UMIs
                     seen_read_counts_for_dedup[umi_dedup_key] += 1
                     discarded_reads_duplicates += 1
                     if write_discarded_read_info:
@@ -2710,6 +2758,10 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         fout_discarded.close()
 
 
+    # variables for mean reads/umi by classification
+    # Average will be dedup_umi_read_sum_per_classification/dedup_umi_counts_per_classification
+    dedup_umi_read_sum_per_classification = defaultdict(int) #  sum of read/umi per final classification
+    dedup_umi_counts_per_classification = defaultdict(int) #  count of umi per final classification. 
     with open(final_file_tmp,'r') as fin, open(final_file,'w') as fout:
         old_head = fin.readline().strip()
         fout.write(old_head + "\t" + "\t".join([str(x) for x in ['reads_with_same_umi_pos','final_cut_pos','final_cut_indel','indel_classification','classification']]) +"\n")
@@ -2756,7 +2808,13 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
             final_classification_indel_counts[final_classification+' '+indel_str] += 1
             umi_dedup_key = line_els[umi_dedup_key_ind]
-            num_barcodes_seen_umi_pos = seen_read_counts_for_dedup[umi_dedup_key]
+            num_barcodes_seen_umi_pos = 1
+            if experiment_had_UMIs:
+                num_barcodes_seen_umi_pos = seen_read_counts_for_dedup[umi_dedup_key]
+                dedup_umi_read_sum_per_classification[final_classification+' '+indel_str] += num_barcodes_seen_umi_pos
+            else:
+                dedup_umi_read_sum_per_classification[final_classification+' '+indel_str] += 1
+            dedup_umi_counts_per_classification[final_classification+' '+indel_str] += 1
 
             fout.write(line + "\t" + "\t".join([str(x) for x in [num_barcodes_seen_umi_pos,final_cut_point_and_direction,final_cut_indel,indel_str,final_classification]]) +"\n")
 #            fout.write(line + "\t" + "\t".join([str(x) for x in [final_cut_point_and_direction,'it:'+str(ins_target)+';dp:'+str(del_primer)+';ai:'+str(aln_indel)+';fci:'+str(final_cut_indel),final_classification]]) +"\n")
@@ -2796,6 +2854,20 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         #close final file
     logger.info('Processed %d reads.'%(final_total_count))
 
+    #set classificatino label order
+    classification_labels = []
+    if origin_chr is not None:
+        classification_labels = ['Linear'] #linear goes first in order
+    for key in sorted(final_classification_counts.keys()):
+        if key not in classification_labels and final_classification_counts[key] > 0:
+            classification_labels.append(key)
+    short_indel_categories = [' no indels',' short indels',' long indels']
+    classification_indel_labels = []
+    for label in classification_labels:
+        for short_indel_category in short_indel_categories:
+            new_label = label + short_indel_category
+            classification_indel_labels.append(new_label)
+
     #deduplication plot
     dup_counts = defaultdict(int)
     dup_keys = seen_read_counts_for_dedup.keys()
@@ -2810,6 +2882,8 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     if len(dup_keys) > 0:
         umi_gini = compute_gini(np.array(dup_vals))
         umi_gini_string = "#Final UMI GINI:\t"+str(umi_gini)+"\n"
+    if not experiment_had_UMIs:
+        umi_gini_string = '#Final UMI GINI:\tNA\t(UMIs not used in this experiment)'
 
 
     if dedup_by_final_cut_assignment_and_UMI:
@@ -2826,6 +2900,14 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             summary.write('Reads per UMI\tNumber of UMIs\n')
             for key in dup_count_keys:
                 summary.write(str(key) + '\t' + str(dup_counts[key]) + '\n')
+
+    with open(deduplication_plot_obj_root+".reads_per_umi_by_classification.txt","w") as summary:
+        summary.write('Classification\tNumber of reads\tNumber of UMIs\tAverage reads/umi\n')
+        for classification in classification_indel_labels:
+            val = 0
+            if dedup_umi_counts_per_classification[classification] > 0:
+                val = dedup_umi_read_sum_per_classification[classification] / dedup_umi_counts_per_classification[classification]
+            summary.write(classification + '\t' + str(dedup_umi_read_sum_per_classification[classification])+"\t"+str(dedup_umi_counts_per_classification[classification]) + '\t' + str(val) + '\n')
 
     deduplication_plot_obj = None
     if total_reads_processed > 0 and not suppress_plots:
@@ -2864,11 +2946,14 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         if dedup_by_final_cut_assignment_and_UMI:
             plot_label = "Number of reads that were duplicates based on UMI and final cut assignment. "+gini_note+" Note that deduplication was performed by removing reads with the same UMI and final cut assignment (because the '--dedup_by_final_cut_assignment_and_UMI' flag was set). This may result in deduplication of reads that have the same UMI but different alignment positions."
 
+        if not experiment_had_UMIs:
+            plot_label = '(No UMIs used in this experiment)'
+
         deduplication_plot_obj = PlotObject(
                 plot_name = deduplication_plot_obj_root,
                 plot_title = 'Duplicate read counts',
                 plot_label = plot_label,
-                plot_datas = [('Read assignments',final_file)]
+                plot_datas = [('UMI counts',deduplication_plot_obj_root+".txt"),('Read assignments',final_file)]
                 )
 
 
@@ -2922,13 +3007,6 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     tx_circos_plot_obj = None
     classification_plot_obj = None
     classification_indel_plot_obj = None
-
-    classification_labels = []
-    if origin_chr is not None:
-        classification_labels = ['Linear'] #linear goes first in order
-    for key in sorted(final_classification_counts.keys()):
-        if key not in classification_labels and final_classification_counts[key] > 0:
-            classification_labels.append(key)
 
     classification_values = [final_classification_counts[x] for x in classification_labels]
     classification_read_counts_str = "\t".join(classification_labels)+"\n"+"\t".join([str(x) for x in classification_values])+"\n"
@@ -3273,76 +3351,65 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
 
     origin_dist_cutoff = 100000 # only plot items within 100kb of origin cut
 
-    origin_inversion_hist_plot_obj = None # plot of inversion lengths at origin (where read points in opposite genomic direction as primer)
-    origin_inversion_hist_plot_obj_root = root + ".origin_inversion_histogram"
-    keys = sorted(origin_inversion_lengths.keys())
-    vals = [origin_inversion_lengths[key] for key in keys]
-    with open(origin_inversion_hist_plot_obj_root+".txt","w") as summary:
+    origin_inversion_deletion_hist_plot_obj = None # plot of inversion and deletion lengths at origin (where read points in opposite genomic direction as primer)
+    origin_inversion_deletion_hist_plot_obj_root = root + ".origin_inversion_deletion_histogram"
+    inversion_keys = sorted(origin_inversion_lengths.keys())
+    with open(origin_inversion_deletion_hist_plot_obj_root+".inversions.txt","w") as summary:
         summary.write('Inversion_distance\tnumReads\n')
-        for key in keys:
+        for key in inversion_keys:
             summary.write(str(key) + '\t' + str(origin_inversion_lengths[key]) + '\n')
-    if len(origin_inversion_lengths) > 0 and not suppress_plots:
 
-        plot_keys = [x for x in keys if abs(x) < origin_dist_cutoff]
-        plot_vals = [origin_inversion_lengths[key] for key in plot_keys]
-        fig = plt.figure(figsize=(12,6))
-        ax = plt.subplot(111)
-        if len(vals) > 0:
-            ax.bar(plot_keys,plot_vals)
-            ax.set_ymargin(0.05)
-        else:
-            ax.bar(0,0)
-        ax.set_ylabel('Number of Reads')
-        ax.set_title('Inversion distance from origin')
-        plt.savefig(origin_inversion_hist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-        plt.savefig(origin_inversion_hist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
 
-        plot_label = 'Bar plot showing distance from origin cut of reads supporting inversions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. ' + \
-            'Reads supporting inversions extend ' + origin_direction + ' after genomic alignment. Distances greater than ' + str(origin_dist_cutoff) + 'bp are not shown.'
-        if len(keys) == 0:
-            plot_label = '(No reads supporting inversions found)'
-
-        origin_inversion_hist_plot_obj = PlotObject(
-                plot_name = origin_inversion_hist_plot_obj_root,
-                plot_title = 'Inversion distance relative to origin cut',
-                plot_label = plot_label,
-                plot_datas = [('Inversion distance relative to origin cut (all values)',origin_inversion_hist_plot_obj_root + ".txt")]
-                )
-
-    origin_deletion_hist_plot_obj = None # plot of deletion lengths at origin
-    origin_deletion_hist_plot_obj_root = root + ".origin_deletion_histogram"
-    keys = sorted(origin_deletion_lengths.keys())
-    vals = [origin_deletion_lengths[key] for key in keys]
-    with open(origin_deletion_hist_plot_obj_root+".txt","w") as summary:
+    deletion_keys = sorted(origin_deletion_lengths.keys())
+    with open(origin_inversion_deletion_hist_plot_obj_root+".deletions.txt","w") as summary:
         summary.write('Deletion_distance\tnumReads\n')
-        for key in keys:
+        for key in deletion_keys:
             summary.write(str(key) + '\t' + str(origin_deletion_lengths[key]) + '\n')
 
-    if len(origin_deletion_lengths) > 0 and not suppress_plots:
-        plot_keys = [x for x in keys if abs(x) < origin_dist_cutoff]
-        plot_vals = [origin_deletion_lengths[key] for key in plot_keys]
-        fig = plt.figure(figsize=(12,6))
-        ax = plt.subplot(111)
-        if len(plot_vals) > 0:
-            ax.bar(plot_keys,plot_vals)
-            ax.set_ymargin(0.05)
-        else:
-            ax.bar(0,0)
-        ax.set_ylabel('Number of Reads')
-        ax.set_title('Deletion distance from origin')
-        plt.savefig(origin_deletion_hist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
-        plt.savefig(origin_deletion_hist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+    if not suppress_plots and (len(origin_deletion_lengths) > 0 or len(origin_inversion_lengths) > 0):
 
-        plot_label = 'Bar plot showing distance from origin cut of reads supporting deletions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. ' + \
+        fig, (ax1, ax2) = plt.subplots(1,2, figsize=(12,12))
+
+        #plot inversions
+        plot_keys = [x for x in inversion_keys if abs(x) < origin_dist_cutoff]
+        plot_vals = [origin_inversion_lengths[key] for key in plot_keys]
+        if len(plot_vals) > 0:
+            ax1.bar(plot_keys,plot_vals)
+            ax1.set_ymargin(0.05)
+        else:
+            ax1.bar(0,0)
+        ax1.set_ylabel('Number of Reads')
+        ax1.set_title('Inversion distance from origin')
+
+        inversion_plot_label = 'Bar plot showing distance from origin cut of reads supporting inversions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. ' + \
+            'Reads supporting inversions extend ' + origin_direction + ' after genomic alignment. Distances greater than ' + str(origin_dist_cutoff) + 'bp are not shown.'
+        if len(inversion_keys) == 0:
+            inversion_plot_label = '(No reads supporting inversions found)'
+
+        #plot deletions
+        plot_keys = [x for x in deletion_keys if abs(x) < origin_dist_cutoff]
+        plot_vals = [origin_deletion_lengths[key] for key in plot_keys]
+        if len(plot_vals) > 0:
+            ax2.bar(plot_keys,plot_vals)
+            ax2.set_ymargin(0.05)
+        else:
+            ax2.bar(0,0)
+        ax2.set_ylabel('Number of Reads')
+        ax2.set_title('Deletion distance from origin')
+        plt.savefig(origin_inversion_deletion_hist_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
+        plt.savefig(origin_inversion_deletion_hist_plot_obj_root+".png",pad_inches=1,bbox_inches='tight')
+
+        deletion_plot_label = 'Bar plot showing distance from origin cut of reads supporting deletions (up to 100kb). The origin cut is at ' + origin_chr + ':' + str(origin_cut_pos) +' and the origin extends ' + origin_direction + ' from the cut to the primer. ' + \
             'Reads supporting deletions extend ' + origin_direction_opposite + ' after genomic alignment. Distances greater than ' + str(origin_dist_cutoff) + 'bp are not shown.'
         if len(keys) == 0:
-            plot_label = '(No reads supporting deletions found)'
+            deletion_plot_label = '(No reads supporting deletions found)'
 
-        origin_deletion_hist_plot_obj = PlotObject(
-                plot_name = origin_deletion_hist_plot_obj_root,
-                plot_title = 'Deletion distance relative to origin cut',
-                plot_label = plot_label,
-                plot_datas = [('Deletion distance relative to origin cut (all values)',origin_deletion_hist_plot_obj_root + ".txt")]
+        origin_deletion_inversion_hist_plot_obj = PlotObject(
+                plot_name = origin_inversion_deletion_hist_plot_obj_root,
+                plot_title = 'Inversion/Deletion distance relative to origin cut',
+                plot_label = inversion_plot_label+"<br/>"+deletion_plot_label,
+                plot_datas = [('Inversion distance relative to origin cut (all values)',origin_inversion_deletion_hist_plot_obj_root + ".inversions.txt"),
+                    ('Deletion distance relative to origin cut (all values)',origin_inversion_deletion_hist_plot_obj_root + ".deletions.txt")]
                 )
 
     # plot of coverage of 100bp after cut
@@ -3425,7 +3492,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
         ax.set_ylabel('Read depth (Number of reads)')
         ax.set_title('Read depth of '+long_distance_str+' after origin')
 
-        line2 = ax.axvline(0,color='r',ls='dotted')
+        line2 = ax.axvline(1,color='r',ls='dotted')
         ax.legend([line2],['origin location'],loc='lower right',bbox_to_anchor=(1,0))
 
         plt.savefig(origin_indel_depth_plot_obj_root+".pdf",pad_inches=1,bbox_inches='tight')
@@ -3653,15 +3720,10 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             origin_indel_hist_plot_obj_str = origin_indel_hist_plot_obj.to_json()
         fout.write(origin_indel_hist_plot_obj_str+"\n")
 
-        origin_inversion_hist_plot_obj_str = "None"
-        if origin_inversion_hist_plot_obj is not None:
-            origin_inversion_hist_plot_obj_str = origin_inversion_hist_plot_obj.to_json()
-        fout.write(origin_inversion_hist_plot_obj_str+"\n")
-
-        origin_deletion_hist_plot_obj_str = "None"
-        if origin_deletion_hist_plot_obj is not None:
-            origin_deletion_hist_plot_obj_str = origin_deletion_hist_plot_obj.to_json()
-        fout.write(origin_deletion_hist_plot_obj_str+"\n")
+        origin_inversion_deletion_hist_plot_obj_str = "None"
+        if origin_inversion_deletion_hist_plot_obj is not None:
+            origin_inversion_deletion_hist_plot_obj_str = origin_inversion_deletion_hist_plot_obj.to_json()
+        fout.write(origin_inversion_deletion_hist_plot_obj_str+"\n")
 
         origin_indel_depth_plot_obj_str = "None"
         if origin_indel_depth_plot_obj is not None:
@@ -3700,7 +3762,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     discarded_read_counts = [('Unaligned',discarded_reads_unaligned),('Duplicate read',discarded_reads_duplicates),('Not supported by R2',discarded_reads_not_supported_by_R2),('Bad alignment',discarded_reads_poor_alignment)]
     return (final_file,final_read_ids_for_crispresso,final_cut_counts,cut_classification_lookup, final_total_count, discarded_read_counts, classification_read_counts, classification_indel_read_counts,
         chr_aln_plot_obj,tlen_plot_obj,deduplication_plot_obj,tx_order_plot_obj,tx_count_plot_obj,tx_circos_plot_obj,classification_plot_obj,classification_indel_plot_obj,
-        origin_indel_hist_plot_obj,origin_inversion_hist_plot_obj,origin_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
+        origin_indel_hist_plot_obj,origin_inversion_deletion_hist_plot_obj,origin_indel_depth_plot_obj,
         r1_r2_support_plot_obj,r1_r2_support_dist_plot_obj,discarded_reads_plot_obj)
 
 def collapse_cut_points(novel_cut_merge_distance, known_cut_merge_distance, origin_cut_merge_distance,
