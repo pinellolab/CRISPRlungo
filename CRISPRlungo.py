@@ -528,6 +528,8 @@ def parse_settings(args):
         settings_file_args.pop('cut_classification_annotations')
 
     for arg in annotations_arr:
+        if arg == '':
+            continue
         arg_els = arg.split(":")
         if len(arg_els) != 4: # chr:pos:direction:annotation
             parser.print_usage()
@@ -549,6 +551,8 @@ def parse_settings(args):
         settings_file_args.pop('guide_sequences')
 
     for guide in guide_arr:
+        if guide == '':
+            continue
         wrong_nt=CRISPRessoShared.find_wrong_nt(guide)
         if wrong_nt:
             raise Exception('The guide sequence %s contains bad characters: %s'%(guide,'"'+'", "'.join(wrong_nt)+'"'))
