@@ -456,6 +456,36 @@ def assert_dedup(this_genome,this_bowtie2_genome,test_inputs_folder,temp_outputs
     for file_root in file_roots_to_compare:
         assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
 
+    #note here that @origin_ins1 is deduplicated with WT because the origin has a 1bp insertion like this:
+    #@WT1_highQual
+    #TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAATATCCCCCAGTTTAGTAGTTGGACTTAGGGAACAAAGGA
+    #TTGCAATGAAAATAAATGTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAA <origin
+    #@origin_ins1
+    #TTGCAATGAAAATAAATGTTTTTTTATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAATATCCCCCAGTTTAGTAGTTGGACTTAGGGAACAAAGG
+    #TTGCAATGAAAATAAATGTTTTTT ATTAGGCAGAATCCAGATGCTCAAGGCCCTTCATAA <origin
+    # and because we already trimmed the origin it doesn't know that there was any difference in this read. I suppose this is ok because any errors in the origin region don't have 'biological' significance i.e. they don't arise from CRISPR editing like indels at the end of the primer sequence (which would count as different reads for deduplication)
+    print('Testing post dedup for paired sample')
+    this_root = 'post_dedup_paired'
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/dedup.r1.fq --fastq_r2 {test_inputs_folder}/dedup.r2.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate --fastq_umi {test_inputs_folder}/dedup_UMIs.fq --umi_regex AAAAA --write_discarded_read_info'.split(" "))
+    CRISPRlungo.processCRISPRlungo(settings)
+
+    for file_root in file_roots_to_compare:
+        assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+    reads_per_umi_by_classification_root = ".final.deduplication_by_UMI_and_aln_pos.reads_per_umi_by_classification.txt"
+    assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{reads_per_umi_by_classification_root}',f'{expected_outputs_folder}/{this_root}{reads_per_umi_by_classification_root}',debug=verbose))
+
+    print('Testing post dedup on umi and final cut for paired sample')
+    this_root = 'post_dedup_cut_paired'
+    settings = CRISPRlungo.parse_settings(f'scriptname --genome {this_genome} --fastq_r1 {test_inputs_folder}/dedup.r1.fq --fastq_r2 {test_inputs_folder}/dedup.r2.fq --primer_seq TTGCAATGAAAATAAATGTTT --guide_sequences CTCAAGGCCCTTCATAATAT --root {temp_outputs_folder}/{this_root} --debug --keep_intermediate --fastq_umi {test_inputs_folder}/dedup_UMIs.fq --umi_regex AAAAA --dedup_by_final_cut_assignment_and_UMI --write_discarded_read_info'.split(" "))
+    CRISPRlungo.processCRISPRlungo(settings)
+
+    for file_root in file_roots_to_compare:
+        assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{file_root}',f'{expected_outputs_folder}/{this_root}{file_root}',debug=verbose))
+
+    reads_per_umi_by_classification_root = ".final.deduplication_by_UMI_and_final_cut_assignment.reads_per_umi_by_classification.txt"
+    assert(test_lines_equal(f'{temp_outputs_folder}/{this_root}{reads_per_umi_by_classification_root}',f'{expected_outputs_folder}/{this_root}{reads_per_umi_by_classification_root}',debug=verbose))
+
 def parse_UMI_stats_file(root):
     analyze_UMI_stats_file = root+".info"
     with open(analyze_UMI_stats_file,'r') as fin:
