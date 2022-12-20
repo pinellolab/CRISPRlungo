@@ -97,7 +97,6 @@ def processBatch(arg_els):
             names_arr.append(this_name)
 
             this_command_args.extend(sub_arg_els)
-            print('this command args: ' + str(this_command_args))
 
             try:
                 logger.debug('Parsing settings for line %d'%line_idx)
