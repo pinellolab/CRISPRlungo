@@ -1,0 +1,4 @@
+Classification	Number of reads	Number of UMIs	Average reads/umi
+Linear no indels	4	1	4.0
+Linear short indels	3	3	1.0
+Linear long indels	0	0	0
