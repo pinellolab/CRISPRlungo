@@ -2395,7 +2395,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             aln1 = line_els[2] + ":" + line_els[3]
             aln2 = line_els[6] + ":" + line_els[7] # if unpaired, this will just be *:0, so we can still use it in our key
             tlen = abs(int(line_els[8]))
-            umi_dedup_key = "%s %s %s %s"%(barcode,aln1,aln2,tlen)
+            umi_dedup_key = "b:%s 1:%s 2:%s t:%s dp:%s it:%s"%(barcode,aln1,aln2,tlen,del_primer,ins_target)
             if experiment_had_UMIs:
                 if umi_dedup_key in seen_reads_for_dedup:
                     seen_read_counts_for_dedup[umi_dedup_key] += 1
