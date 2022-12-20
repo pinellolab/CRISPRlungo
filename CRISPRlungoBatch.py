@@ -87,12 +87,17 @@ def processBatch(arg_els):
                 if head_val == 'name' or head_val == 'root':
                     this_name = this_val
 
-                if this_val.lower() != 'false':
+                if this_val.lower() == 'true':
+                    this_command_args.extend(['--'+head_val])
+                elif this_val.lower() == 'false':
+                    pass
+                else:
                     this_command_args.extend(['--'+head_val,this_val])
 
             names_arr.append(this_name)
 
             this_command_args.extend(sub_arg_els)
+            print('this command args: ' + str(this_command_args))
 
             try:
                 logger.debug('Parsing settings for line %d'%line_idx)
