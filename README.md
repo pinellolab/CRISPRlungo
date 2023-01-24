@@ -210,15 +210,39 @@ Run CRISPRlungo with the command `python CRISPRlungo.py settings.txt`. View the 
 #### UMI parameters:
 ```
   --dedup_input_on_UMI  If set, input reads will be deduplicated based on UMI
-                        before alignment (default: False)
+                        before alignment. Note that if this flag is set
+                        deduplication by alignment position will be redundant
+                        (only one read will exist with a UMI after this step).
+                        This will also affect the values in the column
+                        "reads_with_same_umi_pos" in the final_assignments.txt
+                        file, which will only show 1 for all reads. (default:
+                        False)
   --suppress_dedup_on_aln_pos_and_UMI_filter
-                        If set, suppress deduplication based on alignment
-                        position and UMI. By default reads are deduplicated 
-                        based on alignment position and UMI sequence before
-                        final analysis. (default: False)
+                        If set, reads that are called as deduplicates based on
+                        alignment position and UMI will be included in final
+                        analysis and counts. By default, these reads are
+                        excluded. (default: False)
+  --dedup_by_final_cut_assignment_and_UMI
+                        If set, deduplicates based on final cut assignment -
+                        so that reads with the same UMI with different
+                        start/stop alignment positions will be deduplicated if
+                        they are assigned to the same final cut position
+                        (default: False)
   --umi_regex UMI_REGEX
-                        String specifying regex that UMI must match (default:
-                        NNWNNWNNN)
+                        String specifying regex that UMI must match (e.g
+                        NNWNNWNNN) (default: None)
+  --min_umi_seen_to_keep_read MIN_UMI_SEEN_TO_KEEP_READ
+                        Minimum times a UMI/read combination must be seen in
+                        order to keep that for downstream analysis. If many
+                        PCR cycles are performed in library preparation,
+                        UMI/read combinations that are highly amplified may be
+                        more trusted than UMI/read combinations that appear in
+                        low abundance. However, this probably only applies for
+                        sequencing libraries with members with uniform PCR
+                        amplification properties. (default: 0)
+  --write_UMI_counts    If set, a file will be produced containing each UMI
+                        and the number of reads that were associated with that
+                        UMI (default: False)
 ```
 #### R1/R2 support settings:
 ``` 
