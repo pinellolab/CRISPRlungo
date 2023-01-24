@@ -16,7 +16,7 @@ import os
 import re
 import subprocess
 import sys
-from lib import ssw_lib
+from lib.ssw import ssw_lib
 from lib.pyCircos import pyCircos_lib as pc
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
@@ -1803,7 +1803,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
     untrimmed_read_count = 'NA'
     #prep for alignments using ssw
 
-    sLibPath = os.path.dirname(os.path.abspath(__file__))+"/lib"
+    sLibPath = os.path.dirname(os.path.abspath(__file__))+"/lib/ssw"
     ssw_primer = ssw_lib.CSsw(sLibPath)
     ssw_align_primer = SSWPrimerAlign(ssw_primer,origin_seq)
 
