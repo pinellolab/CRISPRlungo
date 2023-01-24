@@ -1,0 +1,7 @@
+# Fragile sites from https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-018-5330-5
+# Kumar, R., Nagpal, G., Kumar, V. et al. HumCFS: a database of fragile sites in human chromosomes. BMC Genomics 19 (Suppl 9), 985 (2019). https://doi.org/10.1186/s12864-018-5330-5
+
+wget https://webs.iiitd.edu.in/raghava/humcfs/fragile_site_bed.zip
+unzip fragile_site_bed.zip 
+cat fragile_site_bed/*.bed > fragileSites.unsorted.bed
+sort -t'\t' -k1,1 -k2n,2  fragileSites.unsorted.bed > fragileSites.bed
