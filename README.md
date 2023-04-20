@@ -8,7 +8,7 @@ A list of CRISPRlungo parameters can be accessed by runnning `python CRISPRlungo
 If provided, the settings file should be passed as the first argument to CRISPRlungo. The settings file may contain comments (lines starting with a '#' character). Setting names should be tab-separated from setting values.
 
 ## Example run:
-- Download the file [cuts.fa](tests/testInputs/cuts.fa)
+- Download the example input file [cuts.fq](tests/testInputs/cuts.fq)
 - Prepare a Bowtie2 index of your genome or download the [test genome folder](tests/genome.chr11_5225364_5225863)
 - In the same directory, create a settings file called `settings.txt` with the contents:
 ```
