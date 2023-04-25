@@ -25,7 +25,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.10"
+__version__ = "v0.1.11"
 
 
 def processCRISPRlungo(settings):
@@ -2248,7 +2248,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     final_file_tmp = root + '.final_assignments.tmp'
     final_file_tmp_dedup = root + '.final_assignments.dedup.tmp'  # additional temp file for deduplicating reads by assignment to final cut positions
     with open(final_file_tmp,'w') as af1:
-        af1.write("\t".join([str(x) for x in ['read_id','curr_position','cut_pos','cut_direction','del_primer','ins_target','insert_size','r1_r2_support_status','r1_r2_support_dist','r1_r2_orientation_str','umi_pos_dedup_key']])+"\n")
+        af1.write("\t".join([str(x) for x in ['read_id','aln_pos','cut_pos','cut_direction','del_primer','ins_target','insert_size','r1_r2_support_status','r1_r2_support_dist','r1_r2_orientation_str','umi_pos_dedup_key']])+"\n")
 
         if not os.path.exists(genome_mapped_bam):
             raise Exception('Cannot find bam file at ' + genome_mapped_bam)
@@ -2329,7 +2329,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
                 end_clipped = tmp
                 cut_direction = "left"
 
-            curr_position = "%s:%s-%s"%(line_chr,line_start,line_end)
+            aln_pos = "%s:%s-%s"%(line_chr,line_start,line_end)
             cut_pos = "%s:%s"%(line_chr,line_start)
 
             del_primer = len(origin_seq) - primer_trimmed_len #how many bases are deleted from the full primer
@@ -2424,7 +2424,7 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
             aln_pos_window = int(line_start)/genome_map_resolution
             aln_pos_by_chr[line_chr][aln_pos_window] += 1
 
-            af1.write("\t".join([str(x) for x in [line_info, curr_position, cut_pos, cut_direction, del_primer,
+            af1.write("\t".join([str(x) for x in [line_info, aln_pos, cut_pos, cut_direction, del_primer,
                       ins_target, insert_size, r1_r2_support_status, r1_r2_support_dist, r1_r2_orientation_str, umi_dedup_key]]) + "\n")
 
         #done iterating through bam file
@@ -4391,7 +4391,7 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
             'reads_insertion\treads_deletion\treads_substitution\treads_only_insertion\treads_only_deletion\treads_only_substitution\treads_insertion_and_deletion\t'+\
             'reads_insertion_and_substitution\treads_deletion_and_substitution\treads_insertion_and_deletion_and_substitution\tamplicon_sequence\n')
         for crispresso_info in crispresso_infos:
-            crispresso_command_fh.write(crispresso_info['command'])
+            crispresso_command_fh.write(crispresso_info['command']+"\n")
             name = crispresso_info['name']
             cut = crispresso_info['cut']
             cut_type = crispresso_info['type']
