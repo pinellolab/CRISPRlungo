@@ -1,4 +1,4 @@
-read_id	curr_position	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	umi_pos_dedup_key	reads_with_same_umi_pos	final_cut_pos	final_cut_indel	indel_classification	classification
+read_id	aln_pos	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	umi_pos_dedup_key	reads_with_same_umi_pos	final_cut_pos	final_cut_indel	indel_classification	classification
 origin_del1	chr11_sm:160-101	chr11_sm:160	left	0	0	None	None	None	None	(None)	1	chr11_sm:161:left	0	no indels	Linear
 del1Left	chr11_sm:159-101	chr11_sm:159	left	0	0	None	None	None	None	(None)	1	chr11_sm:161:left	-1	short indels	Linear
 del1Right	chr11_sm:160-101	chr11_sm:160	left	1	0	None	None	None	None	(None)	1	chr11_sm:161:left	-1	short indels	Linear

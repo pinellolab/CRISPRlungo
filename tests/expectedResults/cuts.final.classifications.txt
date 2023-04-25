@@ -1,2 +1,2 @@
 Linear	Cas-OFFinder OB 3 translocation	Chimera
-5	1	2
+7	1	2

@@ -1,2 +1,2 @@
-read_id	curr_position	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	umi_pos_dedup_key	reads_with_same_umi_pos	final_cut_pos	final_cut_indel	indel_classification	classification
+read_id	aln_pos	cut_pos	cut_direction	del_primer	ins_target	insert_size	r1_r2_support_status	r1_r2_support_dist	r1_r2_orientation_str	umi_pos_dedup_key	reads_with_same_umi_pos	final_cut_pos	final_cut_indel	indel_classification	classification
 WT1_highQual:AAAAA	chr11_sm:161-199	chr11_sm:161	right	0	0	299	Supported by R2	299	+/-	b:AAAAA 1:chr11_sm:161 2:=:361 t:299 dp:0 it:0	1	chr11_sm:161:right	0	no indels	Linear

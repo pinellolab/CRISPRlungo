@@ -1,5 +1,5 @@
 fragment	cut_annotation	fragment_annotation	count
-chr11_sm:201:right	Programmed	Linear	3
+chr11_sm:201:right	Programmed	Linear	4
 chr11_sm:301:left	Novel	Novel large deletion	2
-chr11_sm:301:right	Novel	Novel large inversion	2
+chr11_sm:301:right	Novel	Novel large inversion	3
 chr21_sm:189:right	Cas-OFFinder OB 3	Cas-OFFinder OB 3 translocation	1
