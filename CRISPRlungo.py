@@ -5108,7 +5108,6 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
     Trims the primer from single-end input reads, only keeps reads with the primer present in R1
 
     Args:
-        root: root for written files
         fastq_r1: R1 reads to trim
         fastq_r1_trimmed: output file to write R1 to
         min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
@@ -5165,7 +5164,6 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
     Trims the primer from paired input reads, only keeps reads with the primer present in R1
 
     Args:
-        root: root for written files
         fastq_r1: R1 reads to trim
         fastq_r2: R2 reads to trim
         fastq_r1_trimmed: output file to write R1 to
