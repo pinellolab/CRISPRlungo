@@ -25,7 +25,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.11"
+__version__ = "v0.1.12"
 
 
 def processCRISPRlungo(settings):
@@ -4293,7 +4293,7 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         if n_processes > 4:
             processes_str = "--n_processes 4"
         output_folder = os.path.join(data_dir,'CRISPResso_on_'+cut_names[cut])
-        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -g %s -wc %s -w %s -r1 %s -gn 'Fragment junction' --fastq_output --quantification_window_coordinates %s %s &> %s.log"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,
+        crispresso_cmd = "%s -o %s -n %s --default_min_aln_score %d -a %s -g %s -wc %s -w %s -r1 %s -gn 'Fragment junction' --fastq_output --quantification_window_coordinates %s %s > %s.log 2>&1"%(crispresso_command,data_dir,cut_name,crispresso_min_aln_score,
             amp_seq,guide_seq,-15,crispresso_quant_window_size,reads_file,quant_window_coords,processes_str,reads_file)
         
         run_this_one = 'True'
@@ -4376,8 +4376,6 @@ def run_and_aggregate_crispresso(root,crispresso_infos,final_assignment_file,n_p
 
     #otherwise run crispresso runs
     logger.info('Running and analyzing ' + str(len(crispresso_infos)) + ' alignments using CRISPResso2')
-
-
     CRISPRessoMultiProcessing.run_crispresso_cmds(crispresso_commands,n_processes,'run',skip_failed)
 
     all_crispresso_read_modified_data = {} #dict storing read id > modifed/unmodified
@@ -4994,8 +4992,8 @@ body {
         plot_str += "<label>"+plot_obj.label+"</label>\n"
         for (plot_data_label,plot_data_path) in plot_obj.datas:
             plot_data_path = os.path.basename(plot_data_path)
-            plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n";
-        plot_str += "</div></div>\n";
+            plot_str += "<p class='m-0'><small>Data: <a href='"+data_path+plot_data_path+"'>" + plot_data_label + "</a></small></p>\n"
+        plot_str += "</div></div>\n"
         html_str += plot_str
 
     if len(crispresso_run_names) > 0:
