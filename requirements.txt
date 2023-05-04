@@ -1,0 +1,12 @@
+name: crisprlungo
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - crispresso2
+  - biopython
+  - cutadapt
+  - cas-offinder
+  - samtools=1.17
+prefix: /home/kenclem1/anaconda3/envs/crisprlungo

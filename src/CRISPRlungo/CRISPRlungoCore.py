@@ -16,8 +16,8 @@ import os
 import re
 import subprocess
 import sys
-from lib.ssw import ssw_lib
-from lib.pyCircos import pyCircos_lib as pc
+from CRISPRlungo.lib.ssw import ssw_lib
+from CRISPRlungo.lib.pyCircos import pyCircos_lib as pc
 from CRISPResso2 import CRISPRessoMultiProcessing
 from CRISPResso2 import CRISPRessoShared
 from CRISPResso2 import CRISPResso2Align

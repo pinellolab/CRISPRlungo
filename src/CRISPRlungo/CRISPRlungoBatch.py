@@ -1,7 +1,7 @@
 import sys
 import os
 from collections import defaultdict
-import CRISPRlungo
+import CRISPRlungo.CRISPRlungoCore
 import multiprocessing
 import multiprocessing.pool
 import logging
