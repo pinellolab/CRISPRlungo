@@ -1,16 +1,25 @@
 FROM mambaorg/micromamba:1.4.2
 USER root
 
+ARG MAMBA_DOCKERFILE_ACTIVATE=1
+
 RUN apt-get update && apt-get install gcc g++ bowtie2 samtools \
   -y --no-install-recommends \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* \
   && rm -rf /usr/share/man/* \
-  && rm -rf /usr/share/doc/* \
-  && micromamba install -c conda-forge -n base -y ncurses \
-  && micromamba install -c defaults -c conda-forge -c bioconda -y -n base --debug -c bioconda \
-      trimmomatic flash numpy cython jinja2 scipy matplotlib pandas plotly \
-      crispresso2 biopython cutadapt cas-offinder samtools=1.17 \
+  && rm -rf /usr/share/doc/* 
+
+RUN micromamba install -c conda-forge -c bioconda -n base -y ncurses python=3.10.11 trimmomatic flash numpy scipy cython\
+  && micromamba clean --all --yes
+
+RUN micromamba install -c defaults -c conda-forge -c bioconda -y -n base \
+      jinja2 matplotlib pandas crispresso2=2.2.12 \
+  && micromamba clean --all --yes
+
+
+RUN micromamba install -c conda-forge -c bioconda -y -n base --debug -c bioconda \
+     biopython cas-offinder plotly samtools=1.17 \
   && micromamba clean --all --yes
 
 #install ms fonts
@@ -26,9 +35,9 @@ RUN echo "deb http://httpredir.debian.org/debian buster main contrib" > /etc/apt
   && rm -rf /usr/share/doc/* \
   && rm -rf /usr/share/zoneinfo
 
-# install crispresso
-COPY CRISPRlungo.py /CRISPRlungo/CRISPRlungo.py
-COPY lib /CRISPRlungo/lib
+# install crisplungo
+COPY . /CRISPRlungo/
 WORKDIR /CRISPRlungo
+RUN pip install .
 
-ENTRYPOINT ["python","/CRISPRlungo/CRISPRlungo.py"]
+ENTRYPOINT ["/usr/local/bin/_entrypoint.sh", "python","/CRISPRlungo/src/CRISPRlungo/cli.py"]
