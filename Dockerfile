@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install gcc g++ bowtie2 samtools \
   && rm -rf /usr/share/man/* \
   && rm -rf /usr/share/doc/* 
 
-RUN micromamba install -c conda-forge -c bioconda -n base -y ncurses python=3.10.11 trimmomatic flash numpy scipy cython\
+RUN micromamba install -c conda-forge -c bioconda -n base -y ncurses python=3.10.11 trimmomatic flash numpy scipy cython cutadapt\
   && micromamba clean --all --yes
 
 RUN micromamba install -c defaults -c conda-forge -c bioconda -y -n base \
