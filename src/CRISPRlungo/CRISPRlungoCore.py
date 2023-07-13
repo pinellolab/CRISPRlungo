@@ -811,7 +811,7 @@ def parse_settings(args):
 
     primer_wrong_nt=CRISPRessoShared.find_wrong_nt(settings['primer_seq'])
     if primer_wrong_nt:
-        raise Exception('The primer sequence %s contains bad characters: %s'%(settings['primer_seq'],'"'+'", "'.join(wrong_nt)+'"'))
+        raise Exception('The primer sequence %s contains bad characters: %s'%(settings['primer_seq'],'"'+'", "'.join(primer_wrong_nt)+'"'))
 
     unused_keys = settings_file_args.keys()
     if len(unused_keys) > 0:
