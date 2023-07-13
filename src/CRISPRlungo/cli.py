@@ -1,5 +1,6 @@
 """Console script for crisprlungo."""
 import argparse
+import logging
 import sys
 from CRISPRlungo.CRISPRlungoCore import parse_settings, processCRISPRlungo
 from CRISPRlungo.CRISPRlungoBatch import processBatch
