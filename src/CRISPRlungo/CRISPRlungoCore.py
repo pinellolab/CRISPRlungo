@@ -25,7 +25,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.14"
+__version__ = "v0.1.15"
 
 
 def processCRISPRlungo(settings):
@@ -527,7 +527,17 @@ def parse_settings(args):
             annotations_arr = [x.strip() for x in settings_file_args['cut_classification_annotations'].strip("[] ").replace('"','').replace("'","").split(",")]
         settings_file_args.pop('cut_classification_annotations')
 
+    split_annotations_arr = []
     for arg in annotations_arr:
+        if ',' in arg:
+            split_annotations_arr.extend(arg.split(","))
+        elif ' ' in arg:
+            split_annotations_arr.extend(arg.split(" "))
+        else:
+            split_annotations_arr.append(arg)
+
+    for arg in split_annotations_arr:
+        arg = arg.strip("[] '\"")
         if arg == '':
             continue
         arg_els = arg.split(":")
@@ -550,7 +560,17 @@ def parse_settings(args):
             guide_arr = [x.strip() for x in settings_file_args['guide_sequences'].strip("[] ").replace('"','').replace("'","").split(",")]
         settings_file_args.pop('guide_sequences')
 
+    split_guide_arr = []
     for guide in guide_arr:
+        if ',' in guide:
+            split_guide_arr.extend(guide.split(","))
+        elif ' ' in guide:
+            split_guide_arr.extend(guide.split(" "))
+        else:
+            split_guide_arr.append(guide)
+
+    for guide in split_guide_arr:
+        guide = guide.strip("[] '\"")
         if guide == '':
             continue
         wrong_nt=CRISPRessoShared.find_wrong_nt(guide)
