@@ -8,8 +8,29 @@ from CRISPRlungo.CRISPRlungoCompare import compareCRISPRlungo
 
 
 def main():
-    settings = parse_settings(sys.argv)
+    if len(sys.argv) == 1:
+        sys.argv[0] = "CRISPRlungo"
+        crisprlungo()
+    if sys.argv[1] == "CRISPRlungo":
+        sys.argv.remove("CRISPRlungo")
+        sys.argv[0] = "CRISPRlungo"
+        crisprlungo()
+    elif sys.argv[1] == "CRISPRlungoBatch":
+        sys.argv.remove('CRISPRlungoBatch')
+        sys.argv[0] = 'CRISPRlungoBatch'
+        batch()
+    elif sys.argv[1] == "CRISPRlungoCompare":
+        sys.argv.remove('CRISPRlungoCompare')
+        sys.argv[0] = 'CRISPRlungoCompare'
+        compare()
+    else:
+        crisprlungo()
+
+
+
+def crisprlungo():
     try:
+        settings = parse_settings(sys.argv)
         processCRISPRlungo(settings)
     except Exception as e:
         logger = logging.getLogger('CRISPRlungo')

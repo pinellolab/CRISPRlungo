@@ -25,7 +25,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.15"
+__version__ = "v0.1.16"
 
 
 def processCRISPRlungo(settings):

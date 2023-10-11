@@ -40,7 +40,7 @@ setup(
     version=__version__,
     entry_points={
         'console_scripts': [
-            'CRISPRlungo=CRISPRlungo.cli:main',
+            'CRISPRlungo=CRISPRlungo.cli:crisprlungo',
             'CRISPRlungoBatch=CRISPRlungo.cli:batch',
             'CRISPRlungoCompare=CRISPRlungo.cli:compare',
         ],
