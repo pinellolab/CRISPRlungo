@@ -12,7 +12,7 @@ If provided, the settings file should be passed as the first argument to CRISPRl
 - Prepare a Bowtie2 index of your genome or download the [test genome folder](tests/genome.chr11_5225364_5225863)
 - In the same directory, create a settings file called `settings.txt` with the contents:
 ```
-fastq_r1        input.fq
+fastq_r1        cuts.fq
 genome  {path to genome}/Bowtie2Index/genome.fa or genome.chr11_5225364_5225863/genome.fa
 guide_sequences CTTAGGGAACAAAGGAACCT
 n_processes     20
