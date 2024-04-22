@@ -978,7 +978,9 @@ def get_num_reads_fastq(fastq):
         cmd = 'wc -l %s'%fastq
 
     res = int(subprocess.check_output(cmd,shell=True).decode(sys.stdout.encoding).split(" ")[0])
-
+    
+    # sometimes fastq files don't terminate with a newline - fix that here.
+    res += 1
     return int(res/4)
 
 def get_cut_sites_casoffinder(root,genome,pam,guides,cleavage_offset,num_mismatches,casoffinder_command,can_use_previous_analysis):
@@ -1748,7 +1750,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
         if tot_read_count == 0:
             raise Exception("UMI command failed. Got no reads from " + fastq_r1 + " and " + fastq_r2 )
 
-        logger.info('Added UMIs fo %d reads'%tot_read_count)
+        logger.info('Added UMIs for %d reads'%tot_read_count)
         with open(umi_stats_file,'w') as fout:
             fout.write("\t".join(["fastq_r1_with_UMI","fastq_r2_with_UMI","tot_read_count"])+"\n")
             fout.write("\t".join([str(x) for x in [fastq_r1_with_UMI,fastq_r2_with_UMI,tot_read_count]])+"\n")

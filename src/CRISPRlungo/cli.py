@@ -29,6 +29,21 @@ def main():
 
 
 def crisprlungo():
+    if len(sys.argv) == 1:
+        print('CRISPRlungo: Analyzing unidirectional sequencing of genome editing\n' + \
+            'usage: CRISPRlungo --fastq_r1 r1.fq --genome hg38.fa --guide_sequences ATTA --primer_seq GCTA\n' + \
+            'commonly-used arguments:\n' + \
+            '-h, --help            show the full list of arguments\n' + \
+            '-v, --version         show program\'s version number and exit\n' + \
+            '--fastq_r1            FASTQ file containing the reads to analyze (required)\n' + \
+            '--genome              genome sequence file in FASTA format (required)\n' + \
+            '--guide_sequences     guide sequences (may be specified multiple times)\n' + \
+            '--primer_seq          primer sequence\n\n' + \
+            'Alternately, these arguments may be specified in a settings file\n' + \
+            '     which is a tab-separated file of setting names and values.\n'
+
+        )
+        sys.exit()
     try:
         settings = parse_settings(sys.argv)
         processCRISPRlungo(settings)
