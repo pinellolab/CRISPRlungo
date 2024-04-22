@@ -770,6 +770,8 @@ def parse_settings(args):
     if not settings['fastq_r1']:
         parser.print_usage()
         raise Exception('Error: fastq_r1 file must be provided (--fastq_r1)')
+    if settings['fastq_r1'] and '~' in settings['fastq_r1']:
+        settings['fastq_r1'] = os.path.expanduser(settings['fastq_r1'])
     if not os.path.isfile(settings['fastq_r1']):
         parser.print_usage()
         raise Exception('Error: fastq_r1 file %s does not exist',settings['fastq_r1'])
@@ -779,6 +781,8 @@ def parse_settings(args):
         if 'none' not in settings_file_args['fastq_r2'].lower():
             settings['fastq_r2'] = settings_file_args['fastq_r2']
         settings_file_args.pop('fastq_r2')
+    if settings['fastq_r2'] and '~' in settings['fastq_r2']:
+        settings['fastq_r2'] = os.path.expanduser(settings['fastq_r2'])
     if settings['fastq_r2'] and not os.path.isfile(settings['fastq_r2']):
         raise Exception('Error: fastq_r2 file %s does not exist',settings['fastq_r2'])
 
@@ -787,6 +791,8 @@ def parse_settings(args):
         if 'none' not in settings_file_args['fastq_umi'].lower():
             settings['fastq_umi'] = settings_file_args['fastq_umi']
         settings_file_args.pop('fastq_umi')
+    if settings['fastq_umi'] and '~' in settings['fastq_umi']:
+        settings['fastq_umi'] = os.path.expanduser(settings['fastq_umi'])
     if settings['fastq_umi'] and not os.path.isfile(settings['fastq_umi']):
         raise Exception('Error: fastq_umi file %s does not exist',settings['fastq_umi'])
 
@@ -798,6 +804,8 @@ def parse_settings(args):
     if not settings['genome']:
         parser.print_usage()
         raise Exception('Error: the genome reference file must be provided (--genome)')
+    if '~' in settings['genome']:
+        settings['genome'] = os.path.expanduser(settings['genome'])
     if not os.path.isfile(settings['genome']):
         if os.path.isfile(settings['genome']+".fa"):
             settings['genome'] = settings['genome']+".fa"
