@@ -25,7 +25,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-__version__ = "v0.1.16"
+__version__ = "v0.1.17"
 
 
 def processCRISPRlungo(settings):
@@ -129,6 +129,7 @@ def processCRISPRlungo(settings):
             fastq_r2=curr_r2_file,
             origin_seq=origin_seq,
             min_primer_aln_score=settings['min_primer_aln_score'],
+            allow_indels_in_origin_aln=settings['allow_indels_in_origin_aln'],
             min_primer_length=settings['min_primer_length'],
             min_read_length=settings['min_read_length'],
             transposase_adapter_seq=settings['transposase_adapter_seq'],
@@ -156,8 +157,11 @@ def processCRISPRlungo(settings):
                 keep_intermediate=settings['keep_intermediate'],
                 can_use_previous_analysis=settings['can_use_previous_analysis']
                 )
+
     if not settings['keep_intermediate']:
         for file_to_delete in [umi_fastq_r1,umi_fastq_r2,analyze_UMI_r1,analyze_UMI_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2]:
+            if file_to_delete == curr_r1_file: #don't delete the input file to use for CRISPResso
+                continue
             if file_to_delete is not None and os.path.exists(file_to_delete):
                 logger.debug('Deleting intermediate file ' + file_to_delete)
                 os.remove(file_to_delete)
@@ -301,6 +305,11 @@ def processCRISPRlungo(settings):
             suppress_plots=settings['suppress_plots']
             )
 
+    if not settings['keep_intermediate']:
+        if curr_r1_file is not None and os.path.exists(curr_r1_file):
+            logger.debug('Deleting intermediate file ' + curr_r1_file)
+            os.remove(curr_r1_file)
+
     if final_summary_plot_obj is not None:
         final_summary_plot_obj.order = 1
         summary_plot_objects.append(final_summary_plot_obj)
@@ -370,6 +379,7 @@ def parse_settings(args):
     p_group.add_argument('--primer_seq', type=str, help='Sequence of primer', default=None)
     p_group.add_argument('--primer_in_r2', help='If true, the primer is in R2. By default, the primer is required to be in R1.',action='store_true')
     p_group.add_argument('--min_primer_aln_score', type=int, help='Minimum primer/origin alignment score for trimming.',default=40)
+    p_group.add_argument('--allow_indels_in_origin_aln', help='If set, indels in the primer/origin alignment are allowed. By default, indels are not allowed and if an indel is observed in the primer/origin the read will be discarded.', action='store_true')
     p_group.add_argument('--min_primer_length', type=int, help='Minimum length of sequence required to match between the primer/origin and read sequence',default=30)
     p_group.add_argument('--min_read_length', type=int, help='Minimum length of read after all filtering',default=30)
     p_group.add_argument('--transposase_adapter_seq', type=str, help='Transposase adapter sequence to be trimmed from reads',default='CTGTCTCTTATACACATCTGACGCTGCCGACGA')
@@ -603,6 +613,11 @@ def parse_settings(args):
     if 'min_primer_aln_score' in settings_file_args:
         settings['min_primer_aln_score'] = int(settings_file_args['min_primer_aln_score'])
         settings_file_args.pop('min_primer_aln_score')
+
+    settings['allow_indels_in_origin_aln'] = cmd_args.allow_indels_in_origin_aln
+    if 'allow_indels_in_origin_aln' in settings_file_args:
+        settings['allow_indels_in_origin_aln'] = (settings_file_args['allow_indels_in_origin_aln'].lower() == 'true')
+        settings_file_args.pop('allow_indels_in_origin_aln')
 
     settings['min_primer_length'] = cmd_args.min_primer_length
     if 'min_primer_length' in settings_file_args:
@@ -1767,7 +1782,7 @@ def add_umi_from_umi_file(root,fastq_r1,fastq_r2,fastq_umi,can_use_previous_anal
     return(fastq_r1_with_UMI,fastq_r2_with_UMI)
 
 
-def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
+def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,allow_indels_in_origin_aln=False,min_primer_length=10,min_read_length=30,transposase_adapter_seq='CTGTCTCTTATACACATCTGACGCTGCCGACGA',n_processes=1,cutadapt_command='cutadapt',keep_intermediate=False,suppress_plots=False,can_use_previous_analysis=False):
     """
     Trims the primer from the input reads, only keeps reads with the primer present in R1
     Also trims the transposase adapter sequence from reads and filters reads that are too short
@@ -1778,6 +1793,7 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
         fastq_r2: R2 reads to trim (or None)
         origin_seq: primer sequence to trim, if genomic, this includes the entire genomic sequence from the primer to the first cut site
         min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
+        allow_indels_in_origin_aln: whether to allow indels in the primer alignment
         min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
         min_read_len: minimum r1 read length to keep (shorter tagmented reads are filtered)
         transposase_adapter_seq: transposase adapter seq to trim from R1
@@ -1823,6 +1839,11 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
                 else:
                     logger.debug('File %s does not exist.'%filtered_on_primer_fastq_r1)
 
+        if not os.path.isfile(fastq_r1):
+            raise Exception('Cannot find input fastq r1 file for filtering (%s). Delete intermediate files and try again.'%fastq_r1)
+
+        if fastq_r2 and not os.path.isfile(fastq_r2):
+            raise Exception('Cannot find input fastq r2 file for filtering (%s). Delete intermediate files and try again.'%fastq_r2)
 
         logger.info('Could not recover previously-filtered results. Reprocessing.')
 
@@ -1840,14 +1861,14 @@ def filter_on_primer(root,fastq_r1,fastq_r2,origin_seq,min_primer_aln_score,min_
     if fastq_r2 is None:
         filtered_on_primer_fastq_r1 = root + ".has_primer.fq.gz"
         filtered_on_primer_fastq_r2 = None
-        post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersSingle(fastq_r1,filtered_on_primer_fastq_r1,min_primer_aln_score,min_primer_length,ssw_align_primer)
+        post_trim_read_count, too_short_read_count, untrimmed_read_count = trim_primers_single(fastq_r1,filtered_on_primer_fastq_r1,min_primer_aln_score,allow_indels_in_origin_aln,min_primer_length,ssw_align_primer)
     else:
         filtered_on_primer_fastq_r1 = root + ".r1.has_primer.fq.gz"
         filtered_on_primer_fastq_r2 = root + ".r2.has_primer.fq.gz"
         rc_origin_seq = reverse_complement(origin_seq)
         ssw_primer_rc = ssw_lib.CSsw(sLibPath)
         ssw_align_primer_rc = SSWPrimerAlign(ssw_primer_rc,rc_origin_seq)
-        post_trim_read_count, too_short_read_count, untrimmed_read_count = trimPrimersPair(fastq_r1,fastq_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc)
+        post_trim_read_count, too_short_read_count, untrimmed_read_count = trim_primers_pair(fastq_r1,fastq_r2,filtered_on_primer_fastq_r1,filtered_on_primer_fastq_r2,min_primer_aln_score,allow_indels_in_origin_aln,min_primer_length,ssw_align_primer,ssw_align_primer_rc)
 
     contain_adapter_count = 0
     filtered_too_short_adapter_count = 0
@@ -3033,8 +3054,9 @@ def make_final_read_assignments(root,genome_mapped_bam,origin_seq,
     other_tx_read_count = 0 # number of reads to other locations not plotted
     if len(sorted_tx_list) > top_number_to_plot:
         for i in range(top_number_to_plot,len(sorted_tx_list)):
-            other_tx_count += 1
-            other_tx_read_count += final_cut_counts[sorted_tx_list[i]]
+            if final_cut_counts[sorted_tx_list[i]] > 0:
+                other_tx_count += 1
+                other_tx_read_count += final_cut_counts[sorted_tx_list[i]]
 
     tx_order_plot_obj = None
     tx_count_plot_obj = None
@@ -4160,13 +4182,13 @@ def prep_crispresso2(root,input_fastq_file,read_ids_for_crispresso,cut_counts_fo
         av_read_length,origin_seq,cleavage_offset,genome,genome_len_file,crispresso_min_count,crispresso_min_aln_score,crispresso_quant_window_size,
         run_crispresso_on_novel_sites,samtools_command,crispresso_command,n_processes=1,use_counts_from_both_sides_of_cuts=True):
     """
-    Prepares reads for analysis by crispresso2
+    Prepares r1 reads for analysis by crispresso2
     Frequently-aligned locations with a min number of reads (crispresso_min_count) are identified
     Reads from these locations are extracted and prepared for analysis by CRISPResso2
 
     Args:
         root: root for written files
-        input_fastq_file: input fastq with read sequences
+        input_fastq_file: input r1 fastq with read sequences
         read_ids_for_crispresso: dict of readID=>cut assignment
         cut_counts_for_crispresso: dict of cut=>count for # reads assigned to each cut
         cut_classification_lookup: dict of cutID=> type (e.g. Linear, Translocation, etc)
@@ -4732,12 +4754,12 @@ def makeTxCountPlot(left_labs = [],
         for col,lab in zip(legend_outline_cols,legend_outline_labs):
             legend_patches.append(Patch(facecolor='None',edgecolor=col,label=lab))
         ax1.legend(handles=legend_patches,loc="lower center", bbox_to_anchor=(0.5, -0.2))
-
+    
     rects = []
     for ind in range(num_boxes):
-        val = max(1,counts[ind]) #min value is 1 or matplotlib flips out
+        val = max(1,counts[ind]) #min value is 1 or matplotlib flips out with logging
         rects.append(Rectangle((1,ys[ind]+count_bar_ydiff),val,y_height-(count_bar_ydiff*2)))
-        ax2.text(x=val,y=ys[ind]+y_height/2,s=" " + str(counts[ind]),ha='left',va='center')
+        ax2.text(x=val+1,y=ys[ind]+y_height/2,s=" " + str(counts[ind]),ha='left',va='center')
 
     pc = PatchCollection(rects)
     ax2.add_collection(pc)
@@ -5131,7 +5153,7 @@ class SSWPrimerAlign:
     def destroy(self,ssw_res):
         self.ssw_obj.align_destroy(ssw_res)
 
-def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_length,ssw_align_primer):
+def trim_primers_single(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,allow_indels_in_origin_aln,min_primer_length,ssw_align_primer):
     """
     Trims the primer from single-end input reads, only keeps reads with the primer present in R1
 
@@ -5139,6 +5161,7 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
         fastq_r1: R1 reads to trim
         fastq_r1_trimmed: output file to write R1 to
         min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
+        allow_indels_in_origin_aln: if True, allow indels in primer alignment
         min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
         ssw_align_primer: SSWPrimerAlignment object for ssw alignment of primer
 
@@ -5170,7 +5193,7 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
             raise Exception("Fastq %s cannot be parsed (%s%s%s%s) "%(fastq_r1,f1_id_line,f1_seq_line,f1_plus_line,f1_qual_line))
         tot_read_count += 1
 
-        primer_seq, trimmed_seq, trimmed_primer_pos = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
+        primer_seq, trimmed_seq, trimmed_primer_pos = trim_left_primer_from_read(f1_seq_line,ssw_align_primer,min_primer_aln_score, allow_indels_in_origin_aln)
         if len(primer_seq) > min_primer_length:
             post_trim_read_count += 1
             new_f1_qual_line = f1_qual_line[len(primer_seq):]
@@ -5187,7 +5210,7 @@ def trimPrimersSingle(fastq_r1,fastq_r1_trimmed,min_primer_aln_score,min_primer_
     f1_out.close()
     return(post_trim_read_count, too_short_read_count, untrimmed_read_count)
 
-def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_primer_aln_score,min_primer_length,ssw_align_primer,ssw_align_primer_rc):
+def trim_primers_pair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_primer_aln_score,allow_indels_in_origin_aln,min_primer_length,ssw_align_primer,ssw_align_primer_rc):
     """
     Trims the primer from paired input reads, only keeps reads with the primer present in R1
 
@@ -5197,6 +5220,7 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
         fastq_r1_trimmed: output file to write R1 to
         fastq_r2_trimmed: output file to write R2 to
         min_primer_aln_score: minimum score for alignment between primer/origin sequence and read sequence
+        allow_indels_in_origin_aln: if True, allow indels in primer alignment
         min_primer_length: minimum length of sequence that matches between the primer/origin sequence and the read sequence
         ssw_align_primer: SSWPrimerAlignment object for ssw alignment of primer
         ssw_align_primer_rc: SSWPrimerAlignment object for ssw alignment of reverse complement primer (to r2)
@@ -5240,13 +5264,13 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
         f2_plus_line = f2_in.readline()
         f2_qual_line = f2_in.readline().strip()
 
-        primer_seq, trimmed_seq, trimmed_primer_pos = trimLeftPrimerFromRead(f1_seq_line,ssw_align_primer,min_primer_aln_score)
+        primer_seq, trimmed_seq, trimmed_primer_pos = trim_left_primer_from_read(f1_seq_line,ssw_align_primer,min_primer_aln_score,allow_indels_in_origin_aln)
         if len(primer_seq) > min_primer_length:
             post_trim_read_count += 1
             new_f1_qual_line = f1_qual_line[len(primer_seq):]
             new_f1_id_line = f1_id_line + ' primer_len=' + str(trimmed_primer_pos + 1) # trimmed primer len is (trimmed_primer_pos + 1)
 
-            f2_trimmed_seq, f2_primer_seq = trimRightPrimerFromRead(f2_seq_line,ssw_align_primer_rc,min_primer_aln_score)
+            f2_trimmed_seq, f2_primer_seq = trim_right_primer_from_read(f2_seq_line,ssw_align_primer_rc,min_primer_aln_score,allow_indels_in_origin_aln)
             new_f2_qual_line = f2_qual_line[len(f2_primer_seq):]
             f1_out.write(new_f1_id_line + "\n" + trimmed_seq + "\n" + f1_plus_line + new_f1_qual_line + "\n")
             f2_out.write(f2_id_line + "\n" + f2_trimmed_seq + "\n" + f2_plus_line + new_f2_qual_line + "\n")
@@ -5262,7 +5286,7 @@ def trimPrimersPair(fastq_r1,fastq_r2,fastq_r1_trimmed,fastq_r2_trimmed,min_prim
     f2_out.close()
     return(post_trim_read_count, too_short_read_count, untrimmed_read_count)
 
-def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
+def trim_left_primer_from_read(read, ssw_align, min_score=40, allow_indels_in_origin_aln=False, debug=False):
     """
     Trims a primer from a given read
     E.g. for --primer--read-- returns the portion that aligns to the primer (and before) as the trimmed_primer_seq and to the right as the trimmed_read_seq
@@ -5272,6 +5296,7 @@ def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
         read: string
         ssw_align: ssw alignment object
         min_score: minimum alignment score between primer and sequence
+        allow_indels_in_origin_aln: if True, allow indels in primer alignment
         debug: print some debug statements
 
     Returns:
@@ -5280,6 +5305,7 @@ def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
         trimmed_primer_pos: end index of primer that was trimmed. Note the length of the primer is this value + 1
     """
 
+    debug=True
     ssw_res = ssw_align.align(read)
     if debug:
         print('================')
@@ -5292,6 +5318,18 @@ def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
         print(f'{ssw_res.contents.nRefEnd=}')
         print(f'{ssw_res.contents.nQryBeg=}')
         print(f'{ssw_res.contents.nQryEnd=}')
+
+    if not allow_indels_in_origin_aln:
+        if ssw_res.contents.nRefBeg != 0 or ssw_res.contents.nQryBeg != 0:
+            ssw_align.destroy(ssw_res)
+            return '',read,0
+
+        ref_aln_len = ssw_res.contents.nRefEnd - ssw_res.contents.nRefBeg + 1
+        read_aln_len = ssw_res.contents.nQryEnd - ssw_res.contents.nQryBeg + 1
+        if ref_aln_len != read_aln_len:
+            ssw_align.destroy(ssw_res)
+            return '',read,0
+
     if ssw_res.contents.nScore < min_score:
         ssw_align.destroy(ssw_res)
         return '',read,0
@@ -5301,7 +5339,7 @@ def trimLeftPrimerFromRead(read, ssw_align, min_score=40, debug=False):
         ssw_align.destroy(ssw_res)
         return trimmed_primer_seq,trimmed_read_seq,ssw_res.contents.nQryEnd
 
-def trimRightPrimerFromRead(read, ssw_align, min_score=40, debug=False):
+def trim_right_primer_from_read(read, ssw_align, min_score=40, allow_indels_in_origin_aln=False, debug=False):
     """
     Trims a primer from a given read
     E.g. for --read--primer-- returns the portion that aligns to the primer (and after) as the trimmed_primer_seq and to the left as the trimmed_read_seq
@@ -5309,7 +5347,8 @@ def trimRightPrimerFromRead(read, ssw_align, min_score=40, debug=False):
     Args:
         read: string
         ssw_align: ssw alignment object
-        mismatch_score: mismatch/gap score for alignment
+        min_score: minimum alignment score between primer and sequence
+        allow_indels_in_origin_aln: if True, allow indels in primer alignment
 
     Returns:
         trimmed_read_seq: portion of the read after the primer
@@ -5329,6 +5368,15 @@ def trimRightPrimerFromRead(read, ssw_align, min_score=40, debug=False):
         print(f'{ssw_res.contents.nRefEnd=}')
         print(f'{ssw_res.contents.nQryBeg=}')
         print(f'{ssw_res.contents.nQryEnd=}')
+
+    if not allow_indels_in_origin_aln:
+        # here, just make sure there are no indels in the aligned portion.
+        # in trim_left_primer_from_read we made sure the primer and origin were at the beginning of the read, but here (because R2 doesn't start at the primer 1, we don't restrict that) 
+        ref_aln_len = ssw_res.contents.nRefEnd - ssw_res.contents.nRefBeg + 1
+        read_aln_len = ssw_res.contents.nQryEnd - ssw_res.contents.nQryBeg + 1
+        if ref_aln_len != read_aln_len:
+            ssw_align.destroy(ssw_res)
+            return read,''
 
     if ssw_res.contents.nScore < min_score:
         ssw_align.destroy(ssw_res)

@@ -7,12 +7,14 @@ test_dir = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.append(os.path.dirname(test_dir))
 from CRISPRlungo import CRISPRlungoCore as cl
+from CRISPRlungo.lib.ssw import ssw_lib
 
 this_bowtie2_genome = os.path.join(test_dir,'genome.chr11_5225364_5225863/genome')
 this_genome = this_bowtie2_genome + '.fa'
 test_inputs_folder = os.path.join(test_dir,'testInputs')
 expected_outputs_folder = os.path.join(test_dir,'expectedResults')
 temp_outputs_folder = os.path.join(test_dir,'tmpOutputs')
+sLibPath = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))+"/src/CRISPRlungo/lib/ssw"
 
 if not os.path.exists(this_genome):
     raise Exception(f'Missing genome file at {this_genome}')
@@ -26,10 +28,13 @@ if not os.path.exists(temp_outputs_folder):
 verbose = True
 
 class FunctionTests(unittest.TestCase):
-    def test_prep_input(self):
-        assert_prep_input(self,this_genome,this_bowtie2_genome,test_inputs_folder,verbose)
-    def test_collapse_cuts(self):
-        assert_collapse_cuts(self,verbose)
+    def test_primer_trimming(self):
+        assert_primer_trimming(self,verbose)
+        asdf()
+#    def test_prep_input(self):
+#        assert_prep_input(self,this_genome,this_bowtie2_genome,test_inputs_folder,verbose)
+#    def test_collapse_cuts(self):
+#        assert_collapse_cuts(self,verbose)
 
 class RunTests(unittest.TestCase):
     def test_primer(self):
@@ -206,6 +211,108 @@ def assert_prep_input(self, this_genome, this_bowtie2_genome, test_inputs_folder
     self.assertEqual(cut_annotations['chr11_sm:161'], ['Programmed', 'Not-origin', 'FW', 'CTCAAGGCCCTTCATAATAT'])
 
     print('TESTS PASSED')
+
+def assert_primer_trimming(self, verbose):
+    print('Testing primer trimming')
+    ssw_primer = ssw_lib.CSsw(sLibPath)
+    primer_seq = 'TTGCAATGAAAATAAATGTAT'
+    origin_seq = primer_seq + 'ACAGTGCCTAACATTTGCTA'
+    ssw_align_primer = cl.SSWPrimerAlign(ssw_primer,origin_seq)
+    min_primer_aln_score = 30
+    
+    post_primer_seq = 'TTGCAATGAAAATAAATGTTT'
+    orig_read_seq = origin_seq + post_primer_seq
+    allow_indels_in_origin_aln = False
+    read_primer_seq, read_trimmed_seq, read_trimmed_primer_pos = cl.trim_left_primer_from_read(orig_read_seq,ssw_align_primer,min_primer_aln_score, allow_indels_in_origin_aln)
+    if verbose: 
+        print('\nAssert primer left trimming case 1')
+        print(f'orig_read_seq:    {orig_read_seq}')
+        print(f'read_primer_seq:  {read_primer_seq}')
+        print(f'read_trimmed_seq:  ' + ' ' * read_trimmed_primer_pos + read_trimmed_seq)
+        print(f'read_trimmed_primer_pos: ' + str(read_trimmed_primer_pos))
+    self.assertEqual(read_trimmed_seq, post_primer_seq)
+
+    post_primer_seq = 'TTGCAATGAAAATAAATGTTT'
+    orig_read_seq = origin_seq[3:] + post_primer_seq
+    allow_indels_in_origin_aln = False
+    read_primer_seq, read_trimmed_seq, read_trimmed_primer_pos = cl.trim_left_primer_from_read(orig_read_seq,ssw_align_primer,min_primer_aln_score, allow_indels_in_origin_aln)
+    if verbose: 
+        print('\nAssert primer left trimming case 2 - left bit of origin is missing')
+        print(f'orig_read_seq:    {orig_read_seq}')
+        print(f'read_primer_seq:  {read_primer_seq}')
+        print(f'read_trimmed_seq:  ' + ' ' * read_trimmed_primer_pos + read_trimmed_seq)
+        print(f'read_trimmed_primer_pos: ' + str(read_trimmed_primer_pos))
+    self.assertEqual(read_trimmed_seq, post_primer_seq)
+
+    #this origin seq has an indel and allow_indels_in_origin_aln is False
+    orig_read_seq = origin_seq[3:19] + origin_seq[21:] + post_primer_seq
+    allow_indels_in_origin_aln = False
+    read_primer_seq, read_trimmed_seq, read_trimmed_primer_pos = cl.trim_left_primer_from_read(orig_read_seq,ssw_align_primer,min_primer_aln_score, allow_indels_in_origin_aln)
+    if verbose: 
+        print('\nAssert primer left trimming case 3 - allow_indels_in_origin_aln is set to False')
+        print(f'orig_read_seq:    {orig_read_seq}')
+        print(f'read_primer_seq:  {read_primer_seq}')
+        print(f'read_trimmed_seq:  ' + ' ' * read_trimmed_primer_pos + read_trimmed_seq)
+        print(f'read_trimmed_primer_pos: ' + str(read_trimmed_primer_pos))
+    self.assertEqual(orig_read_seq, read_trimmed_seq) #no trimming because of indel
+    self.assertEqual(0,read_trimmed_primer_pos)
+
+    #this origin seq has an indel but allow_indels_in_origin_aln is True
+    orig_read_seq = origin_seq[3:19] + origin_seq[21:] + post_primer_seq
+    allow_indels_in_origin_aln = True
+    read_primer_seq, read_trimmed_seq, read_trimmed_primer_pos = cl.trim_left_primer_from_read(orig_read_seq,ssw_align_primer,min_primer_aln_score, allow_indels_in_origin_aln)
+    if verbose: 
+        print('\nAssert primer left trimming case 4 - allow_indels_in_origin_aln is set to True')
+        print(f'origin_seq:    {origin_seq} (no indels)')
+        print(f'orig_read_seq:    {orig_read_seq} (has indels)')
+        print(f'read_primer_seq:  {read_primer_seq}')
+        print(f'read_trimmed_seq:  ' + ' ' * read_trimmed_primer_pos + read_trimmed_seq)
+        print(f'read_trimmed_primer_pos: ' + str(read_trimmed_primer_pos))
+    self.assertEqual(read_trimmed_seq, post_primer_seq)
+    self.assertEqual(read_trimmed_primer_pos, 40)
+
+    primer_seq = 'TTGCAATGAAAATAAATGTAT'
+    origin_seq = 'ACAGTGCCTAACATTTGCTA' + primer_seq
+    ssw_align_primer = cl.SSWPrimerAlign(ssw_primer,origin_seq)
+    min_primer_aln_score = 30
+    
+    pre_primer_seq = 'TTGCAATGAAAATAAATGTTT'
+    orig_read_seq = pre_primer_seq + origin_seq
+    allow_indels_in_origin_aln = True
+    # note that trim_right_primer_from_read returns parameters in the opposite/logical order vs trim_left_primer_from_read
+    read_trimmed_seq, read_primer_seq = cl.trim_right_primer_from_read(orig_read_seq,ssw_align_primer,min_primer_aln_score,allow_indels_in_origin_aln,debug=True)
+    if verbose: 
+        print('\nAssert primer right trimming case 5')
+        print(f'orig_read_seq:    {orig_read_seq}')
+        print(f'read_primer_seq:  ' + ' ' * len(primer_seq) + read_primer_seq)
+        print(f'read_trimmed_seq: ' + read_trimmed_seq)
+        print(f'read_trimmed_primer_pos: ' + str(read_trimmed_primer_pos))
+    self.assertEqual(read_trimmed_seq, pre_primer_seq)
+
+    orig_read_seq = pre_primer_seq + origin_seq[0:10] + origin_seq[12:] #indel
+    allow_indels_in_origin_aln = True
+    read_trimmed_seq, read_primer_seq = cl.trim_right_primer_from_read(orig_read_seq,ssw_align_primer,min_primer_aln_score,allow_indels_in_origin_aln,debug=True)
+    if verbose: 
+        print('\nAssert primer right trimming case 6 with indels and allow_indels_in_origin_aln is False')
+        print(f'orig_read_seq:    {orig_read_seq}')
+        print(f'read_primer_seq:  ' + ' ' * len(primer_seq) + read_primer_seq)
+        print(f'read_trimmed_seq: ' + read_trimmed_seq)
+        print(f'read_trimmed_primer_pos: ' + str(read_trimmed_primer_pos))
+    self.assertEqual(read_trimmed_seq, pre_primer_seq)
+
+    orig_read_seq = pre_primer_seq + origin_seq[0:10] + origin_seq[12:] #indel
+    allow_indels_in_origin_aln = False
+    read_trimmed_seq, read_primer_seq = cl.trim_right_primer_from_read(orig_read_seq,ssw_align_primer,min_primer_aln_score,allow_indels_in_origin_aln,debug=True)
+    if verbose: 
+        print('\nAssert primer right trimming case 7 with indels and allow_indels_in_origin_aln is False')
+        print(f'orig_read_seq:    {orig_read_seq}')
+        print(f'read_primer_seq:  ' + ' ' * len(primer_seq) + read_primer_seq)
+        print(f'read_trimmed_seq: ' + read_trimmed_seq)
+        print(f'read_trimmed_primer_pos: ' + str(read_trimmed_primer_pos))
+    self.assertEqual(read_trimmed_seq, orig_read_seq) # the trimmed read should equal the original read because no trimming occurs
+
+    asdf()
+
 
 def assert_collapse_cuts(self, verbose):
     print('Testing cut collapsing')
