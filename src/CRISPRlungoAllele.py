@@ -321,6 +321,7 @@ def main():
     parser.add_argument('--min_read_freq', type=float, default=0, help='After counting based on mutation pattern, reads with frequency less than the value are removed')
     parser.add_argument('--allele_plot_window', type=int, default=20, help='Window for allele plot, [default: window + 10]')
     parser.add_argument('--show_all_between_allele', action='store_true', help='Draw all sequences between two targets in an allele plot')
+    parser.add_argument('--remove_large_mutations_in_plot', type=int, default=-1, help="Remove reads with large deletions in allele plot. Set to a number (>= 100) to remove deletions >= that length; default -1 disables filtering.")  #20261010_issue #3
 
     args = parser.parse_args()
 
@@ -332,6 +333,8 @@ def main():
 
     if args.custom_category_file == None and args.reference_fasta == None:
         log.error('Give either a category file (-i) or an allele reference FASTA (-r).')
+    if args.remove_large_mutations_in_plot != -1 and args.remove_large_mutations_in_plot < 100:  #20261010_issue #3
+        log.error('--remove_large_mutations_in_plot must be 100 or larger.')  #20261010_issue #3
 
     analysis_res_dir = args.analysis_file_dir
     create_dir(analysis_res_dir + '/custom_results/')
@@ -586,7 +589,7 @@ def main():
         induced_mut = ','.join(induced_mut)
     visual.custom_mutation_pie_chart(classification_cnt, analysis_res_dir + '/custom_results')
 
-    visual.allele_plot(ref_seq, cv_pos, cv_pos2, strand, strand_2, analysis_res_dir + '/custom_results/custom_mutation_allele_plot_input.txt', analysis_res_dir + '/custom_results/', int(input_opt['cut_pos_in_target']), target, target_2, 1, args.min_read_cnt, args.min_read_freq, args.allele_plot_window, plot_line, induced_mut, args.show_all_between_allele, group_separate=True)
+    visual.allele_plot(ref_seq, cv_pos, cv_pos2, strand, strand_2, analysis_res_dir + '/custom_results/custom_mutation_allele_plot_input.txt', analysis_res_dir + '/custom_results/', int(input_opt['cut_pos_in_target']), target, target_2, 1, args.min_read_cnt, args.min_read_freq, args.allele_plot_window, plot_line, induced_mut, args.show_all_between_allele, args.remove_large_mutations_in_plot, group_separate=True)  #20261010_issue #3
     min_read_cnt = 0
     min_read_freq = 0
     induced_sequence_path = False

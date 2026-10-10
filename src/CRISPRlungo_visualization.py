@@ -1028,7 +1028,7 @@ def allele_plot(ref_seq, cv_pos, cv_pos_2, strand, strand_2,
 				original_target, min_read_cnt, min_read_freq, plot_window, 
 				show_line, induced_mutation_str, 
 				show_all_between_allele, 
-				remove_large_mutations_in_plot,
+				remove_large_mutations_in_plot=-1,  #20261010_issue #3
 				group_separate=False):
 
 	mut_dict = []
